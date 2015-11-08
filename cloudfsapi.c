@@ -941,7 +941,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     xmlNode *root_element = xmlDocGetRootElement(xmlctx->myDoc);
     for (onode = root_element->children; onode; onode = onode->next)
     {
-      debugf("Node enter");
       if (onode->type != XML_ELEMENT_NODE) continue;
 
       char is_object = !strcasecmp((const char *)onode->name, "object");
@@ -950,7 +949,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 
       if (is_object || is_container || is_subdir)
       {
-        debugf("Node enter 1");
         entry_count++;
         //debugf("Create empty cache entry cloudfs_list_directory for path=%s", path);
         dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
@@ -971,7 +969,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           de->content_type = strdup("application/directory");
         for (anode = onode->children; anode; anode = anode->next)
         {
-          debugf("Node pass 1");
           char *content = "<?!?>";
           for (text_node = anode->children; text_node; text_node = text_node->next){
             if (text_node->type == XML_TEXT_NODE){
@@ -982,7 +979,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
               //debugf("List dir anode=%s", (const char *)anode->name);
             }
           }
-          debugf("Node pass 2");
           if (!strcasecmp((const char *)anode->name, "name"))
           {
             de->name = strdup(content + prefix_length);
@@ -995,11 +991,9 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0)
               de->full_name = NULL;
           }
-          debugf("Node pass 3");
           //debugf("List DIR anode=%s", de->name);
           if (!strcasecmp((const char *)anode->name, "bytes"))
             de->size = strtoll(content, NULL, 10);
-          debugf("Node pass 4");
           if (!strcasecmp((const char *)anode->name, "content_type"))
           {
             de->content_type = strdup(content);
@@ -1007,17 +1001,13 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (semicolon)
               *semicolon = '\0';
           }
-          debugf("Node pass 5");
           if (!strcasecmp((const char *)anode->name, "hash"))
           {
-            debugf("Getting md5");
             de->md5sum = strdup(content);
             debugf("Md5=%s", de->md5sum);
           }
-          debugf("Node pass 6");
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
-            debugf("Enter last_modif");
             struct tm last_modified_tm;
             time_t last_modified_t;
             strptime(content, "%FT%T", &last_modified_tm);
@@ -1040,40 +1030,29 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             // TODO check if I can retrieve nano seconds
             de->mtime.tv_nsec = 0;
             // end change
-            debugf("Exit last_modif");
           }
         }
-        debugf("Node pass 7");
         de->isdir = de->content_type &&
             ((strstr(de->content_type, "application/folder") != NULL) ||
              (strstr(de->content_type, "application/directory") != NULL));
-        debugf("Node pass 8");
         de->islink = de->content_type &&
             ((strstr(de->content_type, "application/link") != NULL));
-        debugf("Node pass 9");
         if (de->isdir)
         {
           if (!strncasecmp(de->name, last_subdir, sizeof(last_subdir)))
           {
-            debugf("Node pass 10");
             cloudfs_free_dir_list(de);
-            debugf("Node pass 11");
             continue;
           }
-          debugf("Node pass 12");
           strncpy(last_subdir, de->name, sizeof(last_subdir));
-          debugf("Node pass 13");
         }
-        debugf("Node pass 14");
         de->next = *dir_list;
         *dir_list = de;
-        debugf("Node exit 1");
       }
       else
       {
         debugf("unknown element: %s", onode->name);
       }
-      debugf("Node done");
     }
     retval = 1;
   }
@@ -1083,13 +1062,13 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
     de->name = strdup(public_container);
     struct tm last_modified;
+    de->md5sum = NULL;
     // TODO check what this default time means?
     strptime("1388434648.01238", "%FT%T", &last_modified);
     de->last_modified = mktime(&last_modified);
     de->content_type = strdup("application/directory");
     if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0)
       de->full_name = NULL;
-
     de->isdir = 1;
     de->islink = 0;
     de->size = 4096;
