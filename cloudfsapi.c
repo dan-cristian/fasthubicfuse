@@ -231,6 +231,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
 {
   debugf("Send request path=%s", path);
   char url[MAX_URL_SIZE];
+  char orig_path[MAX_URL_SIZE];
   char *slash;
   long response = -1;
   int tries = 0;
@@ -249,6 +250,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
   while (*path == '/')
     path++;
   snprintf(url, sizeof(url), "%s/%s", storage_url, path);
+  snprintf(orig_path, sizeof(orig_path), "/%s", path);
 
   // retry on failures
   for (tries = 0; tries < REQUEST_RETRIES; tries++)
@@ -268,12 +270,12 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
-    debugf("Get file from cache, path=%s, url=%s", path, url);
-    dir_entry *de = local_path_info(path);
+    debugf("Get file from cache, path=%s, orig=%, url=%s", path, orig_path, url);
+    dir_entry *de = local_path_info(orig_path);
     if (!de)
       debugf("No file found in cache");
     else
-      debugf("File found in cache");
+      debugf("File found in cache, path=%s", de->full_name);
     /**/
     if (!strcasecmp(method, "MKDIR"))
     {
