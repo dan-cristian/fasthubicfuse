@@ -1001,6 +1001,12 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (semicolon)
               *semicolon = '\0';
           }
+          if (!strcasecmp((const char *)anode->name, "hash"))
+          {
+            de->md5sum = strdup(content);
+            debugf("Md5 for %s=%s", de->name, de->md5sum);
+          }
+
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
             struct tm last_modified_tm;
@@ -1089,6 +1095,8 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
     free(de->name);
     free(de->full_name);
     free(de->content_type);
+    //TODO free all added fields
+    free(de->md5sum);
     free(de);
   }
 }
