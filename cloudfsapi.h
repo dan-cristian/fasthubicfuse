@@ -13,6 +13,11 @@
 #define USER_AGENT "CloudFuse"
 #define OPTION_SIZE 1024
 
+// utimens support
+#define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
+#define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
+#define HEADER_TEXT_CTIME "X-Object-Meta-Ctime"
+
 typedef struct curl_slist curl_slist;
 
 typedef struct dir_entry
@@ -24,6 +29,10 @@ typedef struct dir_entry
   time_t last_modified;
   int isdir;
   int islink;
+  // implement utimens
+  struct timespec mtime;
+  struct timespec ctime;
+  struct timespec atime;
   struct dir_entry *next;
 } dir_entry;
 
