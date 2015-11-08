@@ -724,7 +724,8 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
     if (!cloudfs_delete_object(path))
       debugf("Couldn't delete one of the existing files while uploading.");
   }
-
+  
+  struct timespec now;
   if (flen >= segment_above) {
     int i;
     long remaining = flen % segment_size;
@@ -733,7 +734,6 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
 
     // The best we can do here is to get the current time that way tools that
     // use the mtime can at least check if the file was changing after now
-    struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
 
     char string_float[TIME_CHARS];
@@ -775,21 +775,6 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
     add_header(&headers, "Content-Length", "0");
     add_header(&headers, "Content-Type", filemimetype);
 
-    // utimens changes
-    dir_entry *de = local_path_info(path);
-    if (!de)
-      debugf("No file found in cache at cloudfs_object_read_fp for path=%s", path);
-    else {
-      debugf("cloudfs_object_read_fp Mark utimens attribs as changed now for path=%", path);
-      de->atime.tv_sec = now.tv_sec;
-      de->atime.tv_nsec = now.tv_nsec;
-      de->mtime.tv_sec = now.tv_sec;
-      de->mtime.tv_nsec = now.tv_nsec;
-      de->ctime.tv_sec = now.tv_sec;
-      de->ctime.tv_nsec = now.tv_nsec;
-    }
-    // end changes
-
     int response = send_request_size("PUT", encoded, NULL, NULL, headers, 0, 0);
     curl_slist_free_all(headers);
 
@@ -798,11 +783,27 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
     return (response >= 200 && response < 300);
   }
   else{
+    // assume enters here when file is composed of only one segment (small files)
     debugf("cloudfs_object_read_fp ELSE path=%s", path);
   }
 
   rewind(fp);
   char *encoded = curl_escape(path, 0);
+  // utimens changes
+  dir_entry *de = local_path_info(path);
+  if (!de)
+    debugf("No file found in cache at cloudfs_object_read_fp for path=%s", path);
+  else {
+    debugf("cloudfs_object_read_fp Mark utimens attribs as changed now for path=%", path);
+    clock_gettime(CLOCK_REALTIME, &now);
+    de->atime.tv_sec = now.tv_sec;
+    de->atime.tv_nsec = now.tv_nsec;
+    de->mtime.tv_sec = now.tv_sec;
+    de->mtime.tv_nsec = now.tv_nsec;
+    de->ctime.tv_sec = now.tv_sec;
+    de->ctime.tv_nsec = now.tv_nsec;
+  }
+  // end changes
   int response = send_request("PUT", encoded, fp, NULL, NULL);
   curl_free(encoded);
   debugf("cloudfs_object_read_fp COMPLETED 2 path=%s", path);
