@@ -219,6 +219,10 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   stbuf->st_atime = de->atime.tv_sec;
   stbuf->st_mtime = de->mtime.tv_sec;
   stbuf->st_ctime = de->ctime.tv_sec;
+  debugf("Attr ctime=%li.%li mtime=%li.%li atime=%li.%li",
+    de->ctime.tv_sec, de->ctime.tv_nsec,
+    de->mtime.tv_sec, de->mtime.tv_nsec,
+    de->atime.tv_sec, de->atime.tv_nsec);
   //end change
 
   if (de->isdir)
