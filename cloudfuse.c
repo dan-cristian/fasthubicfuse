@@ -227,7 +227,6 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   else {
     debugf("On getattr found cache for %s ctime=%li.%li mtime=%li.%li atime=%li.%li", path,
       de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec, de->atime.tv_sec, de->atime.tv_nsec);
-    debugf("Nice format ctime %lld.%.9ld", (long long)de->ctime.tv_sec, de->ctime.tv_nsec);
   }
   // change needed due to utimens
   //stbuf->st_ctime = stbuf->st_mtime = de->last_modified;
