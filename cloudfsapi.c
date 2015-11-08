@@ -80,6 +80,7 @@ static unsigned long thread_id()
 
 static void local_dir_for(const char *path, char *dir)
 {
+  debugf("local dir for %s", path);
   strncpy(dir, path, MAX_PATH_SIZE);
   char *slash = strrchr(dir, '/');
   if (slash)
@@ -102,7 +103,7 @@ static dir_cache *local_new_cache(const char *path)
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
-  debugf("local caching");
+  debugf("local caching path=%s", path);
   //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
     path = "";
@@ -137,7 +138,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 
 static dir_entry *local_path_info(const char *path)
 {
-  debugf("local path info");
+  debugf("local path info path=%s", path);
   char dir[MAX_PATH_SIZE];
   local_dir_for(path, dir);
   dir_entry *tmp;
