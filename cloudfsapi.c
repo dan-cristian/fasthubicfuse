@@ -998,8 +998,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             char time_str[64];
-            struct tm * loc_time_tm;
-            loc_time_tm = localtime(&de->last_modified);
+            struct tm loc_time_tm;
+            loc_time_tm = *localtime(&de->last_modified);
             strftime(time_str, sizeof(time_str), "%c", loc_time_tm);
 
             time_t local_time = mktime(&loc_time_tm);
