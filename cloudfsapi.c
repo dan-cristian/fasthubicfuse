@@ -115,6 +115,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
     debugf("d1");
     if (!cloudfs_list_directory(path, list))
       return  0;
+    debugf("d1a");
     cw = local_new_cache(path);
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
@@ -127,9 +128,10 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
   }
   else
     *list = cw->entries;
+  debugf("d3");
   cw->entries = *list;
   //pthread_mutex_unlock(&dmut);
-  debugf("d3");
+  debugf("d4");
   return 1;
 }
 
@@ -761,6 +763,7 @@ int cloudfs_object_truncate(const char *path, off_t size)
 
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 {
+  debugf("List dir");
   char container[MAX_PATH_SIZE * 3] = "";
   char object[MAX_PATH_SIZE] = "";
   char last_subdir[MAX_PATH_SIZE] = "";
