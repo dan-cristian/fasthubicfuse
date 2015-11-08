@@ -994,14 +994,16 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           }
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
-            struct tm last_modified;
-            strptime(content, "%FT%T", &last_modified);
+            struct tm last_modified_tm;
+            time_t last_modified;
+            strptime(content, "%FT%T", &last_modified_tm);
+            last_modified = mktime(&last_modified_tm);
             //de->last_modified = mktime(&last_modified);
 
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             char time_str[64];
             struct tm loc_time_tm;
-            loc_time_tm = *localtime(&de->last_modified);
+            loc_time_tm = *localtime(&last_modified);
             strftime(time_str, sizeof(time_str), "%c", &loc_time_tm);
 
             time_t local_time = mktime(&loc_time_tm);
