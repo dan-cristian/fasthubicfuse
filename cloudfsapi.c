@@ -79,12 +79,12 @@ static unsigned long thread_id()
 
 static void local_dir_for(const char *path, char *dir)
 {
-  debugf("local dir for [%s]", path);
+  //debugf("local dir for [%s]", path);
   strncpy(dir, path, MAX_PATH_SIZE);
   char *slash = strrchr(dir, '/');
   if (slash)
     *slash = '\0';
-  debugf("local dir becomes [%s]", dir);
+  //debugf("local dir becomes [%s]", dir);
 }
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
@@ -210,17 +210,23 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     debugf("received utimens header=[%s]", storage);
     strncpy(storage, head, sizeof(storage));
 
+    dir_entry *de = (dir_entry*)stream;
+
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received atime=[%s]", storage);
+      de->atime.tv_nsec = 777;
+      
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s]", storage);
+      de->ctime.tv_nsec = 888;
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s]", storage);
+      de->mtime.tv_nsec = 999;
     }
   }
   else {
@@ -266,6 +272,8 @@ static int send_request_size(const char *method, const char *path, void *fp,
   debugf("Send request path=%s", path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
+  char header_data[MAX_HEADER_SIZE];
+
   char *slash;
   long response = -1;
   int tries = 0;
@@ -371,6 +379,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
         }
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &de);
       }
       else if (xmlctx)
       {
@@ -790,9 +799,6 @@ int cloudfs_object_write_fp(const char *path, FILE *fp)
   }
 
   int response = send_request("GET", encoded, fp, NULL, NULL);
-  //TODO add here: read utimens value from headers
-  debugf("Reading UTIMENS headers");
-
   curl_free(encoded);
   fflush(fp);
   if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
