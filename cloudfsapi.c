@@ -88,7 +88,7 @@ static void local_dir_for(const char *path, char *dir)
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
-  debugf("local caching path=%s", path);
+  debugf("check local caching path=%s", path);
   int res = -1;
   //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
@@ -100,6 +100,9 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
       *list = cw->entries;
       cw->entries = *list;
       return 0;
+    }
+    else {
+      debugf("on cache list check not matched path=%s", cw->path);
     }
   }  
   //pthread_mutex_unlock(&dmut);
