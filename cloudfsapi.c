@@ -210,6 +210,11 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
+    dir_entry *de = path_info(path);
+    if (!de)
+      debugf("No file found in cache");
+    else
+      debugf("File found in cache");
     if (!strcasecmp(method, "MKDIR"))
     {
       curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -1159,9 +1164,24 @@ void debugf(char *fmt, ...)
   {
     va_list args;
     va_start(args, fmt);
-    fputs("!!! ", stderr);
+    fputs("=====DEBUG===== ", stderr);
     vfprintf(stderr, fmt, args);
     va_end(args);
     putc('\n', stderr);
   }
+}
+
+static dir_entry *local_path_info(const char *path)
+{
+  char dir[MAX_PATH_SIZE];
+  dir_for(path, dir);
+  dir_entry *tmp;
+  if (!caching_list_directory(dir, &tmp))
+    return NULL;
+  for (; tmp; tmp = tmp->next)
+  {
+    if (!strcmp(tmp->full_name, path))
+      return tmp;
+  }
+  return NULL;
 }
