@@ -18,8 +18,8 @@
 #include "config.h"
 
 static char *temp_dir;
-static pthread_mutex_t dmut;
 
+pthread_mutex_t dmut;
 int cache_timeout;
 dir_cache *dcache;
 

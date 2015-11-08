@@ -41,6 +41,7 @@ typedef struct options {
 } FuseOptions;
 
 
+extern pthread_mutex_t dmut;
 extern int cache_timeout;
 typedef struct dir_cache
 {
