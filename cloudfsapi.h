@@ -41,7 +41,7 @@ typedef struct options {
 } FuseOptions;
 
 
-static int cache_timeout;
+int cache_timeout;
 typedef struct dir_cache
 {
   char *path;
@@ -49,8 +49,8 @@ typedef struct dir_cache
   time_t cached;
   struct dir_cache *next, *prev;
 } dir_cache;
-static dir_cache *dcache;
-static pthread_mutex_t dmut;
+dir_cache *dcache;
+pthread_mutex_t dmut;
 
 void cloudfs_init(void);
 void cloudfs_set_credentials(char *client_id, char *client_secret, char *refresh_token);
