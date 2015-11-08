@@ -88,6 +88,7 @@ static void local_dir_for(const char *path, char *dir)
 
 static dir_cache *local_new_cache(const char *path)
 {
+  debugf("local new cache");
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
   cw->path = strdup(path);
   cw->prev = NULL;
@@ -101,6 +102,7 @@ static dir_cache *local_new_cache(const char *path)
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
+  debugf("local caching");
   //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
     path = "";
@@ -130,6 +132,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 
 static dir_entry *local_path_info(const char *path)
 {
+  debugf("local path info");
   char dir[MAX_PATH_SIZE];
   local_dir_for(path, dir);
   dir_entry *tmp;
