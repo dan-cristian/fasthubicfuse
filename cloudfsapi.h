@@ -18,6 +18,7 @@
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
 #define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
 #define HEADER_TEXT_CTIME "X-Object-Meta-Ctime"
+#define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
 
 typedef struct curl_slist curl_slist;
 
