@@ -34,6 +34,7 @@ typedef struct dir_entry
   struct timespec ctime;
   struct timespec atime;
   char *md5sum; //interesting capability for rsync/scrub
+  int chmod;
   // end change
   int isdir;
   int islink;
