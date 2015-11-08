@@ -964,6 +964,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->mtime.tv_nsec = 0;
         de->atime.tv_nsec = 0;
         de->ctime.tv_nsec = 0;
+        de->md5sum = NULL;
         // change end
         
         if (is_container || is_subdir)
