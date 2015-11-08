@@ -1003,6 +1003,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           }
           if (!strcasecmp((const char *)anode->name, "hash"))
           {
+            debugf("Getting md5");
             de->md5sum = strdup(content);
             debugf("Md5=%s", de->md5sum);
           }
