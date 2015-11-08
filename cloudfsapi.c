@@ -229,6 +229,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
                         xmlParserCtxtPtr xmlctx, curl_slist *extra_headers,
                         off_t file_size, int is_segment)
 {
+  debugf("Send request path=%s", path);
   char url[MAX_URL_SIZE];
   char *slash;
   long response = -1;
@@ -267,7 +268,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
-    debugf("Get file from cache, f=%s", path);
+    debugf("Get file from cache, path=%s", path);
     dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache");
