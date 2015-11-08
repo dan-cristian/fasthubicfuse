@@ -973,10 +973,10 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           for (text_node = anode->children; text_node; text_node = text_node->next){
             if (text_node->type == XML_TEXT_NODE){
               content = (char *)text_node->content;
-              //debugf("List DIR anode=%s content=%s", (const char *)anode->name, content);
+              debugf("List dir anode=%s content=%s", (const char *)anode->name, content);
             }
             else {
-              //debugf("List DIR anode=%s", (const char *)anode->name);
+              debugf("List dir anode=%s", (const char *)anode->name);
             }
           }
           debugf("List DIR anode=%s", (const char *)anode->name);
