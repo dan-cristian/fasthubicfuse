@@ -319,11 +319,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
     {
       if (is_segment)
       {
+        debugf("GET file segment path=%s", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
       }
       else if (fp)
       {
+        debugf("GET file FP path=%s", orig_path);
         rewind(fp); // make sure the file is ready for a-writin'
         fflush(fp);
         if (ftruncate(fileno(fp), 0) < 0)
@@ -335,6 +337,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
       }
       else if (xmlctx)
       {
+        debugf("GET file XML path=%s", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
@@ -360,7 +363,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409))
       return response;
     //handle cases when segment is not found
-    if (response != 404){
+    if (response == 404){
       debugf("Received 404, most likely segment not found, ignore");
     }
     else {
@@ -750,6 +753,9 @@ int cloudfs_object_write_fp(const char *path, FILE *fp)
   }
 
   int response = send_request("GET", encoded, fp, NULL, NULL);
+  //TODO add here: read utimens value from headers
+  debugf("Reading UTIMENS headers");
+
   curl_free(encoded);
   fflush(fp);
   if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
@@ -861,10 +867,10 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           for (text_node = anode->children; text_node; text_node = text_node->next){
             if (text_node->type == XML_TEXT_NODE){
               content = (char *)text_node->content;
-              debugf("List DIR anode=%s content=%s", (const char *)anode->name, content);
+              //debugf("List DIR anode=%s content=%s", (const char *)anode->name, content);
             }
             else {
-              debugf("List DIR anode=%s", (const char *)anode->name);
+              //debugf("List DIR anode=%s", (const char *)anode->name);
             }
           }
           
