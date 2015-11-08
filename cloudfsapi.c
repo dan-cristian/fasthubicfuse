@@ -928,8 +928,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
       if (is_object || is_container || is_subdir)
       {
         entry_count++;
-        debugf("Create cache entry for path=%s", path);
-
+        debugf("Create cache entry cloudfs_list_directory for path=%s", path);
         dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
         de->next = NULL;
         de->size = 0;
@@ -985,6 +984,11 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             struct tm last_modified;
             strptime(content, "%FT%T", &last_modified);
             de->last_modified = mktime(&last_modified);
+            // utimens addition, set file change time on folder list
+            debugf("Set utimens change time %li.%li on cloudfs_list_directory, path=%s", 
+              de->last_modified.tv_sec, de->last_modified.tv_nsec, path);
+            de->mtime.tv_sec = de->last_modified.tv_sec;
+            de->mtime.tv_nsec = de->last_modified.tv_nsec;
           }
         }
         de->isdir = de->content_type &&
