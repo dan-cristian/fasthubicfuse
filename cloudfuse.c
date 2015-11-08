@@ -85,7 +85,7 @@ static int caching_list_directory(const char *path, dir_entry **list)
 
 static void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-  debugf("Update cache %s", path);
+  debugf("Update dir cache %s", path);
   pthread_mutex_lock(&dmut);
   dir_cache *cw;
   dir_entry *de;
@@ -202,6 +202,7 @@ static dir_entry *path_info(const char *path)
 // updated to support utimens
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
+  debugf("Getattr path=[%s]", path);
   stbuf->st_uid = geteuid();
   stbuf->st_gid = getegid();
   if (!strcmp(path, "/"))
@@ -248,6 +249,7 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
 
 static int cfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_info *info)
 {
+  debugf("FGetattr path=[%s]", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (of)
   {
@@ -261,6 +263,7 @@ static int cfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_i
 
 static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off_t offset, struct fuse_file_info *info)
 {
+  debugf("Readdir path=[%s]", path);
   dir_entry *de;
   if (!caching_list_directory(path, &de))
     return -ENOLINK;
@@ -273,6 +276,7 @@ static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off
 
 static int cfs_mkdir(const char *path, mode_t mode)
 {
+  debugf("Mkdir path=[%s]", path);
   if (cloudfs_create_directory(path))
   {
     update_dir_cache(path, 0, 1, 0);
@@ -283,6 +287,7 @@ static int cfs_mkdir(const char *path, mode_t mode)
 
 static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info)
 {
+  debugf("Create path=[%s]", path);
   FILE *temp_file;
 
   if (*temp_dir)
@@ -315,6 +320,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
 
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
+  debugf("Open path=[%s]", path);
   FILE *temp_file;
   dir_entry *de = path_info(path);
 
@@ -395,11 +401,13 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
 {
+  debugf("Read path=[%s]", path);
   return pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
 }
 
 static int cfs_flush(const char *path, struct fuse_file_info *info)
 {
+  debugf("Flush path=[%s]", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (of)
   {
@@ -421,12 +429,14 @@ static int cfs_flush(const char *path, struct fuse_file_info *info)
 
 static int cfs_release(const char *path, struct fuse_file_info *info)
 {
+  debugf("Release path=[%s]", path);
   close(((openfile *)(uintptr_t)info->fh)->fd);
   return 0;
 }
 
 static int cfs_rmdir(const char *path)
 {
+  debugf("Rmdir path=[%s]", path);
   int success = cloudfs_delete_object(path);
   if (success == -1)
     return -ENOTEMPTY;
@@ -440,6 +450,7 @@ static int cfs_rmdir(const char *path)
 
 static int cfs_ftruncate(const char *path, off_t size, struct fuse_file_info *info)
 {
+  debugf("FTruncate path=[%s]", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (ftruncate(of->fd, size))
     return -errno;
@@ -450,12 +461,15 @@ static int cfs_ftruncate(const char *path, off_t size, struct fuse_file_info *in
 
 static int cfs_write(const char *path, const char *buf, size_t length, off_t offset, struct fuse_file_info *info)
 {
+  debugf("Write path=[%s]", path);
+  // FIXME: Potential inconsistent cache update if pwrite fails?
   update_dir_cache(path, offset + length, 0, 0);
   return pwrite(((openfile *)(uintptr_t)info->fh)->fd, buf, length, offset);
 }
 
 static int cfs_unlink(const char *path)
 {
+  debugf("Unlink path=[%s]", path);
   int success = cloudfs_delete_object(path);
   if (success == -1)
     return -EACCES;
@@ -469,17 +483,20 @@ static int cfs_unlink(const char *path)
 
 static int cfs_fsync(const char *path, int idunno, struct fuse_file_info *info)
 {
+  debugf("Fsync path=[%s]", path);
   return 0;
 }
 
 static int cfs_truncate(const char *path, off_t size)
 {
+  debugf("Truncate path=[%s]", path);
   cloudfs_object_truncate(path, size);
   return 0;
 }
 
 static int cfs_statfs(const char *path, struct statvfs *stat)
 {
+  debugf("Statfs path=[%s]", path);
   if (cloudfs_statfs(path, stat)){
     return 0;
   }
@@ -489,16 +506,19 @@ static int cfs_statfs(const char *path, struct statvfs *stat)
 
 static int cfs_chown(const char *path, uid_t uid, gid_t gid)
 {
+  debugf("Chown path=[%s]", path);
   return 0;
 }
 
 static int cfs_chmod(const char *path, mode_t mode)
 {
+  debugf("Chmod path=[%s]", path);
   return 0;
 }
 
 static int cfs_rename(const char *src, const char *dst)
 {
+  debugf("Rename src=[%s] dst=[%s]", src, dst);
   dir_entry *src_de = path_info(src);
   if (!src_de)
       return -ENOENT;
@@ -515,6 +535,7 @@ static int cfs_rename(const char *src, const char *dst)
 
 static int cfs_symlink(const char *src, const char *dst)
 {
+  debugf("Symlink src=[%s] dst=[%s]", src, dst);
   if(cloudfs_create_symlink(src, dst))
   {
     update_dir_cache(dst, 1, 0, 1);
@@ -525,6 +546,7 @@ static int cfs_symlink(const char *src, const char *dst)
 
 static int cfs_readlink(const char* path, char* buf, size_t size)
 {
+  debugf("Readlink path=[%s]", path);
   FILE *temp_file = tmpfile();
   int ret = 0;
 
