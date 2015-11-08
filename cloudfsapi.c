@@ -676,6 +676,7 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
     cloudfs_create_directory(manifest);
 
     // reusing manifest
+    // TODO: check how addition of meta_mtime in manifest impacts utimens implementation
     snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
         container, object, meta_mtime, flen, segment_size);
 
@@ -689,7 +690,8 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
     char *encoded = curl_escape(path, 0);
     curl_slist *headers = NULL;
     add_header(&headers, "x-object-manifest", manifest);
-    add_header(&headers, "x-object-meta-mtime", meta_mtime);
+    //utimens changes, not needed anymore
+    //add_header(&headers, "x-object-meta-mtime", meta_mtime);
     add_header(&headers, "Content-Length", "0");
     add_header(&headers, "Content-Type", filemimetype);
 
@@ -831,14 +833,30 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->next = NULL;
         de->size = 0;
         de->last_modified = time(NULL);
+        //utimens changes, initialise additional fields as empty
+        de->mtime.tv_sec = time(NULL);
+        de->atime.tv_sec = time(NULL);
+        de->ctime.tv_sec = time(NULL);
+        de->mtime.tv_nsec = 0;
+        de->atime.tv_nsec = 0;
+        de->ctime.tv_nsec = 0;
+
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
         for (anode = onode->children; anode; anode = anode->next)
         {
+          
           char *content = "<?!?>";
-          for (text_node = anode->children; text_node; text_node = text_node->next)
-            if (text_node->type == XML_TEXT_NODE)
+          for (text_node = anode->children; text_node; text_node = text_node->next){
+            if (text_node->type == XML_TEXT_NODE){
               content = (char *)text_node->content;
+              debugf("List DIR anode=%s content=%s", (const char *)anode->name, content);
+            }
+            else {
+              debugf("List DIR anode=%s", (const char *)anode->name);
+            }
+          }
+          
           if (!strcasecmp((const char *)anode->name, "name"))
           {
             de->name = strdup(content + prefix_length);
