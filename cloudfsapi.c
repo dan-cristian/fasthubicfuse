@@ -1006,7 +1006,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             struct tm last_modified_tm;
             time_t last_modified_t;
             strptime(content, "%FT%T", &last_modified_tm);
-            last_modified_t = my_timegm(&last_modified_tm);
+            last_modified_t = gmtime(&last_modified_tm);
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 %s", de->name, last_modified_t, content);
             //de->last_modified = mktime(&last_modified);
 
@@ -1016,7 +1016,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             loc_time_tm = *localtime(&last_modified_t);
             strftime(local_time_str, sizeof(local_time_str), "%c", &loc_time_tm);
 
-            time_t local_time_t = my_timegm(&loc_time_tm);
+            time_t local_time_t = gmtime(&loc_time_tm);
             debugf("Set cloudfs_list_directory path=%s local_time=%li.0 %s", de->name, local_time_t, local_time_str);
             de->last_modified = local_time_t;
             de->mtime.tv_sec = local_time_t;
