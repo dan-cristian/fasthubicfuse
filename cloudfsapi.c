@@ -318,6 +318,10 @@ static int send_request_size(const char *method, const char *path, void *fp,
       debugf("No file found in cache for path=%s", orig_path);
     else {
       //debugf("File found in cache, path=%s", de->full_name);
+      debugf("Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li", orig_path,
+        de->ctime.tv_sec, de->ctime.tv_nsec,
+        de->mtime.tv_sec, de->mtime.tv_nsec,
+        de->atime.tv_sec, de->atime.tv_nsec);
       // add headers to save utimens attribs only on upload
       if (!strcasecmp(method, "PUT") && fp) {
         debugf("Saving utimens to file %s", orig_path);
