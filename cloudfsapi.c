@@ -1010,6 +1010,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
+            debugf("Enter last_modif");
             struct tm last_modified_tm;
             time_t last_modified_t;
             strptime(content, "%FT%T", &last_modified_tm);
@@ -1032,6 +1033,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             // TODO check if I can retrieve nano seconds
             de->mtime.tv_nsec = 0;
             // end change
+            debugf("Exit last_modif");
           }
         }
         de->isdir = de->content_type &&
