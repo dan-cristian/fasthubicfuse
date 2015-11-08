@@ -199,6 +199,7 @@ static dir_entry *path_info(const char *path)
   return NULL;
 }
 
+// updated to support utimens
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
   stbuf->st_uid = geteuid();
@@ -212,7 +213,13 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   dir_entry *de = path_info(path);
   if (!de)
     return -ENOENT;
-  stbuf->st_ctime = stbuf->st_mtime = de->last_modified;
+  // change needed due to utimens
+  //stbuf->st_ctime = stbuf->st_mtime = de->last_modified;
+  stbuf->st_atime = de->atime.tv_sec;
+  stbuf->st_mtime = de->mtime.tv_sec;
+  stbuf->st_ctime = de->ctime.tv_sec;
+  //end change
+
   if (de->isdir)
   {
     stbuf->st_size = 0;
