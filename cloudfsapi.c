@@ -979,7 +979,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
               //debugf("List DIR anode=%s", (const char *)anode->name);
             }
           }
-          
+          debugf("List DIR anode=%s", (const char *)anode->name);
           if (!strcasecmp((const char *)anode->name, "name"))
           {
             de->name = strdup(content + prefix_length);
