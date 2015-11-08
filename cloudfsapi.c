@@ -89,7 +89,7 @@ static void local_dir_for(const char *path, char *dir)
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
-  debugf("check local caching path=%s", path);
+  debugf("check local dir caching path=%s", path);
   int res = -1;
   //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
@@ -97,18 +97,18 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
   dir_cache *cw;
   for (cw = dcache; cw; cw = cw->next){
     if (!strcmp(cw->path, path)){
-      debugf("Local caching found in cache, path=%s", path);
+      debugf("Local caching dir found in cache, path=%s", path);
       *list = cw->entries;
       cw->entries = *list;
-      return 0;
+      return 1;
     }
     else {
       debugf("on cache list check not matched path=%s", cw->path);
     }
   }  
-  //pthread_mutex_unlock(&dmut);
-  debugf("local caching not found path=%s", path);
-  return 1;
+  //pthread_mutex_unlock(&dmut); 
+  debugf("local caching dir not found path=%s", path);
+  return 0;
 }
 
 static dir_entry *local_path_info(const char *path)
@@ -270,7 +270,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
-    debugf("Get file from cache, path=%s, orig=%, url=%s", path, orig_path, url);
+    debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);
     dir_entry *de = local_path_info(orig_path);
     if (!de)
       debugf("No file found in cache");
