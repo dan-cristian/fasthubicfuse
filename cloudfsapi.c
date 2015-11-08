@@ -197,7 +197,7 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
 
 static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
 {
-  debugf("Dispatching utimens response headers");
+  //debugf("Dispatching utimens response headers");
   char *header = (char *)alloca(size * nmemb + 1);
   char *head = (char *)alloca(size * nmemb + 1);
   char *value = (char *)alloca(size * nmemb + 1);
@@ -207,8 +207,15 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     //if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb))
-    strncpy(storage, value, sizeof(storage));
+    strncpy(storage, header, sizeof(storage));
     debugf("received utimens header=[%s]", storage);
+    strncpy(storage, head, sizeof(storage));
+    debugf("received utimens head=[%s]", storage);
+    strncpy(storage, value, sizeof(storage));
+    debugf("received utimens value=[%s]", storage);
+  }
+  else {
+    debugf("Received unexpected header line");
   }
   return size * nmemb;
 }
