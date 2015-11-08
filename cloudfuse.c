@@ -40,7 +40,7 @@ static void dir_for(const char *path, char *dir)
 
 static dir_cache *new_cache(const char *path)
 {
-  debugf("adding cache path=%s", path);
+  debugf("Adding new_cache path=%s", path);
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
   cw->path = strdup(path);
   cw->prev = NULL;
@@ -104,6 +104,7 @@ static void update_dir_cache(const char *path, off_t size, int isdir, int islink
           return;
         }
       }
+      debugf("Create new cache entry on update_dir_cache for path %s", path);
       de = (dir_entry *)malloc(sizeof(dir_entry));
       de->size = size;
       de->isdir = isdir;
@@ -125,6 +126,14 @@ static void update_dir_cache(const char *path, off_t size, int isdir, int islink
         de->content_type = strdup("application/octet-stream");
       }
       de->last_modified = time(NULL);
+      // utimens change
+      de->mtime.tv_sec = time(NULL);
+      de->atime.tv_sec = time(NULL);
+      de->ctime.tv_sec = time(NULL);
+      de->mtime.tv_nsec = 0;
+      de->atime.tv_nsec = 0;
+      de->ctime.tv_nsec = 0;
+      // change end
       de->next = cw->entries;
       cw->entries = de;
       if (isdir)
@@ -212,17 +221,20 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
     return 0;
   }
   dir_entry *de = path_info(path);
-  if (!de)
+  if (!de) {
+    debugf("On getattr failed to get cache entry");
     return -ENOENT;
+  }
+  else {
+    debugf("On getattr identified cache entry");
+  }
   // change needed due to utimens
   //stbuf->st_ctime = stbuf->st_mtime = de->last_modified;
   stbuf->st_atime = de->atime.tv_sec;
   stbuf->st_mtime = de->mtime.tv_sec;
   stbuf->st_ctime = de->ctime.tv_sec;
-  debugf("Attr ctime=%li.%li mtime=%li.%li atime=%li.%li",
-    de->ctime.tv_sec, de->ctime.tv_nsec,
-    de->mtime.tv_sec, de->mtime.tv_nsec,
-    de->atime.tv_sec, de->atime.tv_nsec);
+  debugf("On getattr for %s ctime=%li.%li mtime=%li.%li atime=%li.%li", path,
+    de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec, de->atime.tv_sec, de->atime.tv_nsec);
   //end change
 
   if (de->isdir)
@@ -600,7 +612,8 @@ static int cfs_utimens(const char *path, const struct timespec times[2]){
   debugf("Cannot set utimes on directory");
   return -EISDIR;
   }*/
-  debugf("Found file for utimes in cache");
+  debugf("Found file for utimes in cache, prev values are atime=%li.%li mtime=%li.%li", 
+    path_de->atime.tv_sec, path_de->atime.tv_nsec, path_de->mtime.tv_sec, path_de->mtime.tv_nsec);
   path_de->atime = times[0];
   path_de->mtime = times[1];
   // not sure how to best obtain ctime yet. just record current date.
