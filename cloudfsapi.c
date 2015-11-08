@@ -218,31 +218,31 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strncpy(storage, value, sizeof(storage));
       debugf("Received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
-      debugf("Parsed atime [%s][%s]", sec_value, nsec_value);
+      //debugf("Parsed atime [%s][%s]", sec_value, nsec_value);
       strptime(sec_value, "%FT%T", &read_time);
       de->atime.tv_sec = atol(sec_value);
       de->atime.tv_nsec = atol(nsec_value);
-      debugf("Stored new atime [%li][%li]", de->atime.tv_sec, de->atime.tv_nsec);
+      //debugf("Stored new atime [%li][%li]", de->atime.tv_sec, de->atime.tv_nsec);
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
-      debugf("Parsed ctime [%s][%s]", sec_value, nsec_value);
+      //debugf("Parsed ctime [%s][%s]", sec_value, nsec_value);
       strptime(storage, "%FT%T", &read_time);
       de->ctime.tv_sec = atol(sec_value);
       de->ctime.tv_nsec = atol(nsec_value);
-      debugf("Stored new ctime [%li][%li]", de->ctime.tv_sec, de->ctime.tv_nsec);
+      //debugf("Stored new ctime [%li][%li]", de->ctime.tv_sec, de->ctime.tv_nsec);
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
-      debugf("Parsed mtime [%s][%s]", sec_value, nsec_value);
+      //debugf("Parsed mtime [%s][%s]", sec_value, nsec_value);
       strptime(storage, "%FT%T", &read_time);
       de->mtime.tv_sec = atol(sec_value);
       de->mtime.tv_nsec = atol(nsec_value);
-      debugf("Stored new mtime [%li][%li]", de->mtime.tv_sec, de->mtime.tv_nsec);
+      //debugf("Stored new mtime [%li][%li]", de->mtime.tv_sec, de->mtime.tv_nsec);
     }
   }
   else {
@@ -710,7 +710,7 @@ const char * get_file_mimetype ( const char *path )
 
 int cloudfs_object_read_fp(const char *path, FILE *fp)
 {
-
+  debugf("cloudfs_object_read_fp path=%s", path);
   long flen;
   fflush(fp);
   const char *filemimetype = get_file_mimetype( path );
@@ -741,6 +741,20 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
 
     char meta_mtime[TIME_CHARS];
     snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+
+    // utimens changes
+    dir_entry *de = local_path_info(path);
+    if (!de)
+      debugf("No file found in cache at cloudfs_object_read_fp for path=%s", path);
+    else {
+      de->atime.tv_sec  = now.tv_sec;
+      de->atime.tv_nsec = now.tv_nsec;
+      de->mtime.tv_sec  = now.tv_sec;
+      de->mtime.tv_nsec = now.tv_nsec;
+      de->ctime.tv_sec  = now.tv_sec;
+      de->ctime.tv_nsec = now.tv_nsec;
+    }
+    // end changes
 
     char seg_base[MAX_URL_SIZE] = "";
 
