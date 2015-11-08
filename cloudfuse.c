@@ -60,7 +60,7 @@ static int caching_list_directory(const char *path, dir_entry **list)
   dir_cache *cw;
   for (cw = dcache; cw; cw = cw->next)
     if (!strcmp(cw->path, path)){
-      debugf("Found in list directory %s", cw->path);
+      //debugf("Found in list directory %s", cw->path);
       break;
     }
   if (!cw)
@@ -183,7 +183,7 @@ static void dir_decache(const char *path)
 
 static dir_entry *path_info(const char *path)
 {
-  debugf("Path info for %s", path);
+  //debugf("Path info for %s", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry *tmp;
@@ -192,7 +192,7 @@ static dir_entry *path_info(const char *path)
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path)){
-      debugf("FOUND in cache %s", tmp->full_name);
+      //debugf("FOUND in cache %s", tmp->full_name);
       return tmp;
     }
   }
