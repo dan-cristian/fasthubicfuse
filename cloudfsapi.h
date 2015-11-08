@@ -5,6 +5,7 @@
 #include <curl/easy.h>
 #include <fuse.h>
 #include <pthread.h>
+#include <time.h>
 
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
@@ -27,12 +28,12 @@ typedef struct dir_entry
   char *content_type;
   off_t size;
   time_t last_modified;
-  int isdir;
-  int islink;
   // implement utimens
   struct timespec mtime;
   struct timespec ctime;
   struct timespec atime;
+  int isdir;
+  int islink;
   struct dir_entry *next;
 } dir_entry;
 

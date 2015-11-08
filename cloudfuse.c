@@ -572,9 +572,10 @@ static int cfs_utimens(const char *path, const struct timespec times[2]){
   debugf("Found file for utimes in cache");
   path_de->atime = times[0];
   path_de->mtime = times[1];
-  // not sure how to obtain ctime yet
-  path_de->ctime.tv_sec = path_de->last_modified;
-  path_de->ctime.tv_nsec = 0;
+  // not sure how to best obtain ctime yet. just record current date.
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  path_de->ctime = now;
   return 0;
 }
 
