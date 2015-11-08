@@ -79,11 +79,12 @@ static unsigned long thread_id()
 
 static void local_dir_for(const char *path, char *dir)
 {
-  debugf("local dir for %s", path);
+  debugf("local dir for [%s]", path);
   strncpy(dir, path, MAX_PATH_SIZE);
   char *slash = strrchr(dir, '/');
   if (slash)
     *slash = '\0';
+  debugf("local dir becomes [%s]", dir);
 }
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
@@ -117,7 +118,7 @@ static dir_entry *local_path_info(const char *path)
   local_dir_for(path, dir);
   dir_entry *tmp;
   if (!local_caching_list_directory(dir, &tmp)){
-    debugf("Path info NOT1 found in cache, path=%s", path);
+    debugf("Path info NOT1 found in cache, path=%s, dir=%s", path, dir);
     return NULL;
   }
   for (; tmp; tmp = tmp->next)
