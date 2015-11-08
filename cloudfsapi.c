@@ -211,22 +211,32 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     strncpy(storage, head, sizeof(storage));
 
     dir_entry *de = (dir_entry*)stream;
+    struct tm read_time;
+    static char sec_value[TIME_CHARS], nsec_value[TIME_CHARS];
 
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
-      de->atime.tv_nsec = 777;
-      
+      sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
+      strptime(sec_value, "%FT%T", &read_time);
+      de->atime.tv_sec = mktime(&read_time);
+      de->atime.tv_nsec = atol(nsec_value);
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
-      de->ctime.tv_nsec = 888;
+      sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
+      strptime(storage, "%FT%T", &read_time);
+      de->ctime.tv_sec = mktime(&read_time);
+      de->ctime.tv_nsec = atol(nsec_value);
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
-      de->mtime.tv_nsec = 999;
+      sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
+      strptime(storage, "%FT%T", &read_time);
+      de->mtime.tv_sec = mktime(&read_time);
+      de->mtime.tv_nsec = atol(nsec_value);
     }
   }
   else {
@@ -319,9 +329,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     else {
       //debugf("File found in cache, path=%s", de->full_name);
       debugf("Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li", orig_path,
-        de->ctime.tv_sec, de->ctime.tv_nsec,
-        de->mtime.tv_sec, de->mtime.tv_nsec,
-        de->atime.tv_sec, de->atime.tv_nsec);
+        de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec, de->atime.tv_sec, de->atime.tv_nsec);
       // add headers to save utimens attribs only on upload
       if (!strcasecmp(method, "PUT") && fp) {
         debugf("Saving utimens to file %s", orig_path);
