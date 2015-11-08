@@ -291,14 +291,14 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
-    
+    /**
     debugf("Get file from cache, f=%s", path);
     dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache");
     else
       debugf("File found in cache");
-    
+    */
     if (!strcasecmp(method, "MKDIR"))
     {
       curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -772,7 +772,7 @@ int cloudfs_object_truncate(const char *path, off_t size)
 
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 {
-  debugf("List dir");
+  debugf("List dir %s", path);
   char container[MAX_PATH_SIZE * 3] = "";
   char object[MAX_PATH_SIZE] = "";
   char last_subdir[MAX_PATH_SIZE] = "";
