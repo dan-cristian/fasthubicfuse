@@ -28,7 +28,7 @@
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
 
-#define REQUEST_RETRIES 4
+#define REQUEST_RETRIES 1
 
 #define MAX_FILES 10000
 
@@ -277,7 +277,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     return_connection(curl);
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409))
       return response;
-    sleep(8 << tries); // backoff
+    sleep(0 << tries); // backoff
     if (response == 401 && !cloudfs_connect()) // re-authenticate on 401s
       return response;
     if (xmlctx)
