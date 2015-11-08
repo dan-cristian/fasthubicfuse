@@ -19,7 +19,7 @@
 
 static char *temp_dir;
 
-pthread_mutex_t dmut;
+static pthread_mutex_t dmut;
 int cache_timeout;
 dir_cache *dcache;
 
@@ -40,6 +40,7 @@ static void dir_for(const char *path, char *dir)
 
 static dir_cache *new_cache(const char *path)
 {
+  debugf("adding cache path=%s", path);
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
   cw->path = strdup(path);
   cw->prev = NULL;
@@ -179,6 +180,7 @@ static void dir_decache(const char *path)
 
 static dir_entry *path_info(const char *path)
 {
+  debugf("Path info for %s", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry *tmp;
@@ -186,8 +188,10 @@ static dir_entry *path_info(const char *path)
     return NULL;
   for (; tmp; tmp = tmp->next)
   {
-    if (!strcmp(tmp->full_name, path))
+    if (!strcmp(tmp->full_name, path)){
+      debugf("FOUND in cache %s", tmp->full_name);
       return tmp;
+    }
   }
   return NULL;
 }
