@@ -59,8 +59,10 @@ static int caching_list_directory(const char *path, dir_entry **list)
     path = "";
   dir_cache *cw;
   for (cw = dcache; cw; cw = cw->next)
-    if (!strcmp(cw->path, path))
+    if (!strcmp(cw->path, path)){
+      debugf("Found in list directory %s", cw->path);
       break;
+    }
   if (!cw)
   {
     if (!cloudfs_list_directory(path, list))
@@ -83,6 +85,7 @@ static int caching_list_directory(const char *path, dir_entry **list)
 
 static void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
+  debugf("Update cache %s", path);
   pthread_mutex_lock(&dmut);
   dir_cache *cw;
   dir_entry *de;
