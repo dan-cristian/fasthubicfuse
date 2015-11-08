@@ -111,6 +111,7 @@ static void update_dir_cache(const char *path, off_t size, int isdir, int islink
       de->islink = islink;
       de->name = strdup(&path[strlen(cw->path)+1]);
       de->full_name = strdup(path);
+      de->md5sum = NULL;
 
       if (isdir)
       {
