@@ -77,6 +77,17 @@ static unsigned long thread_id()
 }
 #endif
 
+// hubic stores time as GMT so we have to do conversions
+void time_t set_now_time_to_gmt(){
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+
+}
+
+void time_t get_now_time_from_gmt(time_t gmt_time){
+
+}
+
 static void local_dir_for(const char *path, char *dir)
 {
   //debugf("local dir for [%s]", path);
@@ -984,9 +995,16 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             struct tm last_modified;
             strptime(content, "%FT%T", &last_modified);
             de->last_modified = mktime(&last_modified);
-            // utimens addition, set file change time on folder list
-            debugf("Set utimens change time %li.0 on cloudfs_list_directory, path=%s",  de->last_modified, path);
-            de->mtime.tv_sec = de->last_modified;
+
+            // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
+            char time_str[64];
+            struct tm * loc_time_tm;
+            loc_time_tm = localtime(&de->last_modified);
+            strftime(time_str, sizeof(time_str), "%c", loc_time_tm);
+
+            time_t local_time = mktime(&loc_time_tm);
+            debugf("Set utimens change time [%li.0] [%s] on cloudfs_list_directory, path=%s",  local_time, time_str, path);
+            de->mtime.tv_sec = local_time;
             de->mtime.tv_nsec = 0;
           }
         }
