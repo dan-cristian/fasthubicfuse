@@ -359,7 +359,14 @@ static int send_request_size(const char *method, const char *path, void *fp,
     return_connection(curl);
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409))
       return response;
-    sleep(0 << tries); // backoff
+    //handle cases when segment is not found
+    if (response != 404){
+      debugf("Received 404, most likely segment not found, ignore");
+    }
+    else {
+      // now you can add a delay here
+      sleep(0 << tries); // backoff
+    }
     if (response == 401 && !cloudfs_connect()) // re-authenticate on 401s
       return response;
     if (xmlctx)

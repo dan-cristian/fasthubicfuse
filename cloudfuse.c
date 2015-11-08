@@ -368,6 +368,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       if (!cloudfs_object_write_fp(path, temp_file))
       {
         fclose(temp_file);
+        debugf("Open error 1 path=[%s]", path);
         return -ENOENT;
       }
     }
@@ -380,6 +381,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       if (!cloudfs_object_write_fp(path, temp_file) && !(info->flags & O_CREAT))
       {
         fclose(temp_file);
+        debugf("Open error 2 path=[%s]", path);
         return -ENOENT;
       }
     }
@@ -389,13 +391,16 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
   openfile *of = (openfile *)malloc(sizeof(openfile));
   of->fd = dup(fileno(temp_file));
-  if (of->fd == -1)
+  if (of->fd == -1){
+    debugf("Open error 3 path=[%s]", path);
     return -ENOENT;
+  }
   fclose(temp_file);
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   info->direct_io = 1;
   info->nonseekable = 1;
+  debugf("Open complete path=[%s]", path);
   return 0;
 }
 
