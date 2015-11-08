@@ -222,7 +222,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strptime(sec_value, "%FT%T", &read_time);
       de->atime.tv_sec = mktime(&read_time);
       de->atime.tv_nsec = atol(nsec_value);
-      debugf("Stored new atime [%s][%s]", de->atime.tv_sec, de->atime.tv_nsec);
+      debugf("Stored new atime [%li][%li]", de->atime.tv_sec, de->atime.tv_nsec);
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
@@ -232,7 +232,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strptime(storage, "%FT%T", &read_time);
       de->ctime.tv_sec = mktime(&read_time);
       de->ctime.tv_nsec = atol(nsec_value);
-      debugf("Stored new ctime [%s][%s]", de->ctime.tv_sec, de->ctime.tv_nsec);
+      debugf("Stored new ctime [%li][%li]", de->ctime.tv_sec, de->ctime.tv_nsec);
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
@@ -242,7 +242,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strptime(storage, "%FT%T", &read_time);
       de->mtime.tv_sec = mktime(&read_time);
       de->mtime.tv_nsec = atol(nsec_value);
-      debugf("Stored new mtime [%s][%s]", de->mtime.tv_sec, de->mtime.tv_nsec);
+      debugf("Stored new mtime [%li][%li]", de->mtime.tv_sec, de->mtime.tv_nsec);
     }
   }
   else {
