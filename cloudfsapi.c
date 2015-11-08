@@ -1171,7 +1171,7 @@ void debugf(char *fmt, ...)
   }
 }
 
-static dir_entry *local_path_info(const char *path)
+dir_entry *local_path_info(const char *path)
 {
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
