@@ -207,25 +207,25 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     strncpy(storage, header, sizeof(storage));
-    debugf("received utimens header=[%s]", storage);
+    //debugf("received utimens header=[%s]", storage);
     strncpy(storage, head, sizeof(storage));
 
     dir_entry *de = (dir_entry*)stream;
 
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
-      debugf("received atime=[%s]", storage);
+      debugf("received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
       de->atime.tv_nsec = 777;
       
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
-      debugf("received ctime=[%s]", storage);
+      debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
       de->ctime.tv_nsec = 888;
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
       strncpy(storage, value, sizeof(storage));
-      debugf("received mtime=[%s]", storage);
+      debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
       de->mtime.tv_nsec = 999;
     }
   }
