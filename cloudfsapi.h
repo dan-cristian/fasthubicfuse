@@ -50,7 +50,7 @@ typedef struct dir_cache
   struct dir_cache *next, *prev;
 } dir_cache;
 dir_cache *dcache;
-pthread_mutex_t dmut;
+
 
 void cloudfs_init(void);
 void cloudfs_set_credentials(char *client_id, char *client_secret, char *refresh_token);
