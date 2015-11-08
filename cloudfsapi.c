@@ -114,22 +114,25 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
   if (!cw)
   {
     debugf("d1");
-    if (!cloudfs_list_directory(path, list)) {
+    /**if (!cloudfs_list_directory(path, list)) {
       debugf("d1a");
       return  0;
     }
     else
       debugf("d1b");
+    */
     debugf("d2a");
     cw = local_new_cache(path);
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
     debugf("d2");
+    /**
     if (!cloudfs_list_directory(path, list))
       return  0;
     cloudfs_free_dir_list(cw->entries);
     cw->cached = time(NULL);
+    */
   }
   else
     *list = cw->entries;
