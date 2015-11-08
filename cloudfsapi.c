@@ -112,12 +112,14 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
     break;
   if (!cw)
   {
+    debugf("d1");
     if (!cloudfs_list_directory(path, list))
       return  0;
     cw = local_new_cache(path);
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
+    debugf("d2");
     if (!cloudfs_list_directory(path, list))
       return  0;
     cloudfs_free_dir_list(cw->entries);
@@ -127,6 +129,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
     *list = cw->entries;
   cw->entries = *list;
   //pthread_mutex_unlock(&dmut);
+  debugf("d3");
   return 1;
 }
 
