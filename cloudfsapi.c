@@ -116,7 +116,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
       return 1;
     }
     else {
-      debugf("on cache list check not matched path=%s", cw->path);
+      //debugf("on cache list check not matched path=%s", cw->path);
     }
   }  
   //pthread_mutex_unlock(&dmut); 
