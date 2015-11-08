@@ -4,7 +4,7 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <fuse.h>
-
+#include <pthread.h>
 
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
@@ -39,6 +39,18 @@ typedef struct options {
     char client_secret[OPTION_SIZE];
     char refresh_token[OPTION_SIZE];
 } FuseOptions;
+
+
+static int cache_timeout;
+typedef struct dir_cache
+{
+  char *path;
+  dir_entry *entries;
+  time_t cached;
+  struct dir_cache *next, *prev;
+} dir_cache;
+static dir_cache *dcache;
+static pthread_mutex_t dmut;
 
 void cloudfs_init(void);
 void cloudfs_set_credentials(char *client_id, char *client_secret, char *refresh_token);

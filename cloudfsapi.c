@@ -86,13 +86,42 @@ static void local_dir_for(const char *path, char *dir)
     *slash = '\0';
 }
 
+static int local_caching_list_directory(const char *path, dir_entry **list)
+{
+  pthread_mutex_lock(&dmut);
+  if (!strcmp(path, "/"))
+    path = "";
+  dir_cache *cw;
+  for (cw = dcache; cw; cw = cw->next)
+  if (!strcmp(cw->path, path))
+    break;
+  if (!cw)
+  {
+    if (!cloudfs_list_directory(path, list))
+      return  0;
+    cw = new_cache(path);
+  }
+  else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
+  {
+    if (!cloudfs_list_directory(path, list))
+      return  0;
+    cloudfs_free_dir_list(cw->entries);
+    cw->cached = time(NULL);
+  }
+  else
+    *list = cw->entries;
+  cw->entries = *list;
+  pthread_mutex_unlock(&dmut);
+  return 1;
+}
+
 static dir_entry *local_path_info(const char *path)
 {
   char dir[MAX_PATH_SIZE];
   local_dir_for(path, dir);
   dir_entry *tmp;
-  //if (!caching_list_directory(dir, &tmp))
-  //  return NULL;
+  if (!local_caching_list_directory(dir, &tmp))
+    return NULL;
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path))
@@ -100,6 +129,8 @@ static dir_entry *local_path_info(const char *path)
   }
   return NULL;
 }
+
+
 
 static size_t xml_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
 {
