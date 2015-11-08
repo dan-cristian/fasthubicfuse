@@ -87,7 +87,7 @@ static void local_dir_for(const char *path, char *dir)
     *slash = '\0';
 }
 
-dir_cache *local_new_cache(const char *path)
+static dir_cache *local_new_cache(const char *path)
 {
   debugf("local new cache");
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
@@ -101,7 +101,7 @@ dir_cache *local_new_cache(const char *path)
   return (dcache = cw);
 }
 
-int local_caching_list_directory(const char *path, dir_entry **list)
+static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   debugf("local caching path=%s", path);
   //pthread_mutex_lock(&dmut);
@@ -114,9 +114,13 @@ int local_caching_list_directory(const char *path, dir_entry **list)
   if (!cw)
   {
     debugf("d1");
-    if (!cloudfs_list_directory(path, list))
+    if (!cloudfs_list_directory(path, list)) {
+      debugf("d1a");
       return  0;
-    debugf("d1a");
+    }
+    else
+      debugf("d1b");
+    debugf("d2a");
     cw = local_new_cache(path);
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
@@ -286,6 +290,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
+    debugf("Get file from cache, f=%s", path);
     dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache");
