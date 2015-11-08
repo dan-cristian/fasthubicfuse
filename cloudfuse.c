@@ -19,7 +19,7 @@
 
 
 static char *temp_dir;
-
+static pthread_mutex_t dmut;
 
 typedef struct
 {
