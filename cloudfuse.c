@@ -541,6 +541,36 @@ static void *cfs_init(struct fuse_conn_info *conn)
   return NULL;
 }
 
+/*
+Order of operations when fuse is updating file time attrs with touch -t command:
+Open, Write_Fp, [READ CLOUD], [u cache], Flush, [u cache], Read_fp, [Put on cloud]
+;
+utimes, [u cache], getattr, flush, [u cache], read_fp, [PUT on cloud], release
+http://man7.org/linux/man-pages/man2/utimensat.2.html
+times: times[0] specifies the new "last access time" (atime)
+times: times[1] specifies the new "last modification time" (mtime)
+*/
+static int cfs_utimens(const char *path, const struct timespec times[2]){
+  debugf("Calling utimes path=[%s] t0=[%li.%li] t1=[%li.%li]", path, times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
+  // looking for file entry in cache
+  dir_entry *path_de = path_info(path);
+  if (!path_de) {
+    debugf("File for utimes not found in cache");
+    return -ENOENT;
+  }
+  /*if (path_de->isdir) {
+  debugf("Cannot set utimes on directory");
+  return -EISDIR;
+  }*/
+  debugf("Found file for utimes in cache");
+  path_de->atime = times[0];
+  path_de->mtime = times[1];
+  // not sure how to obtain ctime yet
+  path_de->ctime.tv_sec = path_de->last_modified;
+  path_de->ctime.tv_nsec = 0;
+  return 0;
+}
+
 char *get_home_dir()
 {
   char *home;
@@ -669,6 +699,8 @@ int main(int argc, char **argv)
     .symlink = cfs_symlink,
     .readlink = cfs_readlink,
     .init = cfs_init,
+    // implementing utimens capabilities
+    .utimens = cfs_utimens,
   };
 
   pthread_mutex_init(&dmut, NULL);

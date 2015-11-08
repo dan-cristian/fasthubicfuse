@@ -274,8 +274,23 @@ static int send_request_size(const char *method, const char *path, void *fp,
     dir_entry *de = local_path_info(orig_path);
     if (!de)
       debugf("No file found in cache");
-    else
+    else {
       debugf("File found in cache, path=%s", de->full_name);
+      // save attribs only on upload
+      if (!strcasecmp(method, "PUT") && fp) {
+        char mtime_str[TIME_CHARS], atime_str[TIME_CHARS], ctime_str[TIME_CHARS];
+        char string_float[TIME_CHARS];
+        snprintf(string_float, TIME_CHARS, "%lu.%lu", de->mtime.tv_sec, de->mtime.tv_nsec);
+        snprintf(mtime_str, TIME_CHARS, "%f", atof(string_float));
+        snprintf(string_float, TIME_CHARS, "%lu.%lu", de->atime.tv_sec, de->atime.tv_nsec);
+        snprintf(atime_str, TIME_CHARS, "%f", atof(string_float));
+        snprintf(string_float, TIME_CHARS, "%lu.%lu", de->ctime.tv_sec, de->ctime.tv_nsec);
+        snprintf(ctime_str, TIME_CHARS, "%f", atof(string_float));
+        add_header(&headers, HEADER_TEXT_MTIME, mtime_str);
+        add_header(&headers, HEADER_TEXT_ATIME, atime_str);
+        add_header(&headers, HEADER_TEXT_CTIME, ctime_str);
+      }
+    }
     /**/
     if (!strcasecmp(method, "MKDIR"))
     {
