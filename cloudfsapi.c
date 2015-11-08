@@ -210,7 +210,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
-    dir_entry *de = path_info(path);
+    dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache");
     else
