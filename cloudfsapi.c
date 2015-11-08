@@ -1046,17 +1046,24 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->isdir = de->content_type &&
             ((strstr(de->content_type, "application/folder") != NULL) ||
              (strstr(de->content_type, "application/directory") != NULL));
+        debugf("Node pass 8");
         de->islink = de->content_type &&
             ((strstr(de->content_type, "application/link") != NULL));
+        debugf("Node pass 9");
         if (de->isdir)
         {
           if (!strncasecmp(de->name, last_subdir, sizeof(last_subdir)))
           {
+            debugf("Node pass 10");
             cloudfs_free_dir_list(de);
+            debugf("Node pass 11");
             continue;
           }
+          debugf("Node pass 12");
           strncpy(last_subdir, de->name, sizeof(last_subdir));
+          debugf("Node pass 13");
         }
+        debugf("Node pass 14");
         de->next = *dir_list;
         *dir_list = de;
         debugf("Node exit 1");
