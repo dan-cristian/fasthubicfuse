@@ -995,21 +995,22 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
             struct tm last_modified_tm;
-            time_t last_modified;
+            time_t last_modified_t;
             strptime(content, "%FT%T", &last_modified_tm);
-            last_modified = mktime(&last_modified_tm);
+            last_modified_t = mktime(&last_modified_tm);
             //de->last_modified = mktime(&last_modified);
 
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             char time_str[64];
             struct tm loc_time_tm;
-            loc_time_tm = *localtime(&last_modified);
+            loc_time_tm = *localtime(&last_modified_t);
             strftime(time_str, sizeof(time_str), "%c", &loc_time_tm);
 
-            time_t local_time = mktime(&loc_time_tm);
-            debugf("Set cloudfs_list_directory change time [%li.0] [%s] path=%s", local_time, time_str, de->name);
-            de->last_modified = local_time;
-            de->mtime.tv_sec = local_time;
+            time_t local_time_t = mktime(&loc_time_tm);
+            debugf("Set cloudfs_list_directory path=%s remote_time=%li.0 local=%li.0 %s ", 
+              de->name, last_modified_t, local_time_t, time_str);
+            de->last_modified = local_time_t;
+            de->mtime.tv_sec = local_time_t;
             de->mtime.tv_nsec = 0;
             // end change
           }
