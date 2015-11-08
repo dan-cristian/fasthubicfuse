@@ -268,7 +268,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
-    debugf("Get file from cache, path=%s", path);
+    debugf("Get file from cache, path=%s, url=%s", path, url);
     dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache");
