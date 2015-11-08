@@ -114,13 +114,13 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
   if (!cw)
   {
     debugf("d1");
-    /**if (!cloudfs_list_directory(path, list)) {
+    if (!cloudfs_list_directory(path, list)) {
       debugf("d1a");
       return  0;
     }
     else
       debugf("d1b");
-    */
+    
     debugf("d2a");
     cw = local_new_cache(path);
   }
@@ -293,12 +293,14 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
+    /**
     debugf("Get file from cache, f=%s", path);
     dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache");
     else
       debugf("File found in cache");
+    */
     if (!strcasecmp(method, "MKDIR"))
     {
       curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
