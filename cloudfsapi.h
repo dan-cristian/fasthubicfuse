@@ -4,8 +4,7 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <fuse.h>
-#include <time.h>
-#include <sys/types.h>
+
 
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
