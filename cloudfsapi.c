@@ -104,7 +104,7 @@ static dir_cache *local_new_cache(const char *path)
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   debugf("local caching path=%s", path);
-  //pthread_mutex_lock(&dmut);
+  pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
     path = "";
   dir_cache *cw;
@@ -135,7 +135,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
     *list = cw->entries;
   debugf("d3");
   cw->entries = *list;
-  //pthread_mutex_unlock(&dmut);
+  pthread_mutex_unlock(&dmut);
   debugf("d4");
   return 1;
 }
