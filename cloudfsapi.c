@@ -979,7 +979,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
               debugf("List dir anode=%s", (const char *)anode->name);
             }
           }
-          debugf("List DIR anode=%s", (const char *)anode->name);
           if (!strcasecmp((const char *)anode->name, "name"))
           {
             de->name = strdup(content + prefix_length);
@@ -992,6 +991,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0)
               de->full_name = NULL;
           }
+          debugf("List DIR anode=%s", de->name);
           if (!strcasecmp((const char *)anode->name, "bytes"))
             de->size = strtoll(content, NULL, 10);
           if (!strcasecmp((const char *)anode->name, "content_type"))
