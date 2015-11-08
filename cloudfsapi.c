@@ -394,6 +394,8 @@ static int send_request_size(const char *method, const char *path, void *fp,
         }
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
+        // inspired by UThreadCurl.cpp, https://bitbucket.org/pamungkas5/bcbcurl/src
+        // and http://www.codeproject.com/Articles/838366/BCBCurl-a-LibCurl-based-download-manager
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
       }
       else if (xmlctx)
