@@ -1008,7 +1008,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             strptime(content, "%FT%T", &last_modified_tm);
             last_modified_tm.tm_isdst = -1;
 
-            last_modified_t = mktime(&last_modified_tm);
+            last_modified_t = my_timegm(&last_modified_tm);
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 %s", de->name, last_modified_t, content);
             //de->last_modified = mktime(&last_modified);
 
