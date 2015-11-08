@@ -905,19 +905,21 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
       if (is_object || is_container || is_subdir)
       {
         entry_count++;
+        debugf("Create cache entry for path=%s", path);
 
         dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
         de->next = NULL;
         de->size = 0;
         de->last_modified = time(NULL);
-        //utimens changes, initialise additional fields as empty
+        // utimens changes, initialise additional fields as empty
         de->mtime.tv_sec = time(NULL);
         de->atime.tv_sec = time(NULL);
         de->ctime.tv_sec = time(NULL);
         de->mtime.tv_nsec = 0;
         de->atime.tv_nsec = 0;
         de->ctime.tv_nsec = 0;
-
+        // change end
+        
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
         for (anode = onode->children; anode; anode = anode->next)
@@ -988,10 +990,11 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
   }
   else if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url) {
     entry_count = 1;
-
+    debugf("Init cache entry container=[%s]", public_container);
     dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
     de->name = strdup(public_container);
     struct tm last_modified;
+    // TODO check what this default time means?
     strptime("1388434648.01238", "%FT%T", &last_modified);
     de->last_modified = mktime(&last_modified);
     de->content_type = strdup("application/directory");
@@ -1006,7 +1009,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     retval = 1;
   }
 
-  debugf("entry count: %d", entry_count);
+  // not very usefull
+  //debugf("entry count: %d", entry_count);
 
   xmlFreeDoc(xmlctx->myDoc);
   xmlFreeParserCtxt(xmlctx);
