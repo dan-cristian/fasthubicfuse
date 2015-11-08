@@ -218,6 +218,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strncpy(storage, value, sizeof(storage));
       debugf("received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
+      debugf("Parsed atime [%s][%s]", sec_value, nsec_value);
       strptime(sec_value, "%FT%T", &read_time);
       de->atime.tv_sec = mktime(&read_time);
       de->atime.tv_nsec = atol(nsec_value);
@@ -226,6 +227,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
+      debugf("Parsed ctime [%s][%s]", sec_value, nsec_value);
       strptime(storage, "%FT%T", &read_time);
       de->ctime.tv_sec = mktime(&read_time);
       de->ctime.tv_nsec = atol(nsec_value);
@@ -234,6 +236,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
+      debugf("Parsed mtime [%s][%s]", sec_value, nsec_value);
       strptime(storage, "%FT%T", &read_time);
       de->mtime.tv_sec = mktime(&read_time);
       de->mtime.tv_nsec = atol(nsec_value);
