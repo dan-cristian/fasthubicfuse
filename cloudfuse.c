@@ -122,7 +122,6 @@ static void update_dir_cache(const char *path, off_t size, int isdir, int islink
       }
       else
       {
-
         de->content_type = strdup("application/octet-stream");
       }
       de->last_modified = time(NULL);
