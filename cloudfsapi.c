@@ -941,6 +941,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     xmlNode *root_element = xmlDocGetRootElement(xmlctx->myDoc);
     for (onode = root_element->children; onode; onode = onode->next)
     {
+      debugf("Node enter");
       if (onode->type != XML_ELEMENT_NODE) continue;
 
       char is_object = !strcasecmp((const char *)onode->name, "object");
@@ -1057,6 +1058,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
       {
         debugf("unknown element: %s", onode->name);
       }
+      debugf("Node done");
     }
     retval = 1;
   }
@@ -1086,6 +1088,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 
   xmlFreeDoc(xmlctx->myDoc);
   xmlFreeParserCtxt(xmlctx);
+  debugf("Exit cloudfs_list_dir");
   return retval;
 }
 
