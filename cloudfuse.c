@@ -17,7 +17,6 @@
 #include "cloudfsapi.h"
 #include "config.h"
 
-
 static char *temp_dir;
 static pthread_mutex_t dmut;
 
