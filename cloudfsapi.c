@@ -386,6 +386,7 @@ static int send_request(char *method, const char *path, FILE *fp,
 void *upload_segment(void *seginfo)
 {
   struct segment_info *info = (struct segment_info *)seginfo;
+  
   char seg_path[MAX_URL_SIZE] = { 0 };
 
   fseek(info->fp, info->part * info->segment_size, SEEK_SET);
@@ -393,6 +394,8 @@ void *upload_segment(void *seginfo)
 
   snprintf(seg_path, MAX_URL_SIZE, "%s%08i", info->seg_base, info->part);
   char *encoded = curl_escape(seg_path, 0);
+
+  debugf("Uploading segment=%s path=%s", info->method, seg_path);
 
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
       info->size, 1);
@@ -418,6 +421,7 @@ void run_segment_threads(const char *method, int segments, int full_segments, in
     pthread_t *threads = (pthread_t *)malloc(segments * sizeof(pthread_t));
 #ifdef __linux__
     snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fileno(fp));
+    debugf("On run segment filepath=%s", file_path);
 #else
     //TODO: I haven't actually tested this
     if (fcntl(fileno(fp), F_GETPATH, file_path) == -1)
