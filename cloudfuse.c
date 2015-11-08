@@ -17,18 +17,9 @@
 #include "cloudfsapi.h"
 #include "config.h"
 
-static int cache_timeout;
+
 static char *temp_dir;
 
-typedef struct dir_cache
-{
-  char *path;
-  dir_entry *entries;
-  time_t cached;
-  struct dir_cache *next, *prev;
-} dir_cache;
-static dir_cache *dcache;
-static pthread_mutex_t dmut;
 
 typedef struct
 {
