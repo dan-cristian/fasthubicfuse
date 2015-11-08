@@ -997,13 +997,13 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             struct tm last_modified_tm;
             time_t last_modified_t;
             strptime(content, "%FT%T", &last_modified_tm);
-            last_modified_t = gmtime(&last_modified_tm);
+            last_modified_t = mktime(&last_modified_tm);
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 %s", de->name, last_modified_t, content);
             //de->last_modified = mktime(&last_modified);
 
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             struct tm *tminfo_local;
-            tminfo_local = localtime(&last_modified_t);
+            tminfo_local = gmtime(&last_modified_t);
 
             char local_time_str[64];
             struct tm loc_time_tm;
