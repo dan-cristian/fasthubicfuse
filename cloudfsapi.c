@@ -206,13 +206,22 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
   static char storage[MAX_HEADER_SIZE];
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
-    //if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb))
     strncpy(storage, header, sizeof(storage));
     debugf("received utimens header=[%s]", storage);
     strncpy(storage, head, sizeof(storage));
-    debugf("received utimens head=[%s]", storage);
-    strncpy(storage, value, sizeof(storage));
-    debugf("received utimens value=[%s]", storage);
+
+    if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
+      strncpy(storage, value, sizeof(storage));
+      debugf("received atime=[%s]", storage);
+    }
+    if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
+      strncpy(storage, value, sizeof(storage));
+      debugf("received ctime=[%s]", storage);
+    }
+    if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
+      strncpy(storage, value, sizeof(storage));
+      debugf("received mtime=[%s]", storage);
+    }
   }
   else {
     debugf("Received unexpected header line");
@@ -295,14 +304,15 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
-    debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);
+    //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);
     dir_entry *de = local_path_info(orig_path);
     if (!de)
-      debugf("No file found in cache");
+      debugf("No file found in cache for path=%s", orig_path);
     else {
-      debugf("File found in cache, path=%s", de->full_name);
+      //debugf("File found in cache, path=%s", de->full_name);
       // add headers to save utimens attribs only on upload
       if (!strcasecmp(method, "PUT") && fp) {
+        debugf("Saving utimens to file %s", orig_path);
         char mtime_str[TIME_CHARS], atime_str[TIME_CHARS], ctime_str[TIME_CHARS];
         char string_float[TIME_CHARS];
         snprintf(string_float, TIME_CHARS, "%lu.%lu", de->mtime.tv_sec, de->mtime.tv_nsec);
@@ -311,6 +321,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
         snprintf(atime_str, TIME_CHARS, "%f", atof(string_float));
         snprintf(string_float, TIME_CHARS, "%lu.%lu", de->ctime.tv_sec, de->ctime.tv_nsec);
         snprintf(ctime_str, TIME_CHARS, "%f", atof(string_float));
+        add_header(&headers, HEADER_TEXT_FILEPATH, orig_path);
         add_header(&headers, HEADER_TEXT_MTIME, mtime_str);
         add_header(&headers, HEADER_TEXT_ATIME, atime_str);
         add_header(&headers, HEADER_TEXT_CTIME, ctime_str);
