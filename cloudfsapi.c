@@ -985,7 +985,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             strptime(content, "%FT%T", &last_modified);
             de->last_modified = mktime(&last_modified);
             // utimens addition, set file change time on folder list
-            debugf("Set utimens change time %li.0 on cloudfs_list_directory, path=%s",  de->last_modified.tv_sec, path);
+            debugf("Set utimens change time %li.0 on cloudfs_list_directory, path=%s",  de->last_modified, path);
             de->mtime.tv_sec = de->last_modified;
             de->mtime.tv_nsec = 0;
           }
