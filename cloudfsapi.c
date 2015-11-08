@@ -941,7 +941,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
       if (is_object || is_container || is_subdir)
       {
         entry_count++;
-        debugf("Create cache entry cloudfs_list_directory for path=%s", path);
+        debugf("Create empty cache entry cloudfs_list_directory for path=%s", path);
         dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
         de->next = NULL;
         de->size = 0;
@@ -996,7 +996,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           {
             struct tm last_modified;
             strptime(content, "%FT%T", &last_modified);
-            de->last_modified = mktime(&last_modified);
+            //de->last_modified = mktime(&last_modified);
 
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             char time_str[64];
@@ -1005,9 +1005,11 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             strftime(time_str, sizeof(time_str), "%c", &loc_time_tm);
 
             time_t local_time = mktime(&loc_time_tm);
-            debugf("Set utimens change time [%li.0] [%s] on cloudfs_list_directory, path=%s",  local_time, time_str, path);
+            debugf("Set cloudfs_list_directory change time [%li.0] [%s] path=%s", local_time, time_str, de->name);
+            de->last_modified = local_time;
             de->mtime.tv_sec = local_time;
             de->mtime.tv_nsec = 0;
+            // end change
           }
         }
         de->isdir = de->content_type &&
