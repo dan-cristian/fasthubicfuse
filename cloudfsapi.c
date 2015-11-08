@@ -78,6 +78,29 @@ static unsigned long thread_id()
 }
 #endif
 
+static void local_dir_for(const char *path, char *dir)
+{
+  strncpy(dir, path, MAX_PATH_SIZE);
+  char *slash = strrchr(dir, '/');
+  if (slash)
+    *slash = '\0';
+}
+
+static dir_entry *local_path_info(const char *path)
+{
+  char dir[MAX_PATH_SIZE];
+  local_dir_for(path, dir);
+  dir_entry *tmp;
+  //if (!caching_list_directory(dir, &tmp))
+  //  return NULL;
+  for (; tmp; tmp = tmp->next)
+  {
+    if (!strcmp(tmp->full_name, path))
+      return tmp;
+  }
+  return NULL;
+}
+
 static size_t xml_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
 {
   xmlParseChunk((xmlParserCtxtPtr)stream, (char *)ptr, size * nmemb, 0);
@@ -1171,25 +1194,3 @@ void debugf(char *fmt, ...)
   }
 }
 
-static void local_dir_for(const char *path, char *dir)
-{
-  strncpy(dir, path, MAX_PATH_SIZE);
-  char *slash = strrchr(dir, '/');
-  if (slash)
-    *slash = '\0';
-}
-
-static dir_entry *local_path_info(const char *path)
-{
-  char dir[MAX_PATH_SIZE];
-  local_dir_for(path, dir);
-  dir_entry *tmp;
-  //if (!caching_list_directory(dir, &tmp))
-  //  return NULL;
-  for (; tmp; tmp = tmp->next)
-  {
-    if (!strcmp(tmp->full_name, path))
-      return tmp;
-  }
-  return NULL;
-}
