@@ -89,7 +89,7 @@ static void local_dir_for(const char *path, char *dir)
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
-  debugf("check local dir caching path=%s", path);
+  //debugf("check local dir caching path=%s", path);
   int res = -1;
   //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
@@ -97,7 +97,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
   dir_cache *cw;
   for (cw = dcache; cw; cw = cw->next){
     if (!strcmp(cw->path, path)){
-      debugf("Local caching dir found in cache, path=%s", path);
+      //debugf("Local caching dir found in cache, path=%s", path);
       *list = cw->entries;
       cw->entries = *list;
       return 1;
@@ -113,22 +113,22 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 
 static dir_entry *local_path_info(const char *path)
 {
-  debugf("local path info path=%s", path);
+  //debugf("local path info path=%s", path);
   char dir[MAX_PATH_SIZE];
   local_dir_for(path, dir);
   dir_entry *tmp;
   if (!local_caching_list_directory(dir, &tmp)){
-    debugf("Path info NOT1 found in cache, path=%s, dir=%s", path, dir);
+    debugf("Path info not (1) found in cache, path=%s, dir=%s", path, dir);
     return NULL;
   }
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path)){
-      debugf("Path info found in cache, path=%s", path);
+      //debugf("Path info found in cache, path=%s", path);
       return tmp;
     }
   }
-  debugf("Path info NOT2 found in cache, path=%s", path);
+  debugf("Path info not (2) found in cache, path=%s", path);
   return NULL;
 }
 
@@ -191,6 +191,24 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
       statcache.f_ffree = MAX_FILES - object_count;
       statcache.f_favail = MAX_FILES - object_count;
     }
+  }
+  return size * nmemb;
+}
+
+static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
+{
+  debugf("Dispatching utimens response headers");
+  char *header = (char *)alloca(size * nmemb + 1);
+  char *head = (char *)alloca(size * nmemb + 1);
+  char *value = (char *)alloca(size * nmemb + 1);
+  memcpy(header, (char *)ptr, size * nmemb);
+  header[size * nmemb] = '\0';
+  static char storage[MAX_HEADER_SIZE];
+  if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
+  {
+    //if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb))
+    strncpy(storage, value, sizeof(storage));
+    debugf("received utimens header=[%s]", storage);
   }
   return size * nmemb;
 }
@@ -276,7 +294,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
       debugf("No file found in cache");
     else {
       debugf("File found in cache, path=%s", de->full_name);
-      // save attribs only on upload
+      // add headers to save utimens attribs only on upload
       if (!strcasecmp(method, "PUT") && fp) {
         char mtime_str[TIME_CHARS], atime_str[TIME_CHARS], ctime_str[TIME_CHARS];
         char string_float[TIME_CHARS];
@@ -334,6 +352,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
           abort();
         }
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
       }
       else if (xmlctx)
       {
