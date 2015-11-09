@@ -321,9 +321,18 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir,
               (long)getpid(), tmp_path);
     temp_file = fopen(file_path, "w+b");
+    if (temp_file == NULL){
+      debugf("Cannot open temp file %s.error %s\n", file_path, strerror(errno));
+      //return -EIO;
+    }
   }
-  else
+  else {
     temp_file = tmpfile();
+    if (temp_file == NULL){
+      debugf("Cannot open tmp file for path %s.error %s\n", path, strerror(errno));
+      //return -EIO;
+    }
+  }
   debugf("c4");
   openfile *of = (openfile *)malloc(sizeof(openfile));
   debugf("c41");
