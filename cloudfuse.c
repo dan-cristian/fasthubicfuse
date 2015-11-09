@@ -318,21 +318,29 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     }
     debugf("c3");
     char file_path[PATH_MAX];
-    snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir,
-              (long)getpid(), tmp_path);
-    temp_file = fopen(file_path, "w+b");
+    //the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
+    //FIXME: cap file length to NAME_MAX
+    snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
+    char file_path_safe[NAME_MAX];
+    long max_path_len = min(NAME_MAX, strlen(file_path));
+    long start_path_index = max(0, strlen(file_path) - NAME_MAX);
+    strncpy(file_path_safe, file_path + start_path_index, max_path_len);
+
+    temp_file = fopen(file_path_safe, "w+b");
     if (temp_file == NULL){
-      debugf("Cannot open temp file %s.error %s\n", file_path, strerror(errno));
+      debugf("Cannot open temp file %s.error %s\n", file_path_safe, strerror(errno));
+      /*
       long pathconfname = pathconf(file_path, _PC_NAME_MAX);
       long pathconfmax = pathconf(file_path, _PC_PATH_MAX);
       long trunc = fpathconf(0, _PC_NO_TRUNC);
       debugf("File path CONST PC_NAME=%li PCPATH=%li pctrunc=%li posix=%li", pathconfname, pathconfmax, trunc, _POSIX_NO_TRUNC);
       debugf("File name CONST NAME_MAX size=%d", NAME_MAX);
       debugf("File name CONST PATHMAX size=%d", PATH_MAX);
-
-      
       size_t length = strlen(path);
       debugf("File path real size=%d", length);
+      */
+      
+      
       //return -EIO;
     }
   }
@@ -375,6 +383,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     }
 
     char file_path[PATH_MAX];
+    //FIXME: use similar format with one in cfs_create to avoid file name max size issues
     snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir,
              (long)getpid(), tmp_path);
 
