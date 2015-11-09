@@ -310,7 +310,8 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
     debugf("TOTAL TIME: %f", curtime);
   }
 
-  debugf("UP: %lld of %lld DOWN: %lld of %lld CURTIME=%f", ulnow, ultotal, dlnow, dltotal, curtime);
+  debugf("UP: %lld of %lld DOWN: %lld of %lld CURTIME=%f LAST=%f DIFF=%f", 
+    ulnow, ultotal, dlnow, dltotal, curtime, myp->lastruntime, curtime - myp->lastruntime);
 
   //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
   //if (dlnow > STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES)

@@ -41,7 +41,7 @@ typedef struct dir_entry
   struct dir_entry *next;
 } dir_entry;
 
-#define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL     3
+#define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL 3
 struct curl_progress {
   double lastruntime;
   CURL *curl;
