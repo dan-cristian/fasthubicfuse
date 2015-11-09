@@ -326,7 +326,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
       long pathconfname = pathconf(file_path, _PC_NAME_MAX);
       long pathconfmax = pathconf(file_path, _PC_PATH_MAX);
       long trunc = fpathconf(0, _PC_NO_TRUNC);
-      debugf("File path CONST PC_NAME=%li PCPATH=%li trunc=%li", pathconfname, pathconfmax, trunc);
+      debugf("File path CONST PC_NAME=%li PCPATH=%li pctrunc=%li posix=%li", pathconfname, pathconfmax, trunc, _POSIX_NO_TRUNC);
       debugf("File name CONST NAME_MAX size=%d", NAME_MAX);
       debugf("File name CONST PATHMAX size=%d", PATH_MAX);
 
