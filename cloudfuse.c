@@ -307,31 +307,33 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   debugf("Create path=[%s]", path);
   FILE *temp_file;
 
-  if (*temp_dir)
-    {
-      char tmp_path[PATH_MAX];
-      strncpy(tmp_path, path, PATH_MAX);
-
-      char *pch;
-      while((pch = strchr(tmp_path, '/'))) {
-        *pch = '.';
-      }
-
-      char file_path[PATH_MAX];
-      snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir,
-               (long)getpid(), tmp_path);
-      temp_file = fopen(file_path, "w+b");
+  if (*temp_dir) {
+    debugf("c1");
+    char tmp_path[PATH_MAX];
+    strncpy(tmp_path, path, PATH_MAX);
+    debugf("c2");
+    char *pch;
+    while((pch = strchr(tmp_path, '/'))) {
+      *pch = '.';
     }
+    debugf("c3");
+    char file_path[PATH_MAX];
+    snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir,
+              (long)getpid(), tmp_path);
+    temp_file = fopen(file_path, "w+b");
+  }
   else
     temp_file = tmpfile();
-
+  debugf("c4");
   openfile *of = (openfile *)malloc(sizeof(openfile));
   of->fd = dup(fileno(temp_file));
   fclose(temp_file);
+  debugf("c5");
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   update_dir_cache(path, 0, 0, 0);
   info->direct_io = 1;
+  debugf("c6");
   return 0;
 }
 
