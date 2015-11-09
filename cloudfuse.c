@@ -325,7 +325,8 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
       debugf("Cannot open temp file %s.error %s\n", file_path, strerror(errno));
       long pathconfname = pathconf(file_path, _PC_NAME_MAX);
       long pathconfmax = pathconf(file_path, _PC_PATH_MAX);
-      debugf("File path CONST PATHMAX size=%d PC_NAME=%li PCPATH=%li", PATH_MAX, pathconfname, pathconfmax);
+      long trunc = fpathconf(0, _PC_NO_TRUNC);
+      debugf("File path CONST PATHMAX size=%d PC_NAME=%li PCPATH=%li trunc=%li", PATH_MAX, pathconfname, pathconfmax, trunc);
       debugf("File name CONST size=%d", NAME_MAX);
       
       size_t length = strlen(path);
