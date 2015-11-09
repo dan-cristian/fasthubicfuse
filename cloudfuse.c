@@ -14,7 +14,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <max.h>
+#include <math.h>
 #include "cloudfsapi.h"
 #include "config.h"
 
