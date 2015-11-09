@@ -319,7 +319,7 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
     frac = (double)point / (double)total;
     percent = frac * 100.0f;
     debugf("TOTAL TIME: %.0f sec Down=%.0f Kbps UP=%.0f Kbps", curtime, dspeed/1024, uspeed/1024);
-    debugf("UP: %lld of %lld DOWN: %lld/%lld Completion %.1f", ulnow, ultotal, dlnow, dltotal, frac);
+    debugf("UP: %lld of %lld DOWN: %lld/%lld Completion %.1f %", ulnow, ultotal, dlnow, dltotal, percent);
   }
 
   //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
