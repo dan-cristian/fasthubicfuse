@@ -259,7 +259,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     }
   }
   else {
-    debugf("Received unexpected header line");
+    //debugf("Received unexpected header line");
   }
   return size * nmemb;
 }
