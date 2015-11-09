@@ -1026,10 +1026,10 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           for (text_node = anode->children; text_node; text_node = text_node->next){
             if (text_node->type == XML_TEXT_NODE){
               content = (char *)text_node->content;
-              debugf("List dir anode=%s content=%s", (const char *)anode->name, content);
+              //debugf("List dir anode=%s content=%s", (const char *)anode->name, content);
             }
             else {
-              debugf("List dir anode=%s", (const char *)anode->name);
+              //debugf("List dir anode=%s", (const char *)anode->name);
             }
           }
           if (!strcasecmp((const char *)anode->name, "name"))
@@ -1044,7 +1044,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0)
               de->full_name = NULL;
           }
-          debugf("List DIR anode=%s", de->name);
+          //debugf("List DIR anode=%s", de->name);
           if (!strcasecmp((const char *)anode->name, "bytes"))
             de->size = strtoll(content, NULL, 10);
           if (!strcasecmp((const char *)anode->name, "content_type"))
@@ -1057,7 +1057,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           if (!strcasecmp((const char *)anode->name, "hash"))
           {
             de->md5sum = strdup(content);
-            debugf("Md5=%s", de->md5sum);
+            //debugf("Md5=%s", de->md5sum);
           }
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
@@ -1068,8 +1068,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 
             last_modified_t = my_timegm(&last_modified_tm);
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 %s", de->name, last_modified_t, content);
-            //de->last_modified = mktime(&last_modified);
-
+            
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             char local_time_str[64];
             struct tm loc_time_tm;
