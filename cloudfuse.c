@@ -14,7 +14,6 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <math.h>
 #include "cloudfsapi.h"
 #include "config.h"
 
@@ -323,8 +322,16 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     //FIXME: cap file length to NAME_MAX
     snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    long max_path_len = fmin(NAME_MAX, strlen(file_path));
-    long start_path_index = fmax(0, strlen(file_path) - NAME_MAX);
+    size_t len_file_path = strlen(file_path);
+    long max_path_len, start_path_index;
+    if (len_file_path > NAME_MAX) {
+      max_path_len = NAME_MAX;
+      start_path_index = len_file_path - NAME_MAX;
+    }
+    else {
+      max_path_len = len_file_path;
+      start_path_index = 0;
+    }
     strncpy(file_path_safe, file_path + start_path_index, max_path_len);
 
     temp_file = fopen(file_path_safe, "w+b");
