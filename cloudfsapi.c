@@ -423,7 +423,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
       struct curl_progress prog;
       prog.lastruntime = 0;
       prog.curl = curl;
-      curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, older_progress);
+      curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
       /* pass the struct pointer into the progress function */
       curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
     }
@@ -454,7 +454,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
         struct curl_progress prog;
         prog.lastruntime = 0;
         prog.curl = curl;
-        curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, older_progress);
+        curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
         curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
       }
       else if (xmlctx)
