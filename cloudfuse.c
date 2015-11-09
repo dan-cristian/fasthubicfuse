@@ -322,6 +322,9 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
               (long)getpid(), tmp_path);
     temp_file = fopen(file_path, "w+b");
     if (temp_file == NULL){
+      debugf("File path CONST size=%d", PATH_MAX);
+      size_t length = strlen(npath);
+      debugf("File path real size=%d", length);
       debugf("Cannot open temp file %s.error %s\n", file_path, strerror(errno));
       //return -EIO;
     }
