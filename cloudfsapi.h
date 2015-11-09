@@ -41,6 +41,12 @@ typedef struct dir_entry
   struct dir_entry *next;
 } dir_entry;
 
+#define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL     3
+struct curl_progress {
+  double lastruntime;
+  CURL *curl;
+};
+
 typedef struct options {
     char cache_timeout[OPTION_SIZE];
     char verify_ssl[OPTION_SIZE];

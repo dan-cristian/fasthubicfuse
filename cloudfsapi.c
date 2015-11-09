@@ -294,6 +294,35 @@ static size_t write_callback(void *ptr, size_t size, size_t nmemb, void *userp)
    return rw_callback(fwrite2, ptr, size, nmemb, userp);
 }
 
+//http://curl.haxx.se/libcurl/c/CURLOPT_XFERINFOFUNCTION.html
+int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow){
+  struct curl_progress *myp = (struct curl_progress *)clientp;
+  CURL *curl = myp->curl;
+  double curtime = 0;
+
+  curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &curtime);
+
+  /* under certain circumstances it may be desirable for certain functionality
+  to only run every N seconds, in order to do this the transaction time can
+  be used */
+  if ((curtime - myp->lastruntime) >= MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL) {
+    myp->lastruntime = curtime;
+    debugf("TOTAL TIME: %f", curtime);
+  }
+
+  debugf("UP: %lld of %lld DOWN: %lld of %lld", ulnow, ultotal, dlnow, dltotal);
+
+  //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
+  //if (dlnow > STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES)
+  //  return 1;
+  return 0;
+}
+
+//http://curl.haxx.se/libcurl/c/CURLOPT_PROGRESSFUNCTION.html
+int progress_callback(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow){
+  return progress_callback_xfer(clientp, (curl_off_t)dltotal(curl_off_t)dlnow(curl_off_t)ultotal, (curl_off_t)ulnow);
+}
+
 static int send_request_size(const char *method, const char *path, void *fp,
                         xmlParserCtxtPtr xmlctx, curl_slist *extra_headers,
                         off_t file_size, int is_segment)
@@ -333,7 +362,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HEADER, 0);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);//0=enable progress
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
@@ -389,6 +418,14 @@ static int send_request_size(const char *method, const char *path, void *fp,
       curl_easy_setopt(curl, CURLOPT_READDATA, fp);
       if (is_segment)
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+      //enable progress reporting
+      //http://curl.haxx.se/libcurl/c/progressfunc.html
+      struct curl_progress prog;
+      prog.lastruntime = 0;
+      prog.curl = curl;
+      curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, older_progress);
+      /* pass the struct pointer into the progress function */
+      curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
     }
     else if (!strcasecmp(method, "GET"))
     {
@@ -413,6 +450,12 @@ static int send_request_size(const char *method, const char *path, void *fp,
         // inspired by UThreadCurl.cpp, https://bitbucket.org/pamungkas5/bcbcurl/src
         // and http://www.codeproject.com/Articles/838366/BCBCurl-a-LibCurl-based-download-manager
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
+
+        struct curl_progress prog;
+        prog.lastruntime = 0;
+        prog.curl = curl;
+        curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, older_progress);
+        curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
       }
       else if (xmlctx)
       {
