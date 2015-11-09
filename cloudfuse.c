@@ -326,7 +326,9 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     temp_file = tmpfile();
   debugf("c4");
   openfile *of = (openfile *)malloc(sizeof(openfile));
+  debugf("c41");
   of->fd = dup(fileno(temp_file));
+  debugf("c42");
   fclose(temp_file);
   debugf("c5");
   of->flags = info->flags;
