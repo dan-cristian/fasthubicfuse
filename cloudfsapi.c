@@ -320,7 +320,7 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
 
 //http://curl.haxx.se/libcurl/c/CURLOPT_PROGRESSFUNCTION.html
 int progress_callback(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow){
-  return progress_callback_xfer(clientp, (curl_off_t)dltotal(curl_off_t)dlnow(curl_off_t)ultotal, (curl_off_t)ulnow);
+  return progress_callback_xfer(clientp, (curl_off_t)dltotal, (curl_off_t)dlnow, (curl_off_t)ultotal, (curl_off_t)ulnow);
 }
 
 static int send_request_size(const char *method, const char *path, void *fp,
