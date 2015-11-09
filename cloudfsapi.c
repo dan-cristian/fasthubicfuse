@@ -310,7 +310,7 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
   be used */
   if ((curtime - myp->lastruntime) >= MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL) {
     myp->lastruntime = curtime;
-    debugf("TOTAL TIME: %f sec Down=%.0f Kbps UP=%.0f Kbps", curtime, dspeed/1024, uspeed/1024);
+    debugf("TOTAL TIME: %.0f sec Down=%.0f Kbps UP=%.0f Kbps", curtime, dspeed/1024, uspeed/1024);
     debugf("UP: %lld of %lld DOWN: %lld of %lld", ulnow, ultotal, dlnow, dltotal);
   }
 
