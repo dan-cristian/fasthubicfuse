@@ -308,10 +308,18 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
   /* under certain circumstances it may be desirable for certain functionality
   to only run every N seconds, in order to do this the transaction time can
   be used */
+  //http://curl.haxx.se/cvssource/src/tool_cb_prg.c
   if ((curtime - myp->lastruntime) >= MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL) {
     myp->lastruntime = curtime;
+    curl_off_t total;
+    curl_off_t point;
+    double frac, percent;
+    total = dltotal + ultotal;
+    point = dlnow + ulnow;
+    frac = (double)point / (double)total;
+    percent = frac * 100.0f;
     debugf("TOTAL TIME: %.0f sec Down=%.0f Kbps UP=%.0f Kbps", curtime, dspeed/1024, uspeed/1024);
-    debugf("UP: %lld of %lld DOWN: %lld of %lld", ulnow, ultotal, dlnow, dltotal);
+    debugf("UP: %lld of %lld DOWN: %lld/%lld Completion %.1f", ulnow, ultotal, dlnow, dltotal, frac);
   }
 
   //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
