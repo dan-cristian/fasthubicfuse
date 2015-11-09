@@ -310,9 +310,8 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
   be used */
   if ((curtime - myp->lastruntime) >= MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL) {
     myp->lastruntime = curtime;
-    debugf("TOTAL TIME: %f DOWNLOAD=%f Kbps UPLOAD=%f Kbps", curtime, dspeed/1024, uspeed/1024);
-    debugf("UP: %lld of %lld DOWN: %lld of %lld CURTIME=%f LAST=%f DIFF=%f",
-      ulnow, ultotal, dlnow, dltotal, curtime, myp->lastruntime, curtime - myp->lastruntime);
+    debugf("TOTAL TIME: %f sec Down=%.0f Kbps UP=%.0f Kbps", curtime, dspeed/1024, uspeed/1024);
+    debugf("UP: %lld of %lld DOWN: %lld of %lld", ulnow, ultotal, dlnow, dltotal);
   }
 
   //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
