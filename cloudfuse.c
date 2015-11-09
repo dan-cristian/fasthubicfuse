@@ -392,13 +392,25 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
     char file_path[PATH_MAX];
     //FIXME: use similar format with one in cfs_create to avoid file name max size issues
-    snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir,
-             (long)getpid(), tmp_path);
+    //snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
+    char file_path_safe[NAME_MAX];
+    size_t len_file_path = strlen(file_path);
+    long max_path_len, start_path_index;
+    if (len_file_path > NAME_MAX) {
+      max_path_len = NAME_MAX;
+      start_path_index = len_file_path - NAME_MAX;
+    }
+    else {
+      max_path_len = len_file_path;
+      start_path_index = 0;
+    }
+    strncpy(file_path_safe, file_path + start_path_index, max_path_len);
 
-    if(access(file_path, F_OK) != -1)
+
+    if (access(file_path_safe, F_OK) != -1)
     {
       // file exists
-      temp_file = fopen(file_path, "r");
+      temp_file = fopen(file_path_safe, "r");
     }
     else if (!(info->flags & O_WRONLY))
     {
@@ -420,7 +432,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       // that file.
 
       // TODO: just to prevent this craziness for now
-      temp_file = fopen(file_path, "w+b");
+      temp_file = fopen(file_path_safe, "w+b");
 
       if (!cloudfs_object_write_fp(path, temp_file))
       {
