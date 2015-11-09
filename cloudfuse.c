@@ -332,7 +332,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
       max_path_len = len_file_path;
       start_path_index = 0;
     }
-    strncpy(file_path_safe, file_path + start_path_index, max_path_len);
+    strncpy(file_path_safe, file_path, max_path_len);
 
     temp_file = fopen(file_path_safe, "w+b");
     if (temp_file == NULL){
@@ -404,7 +404,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       max_path_len = len_file_path;
       start_path_index = 0;
     }
-    strncpy(file_path_safe, file_path + start_path_index, max_path_len);
+    strncpy(file_path_safe, file_path, max_path_len);
 
 
     if (access(file_path_safe, F_OK) != -1)
