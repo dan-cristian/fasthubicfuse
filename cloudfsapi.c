@@ -141,7 +141,7 @@ static dir_entry *local_path_info(const char *path)
       return tmp;
     }
   }
-  debugf("Path info not (2) found in cache, path=%s", path);
+  //debugf("Path info not (2) found in cache, path=%s", path);
   return NULL;
 }
 
@@ -183,7 +183,7 @@ static void add_header(curl_slist **headers, const char *name,
 
 static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
 {
-  debugf("Dispatching response headers");
+  //debugf("Dispatching response headers");
   char *header = (char *)alloca(size * nmemb + 1);
   char *head = (char *)alloca(size * nmemb + 1);
   char *value = (char *)alloca(size * nmemb + 1);
@@ -319,7 +319,7 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
     frac = (double)point / (double)total;
     percent = frac * 100.0f;
     debugf("TOTAL TIME: %.0f sec Down=%.0f Kbps UP=%.0f Kbps", curtime, dspeed/1024, uspeed/1024);
-    debugf("UP: %lld of %lld DOWN: %lld/%lld Completion %.1f %", ulnow, ultotal, dlnow, dltotal, percent);
+    debugf("UP: %lld of %lld DOWN: %lld/%lld Completion %.1f %%", ulnow, ultotal, dlnow, dltotal, percent);
   }
 
   //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
