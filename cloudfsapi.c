@@ -299,19 +299,21 @@ int progress_callback_xfer(void *clientp, curl_off_t dltotal, curl_off_t dlnow, 
   struct curl_progress *myp = (struct curl_progress *)clientp;
   CURL *curl = myp->curl;
   double curtime = 0;
+  double dspeed = 0, uspeed=0;
 
   curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &curtime);
+  curl_easy_getinfo(curl, CURLINFO_SPEED_DOWNLOAD, &dspeed);
+  curl_easy_getinfo(curl, CURLINFO_SPEED_UPLOAD, &uspeed);
 
   /* under certain circumstances it may be desirable for certain functionality
   to only run every N seconds, in order to do this the transaction time can
   be used */
   if ((curtime - myp->lastruntime) >= MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL) {
     myp->lastruntime = curtime;
-    debugf("TOTAL TIME: %f", curtime);
+    debugf("TOTAL TIME: %f DOWNLOAD=%f Kbps UPLOAD=%f Kbps", curtime, dspeed/1024, uspeed/1024);
+    debugf("UP: %lld of %lld DOWN: %lld of %lld CURTIME=%f LAST=%f DIFF=%f",
+      ulnow, ultotal, dlnow, dltotal, curtime, myp->lastruntime, curtime - myp->lastruntime);
   }
-
-  debugf("UP: %lld of %lld DOWN: %lld of %lld CURTIME=%f LAST=%f DIFF=%f", 
-    ulnow, ultotal, dlnow, dltotal, curtime, myp->lastruntime, curtime - myp->lastruntime);
 
   //#define STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES         6000
   //if (dlnow > STOP_DOWNLOAD_AFTER_THIS_MANY_BYTES)
