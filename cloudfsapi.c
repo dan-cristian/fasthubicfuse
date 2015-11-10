@@ -801,7 +801,12 @@ void cloudfs_init()
 
 void cloudfs_free()
 {
+  debugf("Destroy mutex");
   pthread_mutex_destroy(&pool_mut);
+  for (int n = 0; n < curl_pool_count; ++n) {
+    debugf("Cleaning curl conn %d", n);
+    curl_easy_cleanup(curl_pool[n]);
+  }
 }
 
 
