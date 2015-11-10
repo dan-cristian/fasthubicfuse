@@ -38,6 +38,7 @@ typedef struct dir_entry
   // end change
   int isdir;
   int islink;
+  int issegmented;
   struct dir_entry *next;
 } dir_entry;
 
