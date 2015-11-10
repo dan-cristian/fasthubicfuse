@@ -119,6 +119,8 @@ void time_t get_now_time_as_gmt(time_t gmt_time){
 }
 */
 
+
+
 static void local_dir_for(const char *path, char *dir)
 {
   //debugf("local dir for [%s]", path);
