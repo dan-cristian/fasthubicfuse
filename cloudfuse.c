@@ -715,6 +715,7 @@ void interrupt_handler(int sig) {
   debugf("Got interrupt signal %d, cleaning memory", sig);
   //TODO: clean memory allocations
   //http://www.cprogramming.com/debugging/valgrind.html
+  cloudfs_free();
   pthread_mutex_destroy(&dmut);
   exit(0);
 }
