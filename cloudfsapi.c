@@ -109,10 +109,11 @@ time_t get_time_as_local(time_t time_t_val, char *time_str){
   struct tm loc_time_tm;
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
-    //debugf("Local time size=%d", strlen(time_str));
+    debugf("Local time_size=%d", strlen(time_str));
     strftime(time_str, strlen(time_str), "%c", &loc_time_tm);
-    debugf("Local time=[%s] %li size=%d", time_str, mktime(&loc_time_tm), strlen(time_str));
+    debugf("Local timestr=[%s] size=%d", time_str, strlen(time_str));
   }
+  debugf("Local time_t %li", mktime(&loc_time_tm));
   return mktime(&loc_time_tm);
 }
 
