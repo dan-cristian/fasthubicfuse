@@ -110,7 +110,7 @@ time_t get_time_as_local(time_t time_t_val, char *time_str){
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
     debugf("Local time size=%d", sizeof(time_str));
-    strftime(time_str, sizeof(time_str), "%c", &loc_time_tm);
+    strftime(time_str, 64, "%c", &loc_time_tm);
     debugf("Local time=[%s] size=%d", time_str, sizeof(time_str));
   }
   return mktime(&loc_time_tm);
@@ -1129,6 +1129,11 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           if (!strcasecmp((const char *)anode->name, "hash"))
           {
             de->md5sum = strdup(content);
+          }
+          if (!strcasecmp((const char *)anode->name, "segmented"))
+          {
+            debugf("Segmented=%s", content);
+            //de->md5sum = strdup(content);
           }
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
