@@ -17,6 +17,7 @@
 #include <libxml/tree.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
+#include <openssl/md5.h>
 #include <json.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
@@ -77,15 +78,43 @@ static unsigned long thread_id()
 }
 #endif
 
-/*
+// needed to get correct GMT / local time, as it does not work
+// http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
+time_t my_timegm(struct tm *tm) {
+  time_t epoch = 0;
+  time_t offset = mktime(gmtime(&epoch));
+  time_t utc = mktime(tm);
+  return difftime(utc, offset);
+}
+
 // hubic stores time as GMT so we have to do conversions
-void time_t set_now_time_to_gmt(){
+
+/*void time_t set_now_time_to_gmt(){
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
   http://stackoverflow.com/questions/1764710/converting-string-containing-localtime-into-utc-in-c
 }
+*/
+//expect time_str as a friendly string format
+time_t get_time_from_str_as_gmt(char *time_str){
+  struct tm val_time_tm;
+  time_t val_time_t;
+  strptime(time_str, "%FT%T", &val_time_tm);
+  val_time_tm.tm_isdst = -1;
+  val_time_t = my_timegm(&val_time_tm);
+  return val_time_t;
+}
 
-void time_t get_now_time_from_gmt(time_t gmt_time){
+struct tm get_time_as_local(time_t time_t_val){
+  char time_str[64];
+  struct tm loc_time_tm;
+  loc_time_tm = *localtime(&time_t_val);
+  strftime(time_str, sizeof(time_str), "%c", &loc_time_tm);
+  return mktime(&loc_time_tm);
+}
+
+/*
+void time_t get_now_time_as_gmt(time_t gmt_time){
 
 }
 */
@@ -98,6 +127,34 @@ static void local_dir_for(const char *path, char *dir)
   if (slash)
     *slash = '\0';
   //debugf("local dir becomes [%s]", dir);
+}
+
+char *str2md5(const char *str, int length) {
+  int n;
+  MD5_CTX c;
+  unsigned char digest[16];
+  char *out = (char*)malloc(33);
+
+  MD5_Init(&c);
+
+  while (length > 0) {
+    if (length > 512) {
+      MD5_Update(&c, str, 512);
+    }
+    else {
+      MD5_Update(&c, str, length);
+    }
+    length -= 512;
+    str += 512;
+  }
+
+  MD5_Final(digest, &c);
+
+  for (n = 0; n < 16; ++n) {
+    snprintf(&(out[n * 2]), 16 * 2, "%02x", (unsigned int)digest[n]);
+  }
+
+  return out;
 }
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
@@ -931,14 +988,6 @@ int cloudfs_object_truncate(const char *path, off_t size)
   return (response >= 200 && response < 300);
 }
 
-// needed to get correct GMT / local time, as it does not work
-// http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
-time_t my_timegm(struct tm *tm) {
-  time_t epoch = 0;
-  time_t offset = mktime(gmtime(&epoch));
-  time_t utc = mktime(tm);
-  return difftime(utc, offset);
-}
 
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 {
@@ -1061,22 +1110,28 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           }
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
+            time_t last_modified_t = get_time_from_str_as_gmt(content);
+            /*
             struct tm last_modified_tm;
             time_t last_modified_t;
             strptime(content, "%FT%T", &last_modified_tm);
             last_modified_tm.tm_isdst = -1;
-
             last_modified_t = my_timegm(&last_modified_tm);
+            */
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 %s", de->name, last_modified_t, content);
             
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
-            char local_time_str[64];
+            /*char local_time_str[64];
             struct tm loc_time_tm;
             loc_time_tm = *localtime(&last_modified_t);
             strftime(local_time_str, sizeof(local_time_str), "%c", &loc_time_tm);
 
             time_t local_time_t = mktime(&loc_time_tm);
-            debugf("Set cloudfs_list_directory path=%s local_time=%li.0 %s", de->name, local_time_t, local_time_str);
+            */
+            
+            time_t local_time_t = get_time_as_local(last_modified_t);
+
+            debugf("Set cloudfs_list_directory path=%s local_time=%li.0", de->name, local_time_t);// , local_time_str);
             de->last_modified = local_time_t;
             de->mtime.tv_sec = local_time_t;
             // TODO check if I can retrieve nano seconds

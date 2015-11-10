@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stddef.h>
+
 #include "cloudfsapi.h"
 #include "config.h"
 
@@ -308,20 +309,23 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   FILE *temp_file;
 
   if (*temp_dir) {
-    debugf("c1");
     char tmp_path[PATH_MAX];
     strncpy(tmp_path, path, PATH_MAX);
-    debugf("c2");
     char *pch;
     while((pch = strchr(tmp_path, '/'))) {
       *pch = '.';
     }
-    debugf("c3");
     char file_path[PATH_MAX];
     //the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
-    //FIXME: cap file length to NAME_MAX
+    //solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
+    char *md5_path = str2md5(path, strlen(path));
     snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
+    strncpy(file_path_safe, file_path, NAME_MAX - strlen(md5_path));
+    strcat(file_path_safe, md5_path);
+
+    
+    /*
     size_t len_file_path = strlen(file_path);
     long max_path_len, start_path_index;
     if (len_file_path > NAME_MAX) {
@@ -331,24 +335,12 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     else {
       max_path_len = len_file_path;
       start_path_index = 0;
-    }
-    strncpy(file_path_safe, file_path, max_path_len);
+    }*/
+    
 
     temp_file = fopen(file_path_safe, "w+b");
     if (temp_file == NULL){
       debugf("Cannot open temp file %s.error %s\n", file_path_safe, strerror(errno));
-      /*
-      long pathconfname = pathconf(file_path, _PC_NAME_MAX);
-      long pathconfmax = pathconf(file_path, _PC_PATH_MAX);
-      long trunc = fpathconf(0, _PC_NO_TRUNC);
-      debugf("File path CONST PC_NAME=%li PCPATH=%li pctrunc=%li posix=%li", pathconfname, pathconfmax, trunc, _POSIX_NO_TRUNC);
-      debugf("File name CONST NAME_MAX size=%d", NAME_MAX);
-      debugf("File name CONST PATHMAX size=%d", PATH_MAX);
-      size_t length = strlen(path);
-      debugf("File path real size=%d", length);
-      */
-      
-      
       //return -EIO;
     }
   }
@@ -719,10 +711,16 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
   return 1;
 }
 
-
+void interrupt_handler(int sig) {
+  debugf("Got interrupt signal %d", sig);
+  //TODO: clean memory allocations
+  exit(0);
+}
 
 int main(int argc, char **argv)
 {
+  signal(SIGINT, interrupt_handler);
+
   char settings_filename[MAX_PATH_SIZE] = "";
   FILE *settings;
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);

@@ -109,5 +109,7 @@ void cloudfs_verify_ssl(int dbg);
 void cloudfs_free_dir_list(dir_entry *dir_list);
 int cloudfs_statfs(const char *path, struct statvfs *stat);
 
+char *str2md5(const char *str, int length);
+
 void debugf(char *fmt, ...);
 #endif
