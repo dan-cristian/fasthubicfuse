@@ -113,6 +113,12 @@ time_t get_time_as_local(time_t time_t_val){
   return mktime(&loc_time_tm);
 }
 
+int get_time_as_string(time_t time_t_val, char *time_str){
+  struct tm time_val_tm;
+  time_val_tm = *gmtime(&time_t_val);
+  return strftime(time_str, sizeof(time_str), "%c", &time_val_tm);
+}
+
 /*
 void time_t get_now_time_as_gmt(time_t gmt_time){
 
@@ -1123,11 +1129,14 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           }
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
+            
             time_t last_modified_t = get_time_from_str_as_gmt(content);
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 %s", de->name, last_modified_t, content);
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             time_t local_time_t = get_time_as_local(last_modified_t);
-            debugf("Set cloudfs_list_directory path=%s local_time=%li.0", de->name, local_time_t);// , local_time_str);
+            char local_time_str[64];
+            get_time_as_string(local_time_str, local_time_t);
+            debugf("Set cloudfs_list_directory path=%s local_time=%li.0 %s", de->name, local_time_t, local_time_str);
             de->last_modified = local_time_t;
             de->mtime.tv_sec = local_time_t;
             // TODO check if I can retrieve nano seconds
