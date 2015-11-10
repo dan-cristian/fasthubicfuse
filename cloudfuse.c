@@ -712,8 +712,10 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
 }
 
 void interrupt_handler(int sig) {
-  debugf("Got interrupt signal %d", sig);
+  debugf("Got interrupt signal %d, cleaning memory", sig);
   //TODO: clean memory allocations
+  //http://www.cprogramming.com/debugging/valgrind.html
+  pthread_mutex_destroy(&dmut);
   exit(0);
 }
 
