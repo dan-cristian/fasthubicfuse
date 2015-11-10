@@ -106,7 +106,6 @@ time_t get_time_from_str_as_gmt(char *time_str){
 }
 
 time_t get_time_as_local(time_t time_t_val, char *time_str){
-  char time_str[64];
   struct tm loc_time_tm;
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
