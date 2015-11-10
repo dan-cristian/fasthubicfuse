@@ -73,6 +73,7 @@ extern dir_cache *dcache;
 
 
 void cloudfs_init(void);
+void cloudfs_free(void);
 void cloudfs_set_credentials(char *client_id, char *client_secret, char *refresh_token);
 int cloudfs_connect(void);
 
