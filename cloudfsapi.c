@@ -109,9 +109,9 @@ time_t get_time_as_local(time_t time_t_val, char *time_str){
   struct tm loc_time_tm;
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
-    debugf("Local time size=%d", sizeof(time_str));
-    strftime(time_str, 64, "%c", &loc_time_tm);
-    debugf("Local time=[%s] size=%d", time_str, sizeof(time_str));
+    //debugf("Local time size=%d", strlen(time_str));
+    strftime(time_str, strlen(time_str), "%c", &loc_time_tm);
+    //debugf("Local time=[%s] size=%d", time_str, strlen(time_str));
   }
   return mktime(&loc_time_tm);
 }
@@ -119,7 +119,7 @@ time_t get_time_as_local(time_t time_t_val, char *time_str){
 int get_time_as_string(time_t time_t_val, char *time_str){
   struct tm time_val_tm;
   time_val_tm = *gmtime(&time_t_val);
-  return strftime(time_str, sizeof(time_str), "%c", &time_val_tm);
+  return strftime(time_str, strlen(time_str), "%c", &time_val_tm);
 }
 
 /*
@@ -1090,6 +1090,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->md5sum = NULL;
         // change end
         
+        //http://developer.openstack.org/api-ref-objectstorage-v1.html
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
         for (anode = onode->children; anode; anode = anode->next)
