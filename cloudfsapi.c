@@ -105,11 +105,11 @@ time_t get_time_from_str_as_gmt(char *time_str){
   return val_time_t;
 }
 
-time_t get_time_as_local(time_t time_t_val, const char time_str[]){
+time_t get_time_as_local(time_t time_t_val, char time_str[]){
   struct tm loc_time_tm;
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
-    debugf("Local time_size=%d", strlen(time_str));
+    debugf("Local len=%d size=%d", strlen(time_str), sizeof(time_str));
     strftime(time_str, 64, "%c", &loc_time_tm);
     debugf("Local timestr=[%s] size=%d", time_str, strlen(time_str));
   }
