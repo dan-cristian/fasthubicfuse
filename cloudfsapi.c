@@ -110,7 +110,7 @@ time_t get_time_as_local(time_t time_t_val, char *time_str){
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
     debugf("Local time_size=%d", strlen(time_str));
-    strftime(time_str, strlen(time_str), "%c", &loc_time_tm);
+    strftime(time_str, 64, "%c", &loc_time_tm);
     debugf("Local timestr=[%s] size=%d", time_str, strlen(time_str));
   }
   debugf("Local time_t %li", mktime(&loc_time_tm));
@@ -1143,7 +1143,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 [%s]", de->name, last_modified_t, content);
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
             char local_time_str[64];
-            time_t local_time_t = get_time_as_local(last_modified_t, &local_time_str);
+            time_t local_time_t = get_time_as_local(last_modified_t, local_time_str);
             debugf("Set cloudfs_list_directory path=%s local_time=%li.0 [%s]", de->name, local_time_t, local_time_str);
             de->last_modified = local_time_t;
             de->mtime.tv_sec = local_time_t;
