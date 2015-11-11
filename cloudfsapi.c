@@ -533,6 +533,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
+      else {
+        //asumming retrieval of headers only
+        debugf("Attempt to retrieve only headers");
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
+      }
     }
     else
     {
@@ -1021,21 +1028,19 @@ int cloudfs_object_truncate(const char *path, off_t size)
 }
 
 //get metadata from cloud, like time attribs
-int cloud_get_file_metadata(const char *path){
+int get_file_metadata(const char *path){
+  debugf("Retrieve file metadata path=%s", path);
   dir_entry *de = local_path_info(path);
   if (!de)
     debugf("ODD! as no file found in cache for path=%s", path);
   else {
-    //todo: retrieve metadata with a short query
+    //todo: retrieve metadata with a short? query
     char *encoded = curl_escape(path, 0);
-    int response = send_request("GET", encoded, fp, NULL, NULL);
+    int response = send_request("GET", encoded, NULL, NULL, NULL);
     curl_free(encoded);
-    fflush(fp);
-    if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
-      return 1;
-    rewind(fp);
     return 0;
   }
+  return 1;
 }
 
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
@@ -1172,8 +1177,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             // TODO check if I can retrieve nano seconds
             de->mtime.tv_nsec = 0;
             //TODO: attempt to read extended attributes on each entry
-            //reentrant
-            cloud_get_file_metadata(de->full_name);
+            get_file_metadata(de->full_name);
           }
         }
         de->isdir = de->content_type &&
