@@ -718,6 +718,7 @@ int format_segments(const char *path, char * seg_base,  long *segments,
   char seg_path[MAX_URL_SIZE];
   snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
 
+  //todo: try to avoid one additional http request for small files
   int issegmented;
   dir_entry *de = local_path_info(path);
   if (!de) {
@@ -1019,6 +1020,23 @@ int cloudfs_object_truncate(const char *path, off_t size)
   return (response >= 200 && response < 300);
 }
 
+//get metadata from cloud, like time attribs
+int cloud_get_file_metadata(const char *path){
+  dir_entry *de = local_path_info(path);
+  if (!de)
+    debugf("ODD! as no file found in cache for path=%s", path);
+  else {
+    //todo: retrieve metadata with a short query
+    char *encoded = curl_escape(path, 0);
+    int response = send_request("GET", encoded, fp, NULL, NULL);
+    curl_free(encoded);
+    fflush(fp);
+    if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
+      return 1;
+    rewind(fp);
+    return 0;
+  }
+}
 
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 {
@@ -1061,8 +1079,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     curl_free(encoded_container);
     curl_free(encoded_object);
   }
-
-  
 
   if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
     response = 404;
@@ -1157,7 +1173,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             de->mtime.tv_nsec = 0;
             //TODO: attempt to read extended attributes on each entry
             //reentrant
-
+            cloud_get_file_metadata(de->full_name);
           }
         }
         de->isdir = de->content_type &&
