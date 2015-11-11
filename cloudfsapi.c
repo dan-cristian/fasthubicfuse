@@ -1147,8 +1147,13 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (slash && (0 == *(slash + 1)))
               *slash = 0;
 
-            if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0)
+            if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0){
               de->full_name = NULL;
+            }
+            else{
+              //TODO: attempt to read extended attributes on each entry
+              get_file_metadata(de->full_name);
+            }
           }
           //debugf("List DIR anode=%s", de->name);
           if (!strcasecmp((const char *)anode->name, "bytes"))
@@ -1176,8 +1181,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             de->mtime.tv_sec = local_time_t;
             // TODO check if I can retrieve nano seconds
             de->mtime.tv_nsec = 0;
-            //TODO: attempt to read extended attributes on each entry
-            get_file_metadata(de->full_name);
+            
           }
         }
         de->isdir = de->content_type &&
