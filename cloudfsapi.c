@@ -709,7 +709,7 @@ int is_segmented(const char *path)
 int format_segments(const char *path, char * seg_base,  long *segments,
         long *full_segments, long *remaining, long *size_of_segments)
 {
-  debugf("format_segments entered path=%s", s);
+  debugf("format_segments entered path=%s", path);
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
 
