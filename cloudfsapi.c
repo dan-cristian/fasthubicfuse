@@ -280,15 +280,12 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
 static void header_set_time_from_str(char *time_str, struct timespec *time_entry){
   char sec_value[TIME_CHARS];
   char nsec_value[TIME_CHARS];
-  //struct tm read_time;
   time_t sec;
   long nsec;
   sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
-  sec = strtoll(sec_value, NULL, 10);
+  sec = strtoll(sec_value, NULL, 10);//to allow for larger numbers
   nsec = atol(nsec_value);
-  debugf("Received time=%s.%s / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry->tv_sec, time_entry->tv_nsec);
-  //strptime(sec_value, "%FT%T", &read_time);
-  
+  //debugf("Received time=%s.%s / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry->tv_sec, time_entry->tv_nsec);
   if (sec != time_entry->tv_sec || nsec != time_entry->tv_nsec){
     debugf("Setting new time=%li.%li, existing was=%li.%li", sec, nsec, time_entry->tv_sec, time_entry->tv_nsec);
     time_entry->tv_sec = atol(sec_value);
@@ -296,7 +293,7 @@ static void header_set_time_from_str(char *time_str, struct timespec *time_entry
   }
 }
 
-static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
+static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, void *userdata)
 {
   //debugf("Dispatching utimens response headers");
   char *header = (char *)alloca(size * nmemb + 1);
@@ -310,48 +307,15 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     //strncpy(storage, header, sizeof(storage));
     //debugf("received utimens header=[%s]", storage);
     strncpy(storage, head, sizeof(storage));
-
-    dir_entry *de = (dir_entry*)stream;
-    struct tm read_time;
-    static char sec_value[TIME_CHARS], nsec_value[TIME_CHARS];
-    char time_str[64];
-
+    dir_entry *de = (dir_entry*)userdata;
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
       header_set_time_from_str(value, &de->atime);
-      /*strncpy(storage, value, sizeof(storage));
-      debugf("Received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
-      sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
-      //debugf("Parsed atime [%s][%s]", sec_value, nsec_value);
-      strptime(sec_value, "%FT%T", &read_time);
-      de->atime.tv_sec = atol(sec_value);
-      de->atime.tv_nsec = atol(nsec_value);
-      debugf("Stored new atime [%li][%li]", de->atime.tv_sec, de->atime.tv_nsec);
-      */
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
       header_set_time_from_str(value, &de->ctime);
-      /*
-      strncpy(storage, value, sizeof(storage));
-      debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
-      sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
-      //debugf("Parsed ctime [%s][%s]", sec_value, nsec_value);
-      strptime(storage, "%FT%T", &read_time);
-      de->ctime.tv_sec = atol(sec_value);
-      de->ctime.tv_nsec = atol(nsec_value);
-      debugf("Stored new ctime [%li][%li]", de->ctime.tv_sec, de->ctime.tv_nsec);
-      */
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
       header_set_time_from_str(value, &de->mtime);
-      /*strncpy(storage, value, sizeof(storage));
-      debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
-      sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
-      //debugf("Parsed mtime [%s][%s]", sec_value, nsec_value);
-      strptime(storage, "%FT%T", &read_time);
-      de->mtime.tv_sec = atol(sec_value);
-      de->mtime.tv_nsec = atol(nsec_value);
-      debugf("Stored new mtime [%li][%li]", de->mtime.tv_sec, de->mtime.tv_nsec);
-      */
     }
   }
   else {
