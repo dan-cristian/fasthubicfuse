@@ -21,6 +21,12 @@
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
 #define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
 
+#define min(x, y) ({                \
+  typeof(x) _min1 = (x);          \
+  typeof(y) _min2 = (y);          \
+  (void)(&_min1 == &_min2);      \
+  _min1 < _min2 ? _min1 : _min2; })
+
 typedef struct curl_slist curl_slist;
 
 typedef struct dir_entry

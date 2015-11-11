@@ -308,7 +308,7 @@ static int get_safe_path(const char *file_path, int file_path_len, char *file_pa
   //solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
   char *md5_path = str2md5(file_path, file_path_len);
   int md5len = strlen(md5_path);
-  size_t safe_len_prefix = NAME_MAX - md5len;
+  size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
   strncpy(file_path_safe, file_path, safe_len_prefix);
   //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
   if (safe_len_prefix > 0)
