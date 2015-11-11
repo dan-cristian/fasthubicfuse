@@ -399,11 +399,11 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     {
       // file exists
       temp_file = fopen(file_path_safe, "r");
-      debugf("p0");
+      debugf("file exists");
     }
     else if (!(info->flags & O_WRONLY))
     {
-      debugf("p1a");
+      debugf("opening for write");
 
       // we need to lock on the filename another process could open the file
       // while we are writing to it and then only read part of the file
@@ -465,20 +465,14 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     return -ENOENT;
   }
   else {
-    debugf("p1");
     update_dir_cache(path, (de ? de->size : 0), 0, 0);
-    debugf("p2");
     openfile *of = (openfile *)malloc(sizeof(openfile));
     of->fd = dup(fileno(temp_file));
-    debugf("p3");
     if (of->fd == -1){
       debugf("Open error 3 path=[%s]", path);
       return -ENOENT;
     }
-    debugf("p4");
-  
     fclose(temp_file);
-    debugf("p5");
     of->flags = info->flags;
     info->fh = (uintptr_t)of;
     info->direct_io = 1;
