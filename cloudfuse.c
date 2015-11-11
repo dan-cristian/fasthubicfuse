@@ -683,11 +683,11 @@ static int cfs_utimens(const char *path, const struct timespec times[2]){
 }
 
 
-int cfs_setxattr(struct fuse_fs *fs, const char *path, const char *name, const char *value, size_t size, int flags){
+int cfs_setxattr(const char *path, const char *name, const char *value, size_t size, int flags){
   return 0;
 }
 
-int fcfs_getxattr(struct fuse_fs *fs, const char *path, const char *name, char *value, size_t size){
+int cfs_getxattr(const char *path, const char *name, char *value, size_t size){
   return 0;
 }
 
