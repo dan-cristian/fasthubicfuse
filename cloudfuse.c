@@ -322,7 +322,9 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     char *md5_path = str2md5(path, strlen(path));
     snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    strncpy(file_path_safe, file_path, NAME_MAX - strlen(md5_path));
+    int md5len = strlen(md5_path);
+    strncpy(file_path_safe, file_path, NAME_MAX - md5len);
+    debugf("md5len=%d safelen=%d", md5len, strlen(file_path_safe));
     strcat(file_path_safe, md5_path);
     free(md5_path);
     
