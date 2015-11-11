@@ -436,7 +436,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       }
     }
     else{
-      debugf("Unknown case, path=%s", file_path_safe);
+      debugf("Unable to create a temp file=%s", file_path_safe);
       if (temp_file == NULL){
         debugf("Temp file is null");
       }
@@ -471,17 +471,20 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
   }
   debugf("p4");
   if (temp_file == NULL){
-    debugf("p4.1 null close");
+    debugf("p4.1 attempt to null close");
+    return -ENOENT;
   }
   else
+  {
     fclose(temp_file);
-  debugf("p5");
-  of->flags = info->flags;
-  info->fh = (uintptr_t)of;
-  info->direct_io = 1;
-  info->nonseekable = 1;
-  debugf("Open complete path=[%s]", path);
-  return 0;
+    debugf("p5");
+    of->flags = info->flags;
+    info->fh = (uintptr_t)of;
+    info->direct_io = 1;
+    info->nonseekable = 1;
+    debugf("Open complete path=[%s]", path);
+    return 0;
+  }
 }
 
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
