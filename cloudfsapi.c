@@ -1046,10 +1046,15 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     curl_free(encoded_object);
   }
 
+  int issegmented = is_segmented(path);
+  debugf("File segmented=%d", issegmented);
+
   if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
     response = 404;
-  else
+  else{
+    // this generates 404 err on non segmented files (small files)
     response = send_request("GET", container, NULL, xmlctx, NULL);
+  }
 
   if (response >= 200 && response < 300)
     xmlParseChunk(xmlctx, "", 0, 1);

@@ -335,7 +335,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     char file_path[PATH_MAX];
     snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    get_safe_path(file_path, strlen(path), file_path_safe);
+    get_safe_path(file_path, strlen(file_path), file_path_safe);
     temp_file = fopen(file_path_safe, "w+b");
     if (temp_file == NULL){
       debugf("Cannot open temp file %s.error %s\n", file_path_safe, strerror(errno));
@@ -383,7 +383,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     char file_path[PATH_MAX];
     snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    get_safe_path(file_path, strlen(path), file_path_safe);
+    get_safe_path(file_path, strlen(file_path), file_path_safe);
 
     if (access(file_path_safe, F_OK) != -1)
     {
