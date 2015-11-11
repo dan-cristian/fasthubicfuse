@@ -951,6 +951,7 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
 
 int cloudfs_object_write_fp(const char *path, FILE *fp)
 {
+  debugf("cloudfs_object_write_fp path=%s", path);
   char *encoded = curl_escape(path, 0);
   char seg_base[MAX_URL_SIZE] = "";
 
@@ -970,7 +971,8 @@ int cloudfs_object_write_fp(const char *path, FILE *fp)
       debugf("ftruncate failed.  I don't know what to do about that.");
       abort();
     }
-
+    //fixme: this might be unnecessary as it looks for segments when you only want to read a small file
+    debugf("Checking for segment for file %s", path);
     run_segment_threads("GET", segments, full_segments, remaining, fp,
             seg_base, size_of_segments);
     return 1;

@@ -332,9 +332,9 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     while((pch = strchr(tmp_path, '/'))) {
       *pch = '.';
     }
-    char file_path[PATH_MAX];
+    char file_path[PATH_MAX] = "";
     snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
-    char file_path_safe[NAME_MAX];
+    char file_path_safe[NAME_MAX] = "";
     get_safe_path(file_path, strlen(file_path), file_path_safe);
     temp_file = fopen(file_path_safe, "w+b");
     if (temp_file == NULL){
@@ -364,6 +364,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   return 0;
 }
 
+// open(download) file from cloud
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
   debugf("Open path=[%s]", path);
@@ -391,8 +392,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       temp_file = fopen(file_path_safe, "r");
       debugf("file exists");
     }
+    //FIXME: commented out as condition will not be meet in some odd cases and program will crash
     else //if (!(info->flags & O_WRONLY))
-    //if (access(file_path_safe, W_OK) != -1)
     {
       debugf("opening for write");
 
