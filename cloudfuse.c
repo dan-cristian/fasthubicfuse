@@ -391,16 +391,19 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     char file_path_safe[NAME_MAX];
     strncpy(file_path_safe, file_path, NAME_MAX - strlen(md5_path));
     strcat(file_path_safe, md5_path);
-    //free(md5_path);
+    free(md5_path);
 
 
     if (access(file_path_safe, F_OK) != -1)
     {
       // file exists
       temp_file = fopen(file_path_safe, "r");
+      debugf("p0");
     }
     else if (!(info->flags & O_WRONLY))
     {
+      debugf("p1a");
+
       // we need to lock on the filename another process could open the file
       // while we are writing to it and then only read part of the file
 
@@ -434,6 +437,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
   }
   else
   {
+    debugf("p1b");
     temp_file = tmpfile();
     if (temp_file == NULL) {
       debugf("Cannot create temp_file err=%s", strerror(errno));
