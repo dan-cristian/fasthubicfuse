@@ -401,7 +401,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       temp_file = fopen(file_path_safe, "r");
       debugf("file exists");
     }
-    else if (!(info->flags & O_WRONLY))
+    else //if (!(info->flags & O_WRONLY))
+    if (access(file_path_safe, W_OK) != -1)
     {
       debugf("opening for write");
 
