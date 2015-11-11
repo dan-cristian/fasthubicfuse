@@ -436,7 +436,10 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       }
     }
     else{
-      debugf("Unknown case");
+      debugf("Unknown case, path=%s", file_path_safe);
+      if (temp_file == NULL){
+        debugf("Temp file is null");
+      }
     }
   }
   else
