@@ -391,7 +391,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     char file_path_safe[NAME_MAX];
     strncpy(file_path_safe, file_path, NAME_MAX - strlen(md5_path));
     strcat(file_path_safe, md5_path);
-    free(md5_path);
+    //free(md5_path);
 
 
     if (access(file_path_safe, F_OK) != -1)
