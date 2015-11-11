@@ -1142,7 +1142,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             time_t last_modified_t = get_time_from_str_as_gmt(content);
             debugf("Got cloudfs_list_directory path=%s remote_time=%li.0 [%s]", de->name, last_modified_t, content);
             // utimens addition, set file change time on folder list, convert GMT time received from hubic as local
-            char local_time_str[64] = "";
+            char local_time_str[64];
+            local_time_str[strlen(local_time_str)] = '\0';//null terminate so strlen can work when passed as pointer
             time_t local_time_t = get_time_as_local(last_modified_t, local_time_str);
             debugf("Set cloudfs_list_directory path=%s local_time=%li.0 [%s]", de->name, local_time_t, local_time_str);
             de->last_modified = local_time_t;
