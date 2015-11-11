@@ -1049,7 +1049,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
   int issegmented;
   dir_entry *de = local_path_info(path);
   if (!de) {
-    debugf("No file found in cache for path=%s, no segments", orig_path);
     issegmented = -1;
   }
   else {
