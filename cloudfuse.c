@@ -448,16 +448,19 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       }
     }
   }
-
+  debugf("p1");
   update_dir_cache(path, (de ? de->size : 0), 0, 0);
-
+  debugf("p2");
   openfile *of = (openfile *)malloc(sizeof(openfile));
   of->fd = dup(fileno(temp_file));
+  debugf("p3");
   if (of->fd == -1){
     debugf("Open error 3 path=[%s]", path);
     return -ENOENT;
   }
+  debugf("p4");
   fclose(temp_file);
+  debugf("p5");
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   info->direct_io = 1;
