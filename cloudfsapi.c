@@ -277,7 +277,7 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
   return size * nmemb;
 }
 
-static void header_set_time_from_str(char *time_str, struct timespec time_entry){
+static void header_set_time_from_str(char *time_str, struct timespec *time_entry){
   char sec_value[TIME_CHARS];
   char nsec_value[TIME_CHARS];
   //struct tm read_time;
