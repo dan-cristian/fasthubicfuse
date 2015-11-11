@@ -277,7 +277,7 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
   return size * nmemb;
 }
 
-static void header_set_time_from_str(char time_str[], int time_str_size, struct timespec time_entry){
+static void header_set_time_from_str(const char *time_str, struct timespec time_entry){
   char sec_value[TIME_CHARS];
   char nsec_value[TIME_CHARS];
   //struct tm read_time;
@@ -304,7 +304,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
   char *value = (char *)alloca(size * nmemb + 1);
   memcpy(header, (char *)ptr, size * nmemb);
   header[size * nmemb] = '\0';
-  static char storage[MAX_HEADER_SIZE];
+  const char storage[MAX_HEADER_SIZE];
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     strncpy(storage, header, sizeof(storage));
@@ -317,7 +317,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     char time_str[64];
 
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
-      header_set_time_from_str(storage, sizeof(time_str), de->atime);
+      header_set_time_from_str(storage, de->atime);
       /*strncpy(storage, value, sizeof(storage));
       debugf("Received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
@@ -329,7 +329,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       */
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
-      header_set_time_from_str(storage, sizeof(time_str), de->ctime);
+      header_set_time_from_str(storage, de->ctime);
       /*
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
@@ -342,7 +342,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       */
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
-      header_set_time_from_str(storage, sizeof(time_str), de->mtime);
+      header_set_time_from_str(storage, de->mtime);
       /*strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
