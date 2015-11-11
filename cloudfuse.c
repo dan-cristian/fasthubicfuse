@@ -462,14 +462,19 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     of->fd = dup(fileno(temp_file));
     if (of->fd == -1){
       debugf("Open error 3 path=[%s]", path);
+      //FIXME: potential leak if free not used?
+      free(of);
       return -ENOENT;
     }
     fclose(temp_file);
+    //TODO: why this allocation to of?
     of->flags = info->flags;
     info->fh = (uintptr_t)of;
     info->direct_io = 1;
     info->nonseekable = 1;
     debugf("Open complete path=[%s]", path);
+    //FIXME: potential leak if free not used?
+    free(of);
     return 0;
   }
 }
@@ -734,6 +739,8 @@ void interrupt_handler(int sig) {
   //TODO: clean memory allocations
   //http://www.cprogramming.com/debugging/valgrind.html
   cloudfs_free();
+  //TODO: clear dir cache
+
   pthread_mutex_destroy(&dmut);
   exit(0);
 }
