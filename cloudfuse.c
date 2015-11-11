@@ -375,6 +375,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
   if (*temp_dir)
   {
+    debugf("pz");
     char tmp_path[PATH_MAX];
     strncpy(tmp_path, path, PATH_MAX);
 
