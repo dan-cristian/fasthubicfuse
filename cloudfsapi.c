@@ -718,6 +718,19 @@ int format_segments(const char *path, char * seg_base,  long *segments,
   char seg_path[MAX_URL_SIZE];
   snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
 
+  int issegmented;
+  dir_entry *de = local_path_info(path);
+  if (!de) {
+    issegmented = -1;
+  }
+  else {
+    if (de->size >= segment_above)
+      issegmented = 1;
+    else
+      issegmented = 0;
+  }
+  debugf("File segmented=%d", issegmented);
+
   if (internal_is_segmented(seg_path, object)) {
     char manifest[MAX_URL_SIZE];
     dir_entry *seg_dir;
@@ -1049,20 +1062,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     curl_free(encoded_object);
   }
 
-  int issegmented;
-  dir_entry *de = local_path_info(path);
-  if (!de) {
-    issegmented = -1;
-  }
-  else {
-    if (de->size >= segment_above)
-      issegmented = 1;
-    else
-      issegmented = 0;
-  }
-
-
-  debugf("File segmented=%d", issegmented);
+  
 
   if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
     response = 404;
