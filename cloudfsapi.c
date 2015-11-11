@@ -677,6 +677,7 @@ void split_path(const char *path, char *seg_base, char *container,
 
 int internal_is_segmented(const char *seg_path, const char *object)
 {
+  debugf("internal_is_segmented segpath=%s", seg_path);
   dir_entry *seg_dir;
   if (cloudfs_list_directory(seg_path, &seg_dir)) {
     if (seg_dir && seg_dir->isdir) {
@@ -708,7 +709,7 @@ int is_segmented(const char *path)
 int format_segments(const char *path, char * seg_base,  long *segments,
         long *full_segments, long *remaining, long *size_of_segments)
 {
-
+  debugf("format_segments entered path=%s", s);
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
 
