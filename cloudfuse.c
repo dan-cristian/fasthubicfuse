@@ -310,11 +310,12 @@ static int get_safe_path(const char *file_path, int file_path_len, char *file_pa
   int md5len = strlen(md5_path);
   size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
   strncpy(file_path_safe, file_path, safe_len_prefix);
-  debugf("local=[%s] md5len=%d strsafelen=%d slen=%d", file_path, md5len, strlen(file_path_safe), safe_len_prefix);
+  debugf("local=[%s] md5len=%d strsafelen=%d slen=%d fpl=%d comp=%d", 
+    file_path, md5len, strlen(file_path_safe), safe_len_prefix, file_path_len, NAME_MAX - md5len);
   strcat(file_path_safe, md5_path);
   //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
-  if (safe_len_prefix + md5len > 0)
-    file_path_safe[safe_len_prefix + md5len - 1] = '\0';
+  //if (safe_len_prefix + md5len > 0)
+  file_path_safe[safe_len_prefix + md5len - 1] = '\0';
   free(md5_path);
   return strlen(file_path_safe);
 }
