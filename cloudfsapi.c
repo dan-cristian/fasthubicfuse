@@ -1046,7 +1046,11 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     curl_free(encoded_object);
   }
 
-  int issegmented = is_segmented(path);
+  int issegmented;
+  if (!strcmp(path, ""))
+    issegmented = -2;
+  else
+    issegmented = is_segmented(path);
   debugf("File segmented=%d", issegmented);
 
   if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
