@@ -278,13 +278,15 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
 }
 
 static void header_set_time_from_str(char time_str[], int time_str_size, struct timespec time_entry){
-  const char sec_value[TIME_CHARS], nsec_value[TIME_CHARS];
+  char sec_value[TIME_CHARS];
+  char nsec_value[TIME_CHARS];
   //struct tm read_time;
   time_t sec;
   long nsec;
   sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
   sec = atol(sec_value);
   nsec = atol(nsec_value);
+  debugf("sec=", atoll(sec_value));
   debugf("Received time=%li.%li / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
   //strptime(sec_value, "%FT%T", &read_time);
   
