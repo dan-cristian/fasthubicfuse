@@ -305,7 +305,8 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
   char *value = (char *)alloca(size * nmemb + 1);
   memcpy(header, (char *)ptr, size * nmemb);
   header[size * nmemb] = '\0';
-  static char storage[MAX_HEADER_SIZE];
+  //static 
+  char storage[MAX_HEADER_SIZE];
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     strncpy(storage, header, sizeof(storage));
