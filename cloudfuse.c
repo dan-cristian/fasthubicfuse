@@ -459,7 +459,11 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     return -ENOENT;
   }
   debugf("p4");
-  fclose(temp_file);
+  if (temp_file == NULL){
+    debugf("p4.1 null close");
+  }
+  else
+    fclose(temp_file);
   debugf("p5");
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
