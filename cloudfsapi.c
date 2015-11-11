@@ -440,11 +440,11 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
-    //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);
-    dir_entry *de = local_path_info(orig_path);
+    //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);dir_entry *de = local_path_info(orig_path);
     if (!de)
       debugf("No file found in cache for path=%s", orig_path);
     else {
+    
       //debugf("File found in cache, path=%s", de->full_name);
       debugf("Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li", orig_path,
         de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec, de->atime.tv_sec, de->atime.tv_nsec);
@@ -1047,10 +1047,19 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
   }
 
   int issegmented;
-  if (!strcmp(path, ""))
-    issegmented = -2;
-  else
-    issegmented = is_segmented(path);
+  dir_entry *de = local_path_info(path);
+  if (!de) {
+    debugf("No file found in cache for path=%s, no segments", orig_path);
+    issegmented = -1;
+  }
+  else {
+    if (de->size >= segment_above)
+      issegmented = 1;
+    else
+      issegmented = 0;
+  }
+
+
   debugf("File segmented=%d", issegmented);
 
   if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
@@ -1131,11 +1140,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           if (!strcasecmp((const char *)anode->name, "hash"))
           {
             de->md5sum = strdup(content);
-          }
-          if (!strcasecmp((const char *)anode->name, "segmented"))
-          {
-            debugf("Segmented=%s", content);
-            //de->md5sum = strdup(content);
           }
           if (!strcasecmp((const char *)anode->name, "last_modified"))
           {
