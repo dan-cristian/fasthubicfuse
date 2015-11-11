@@ -283,12 +283,12 @@ static void header_set_time_from_str(char time_str[], int time_str_size, struct 
   time_t sec;
   long nsec;
   sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
-  //debugf("Received time=%li.%li, existing=%li.%li", sec_value, nsec_value, time_entry.tv_sec, time_entry.tv_nsec);
+  debugf("Received time=%li.%li, existing=%li.%li", sec_value, nsec_value, time_entry.tv_sec, time_entry.tv_nsec);
   strptime(sec_value, "%FT%T", &read_time);
   sec = atol(sec_value);
   nsec = atol(nsec_value);
   if (sec != time_entry.tv_sec || nsec != time_entry.tv_nsec){
-    debugf("Received new time=%li.%f, existing was=%li.%f, storing", sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
+    debugf("Received new time=%li.%li, existing was=%li.%li, storing", sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
     time_entry.tv_sec = atol(sec_value);
     time_entry.tv_nsec = atol(nsec_value);
   }
