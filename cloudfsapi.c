@@ -1150,10 +1150,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0){
               de->full_name = NULL;
             }
-            else{
-              //TODO: attempt to read extended attributes on each entry
-              get_file_metadata(de->full_name);
-            }
+            
           }
           //debugf("List DIR anode=%s", de->name);
           if (!strcasecmp((const char *)anode->name, "bytes"))
@@ -1200,6 +1197,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         }
         de->next = *dir_list;
         *dir_list = de;
+        //TODO: attempt to read extended attributes on each entry
+        get_file_metadata(de->full_name);
       }
       else
       {
