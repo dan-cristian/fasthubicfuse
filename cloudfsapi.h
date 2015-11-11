@@ -19,6 +19,7 @@
 #define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
 #define HEADER_TEXT_CTIME "X-Object-Meta-Ctime"
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
+#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
 
 typedef struct curl_slist curl_slist;
 

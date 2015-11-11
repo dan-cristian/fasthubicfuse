@@ -303,6 +303,21 @@ static int cfs_mkdir(const char *path, mode_t mode)
   return -ENOENT;
 }
 
+static int get_safe_path(const char *file_path, int file_path_len, char *file_path_safe){
+  //the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
+  //solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
+  char *md5_path = str2md5(file_path, file_path_len);
+  int md5len = strlen(md5_path);
+  size_t safe_len = NAME_MAX - md5len;
+  strncpy(file_path_safe, file_path, safe_len);
+  //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
+  if (safe_len > 0)
+    file_path_safe[safe_len - 1] = '\0';
+  debugf("md5len=%d strsafelen=%d slen=%d", md5len, strlen(file_path_safe), safe_len);
+  strcat(file_path_safe, md5_path);
+  free(md5_path);
+  return strlen(file_path_safe);
+}
 
 static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info)
 {
@@ -317,21 +332,9 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
       *pch = '.';
     }
     char file_path[PATH_MAX];
-    //the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
-    //solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
-    char *md5_path = str2md5(path, strlen(path));
-    snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
+    snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    int md5len = strlen(md5_path);
-    size_t safe_len = NAME_MAX - md5len;
-    strncpy(file_path_safe, file_path, safe_len);
-    //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
-    if (safe_len > 0)
-      file_path_safe[safe_len - 1] = '\0';
-    debugf("md5len=%d strsafelen=%d slen=%d", md5len, strlen(file_path_safe), safe_len);
-    strcat(file_path_safe, md5_path);
-    free(md5_path);
-    
+    get_safe_path(file_path, strlen(path), file_path_safe);
     temp_file = fopen(file_path_safe, "w+b");
     if (temp_file == NULL){
       debugf("Cannot open temp file %s.error %s\n", file_path_safe, strerror(errno));
@@ -377,17 +380,9 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     }
 
     char file_path[PATH_MAX];
-    //FIXME: use similar format with one in cfs_create to avoid file name max size issues
-    //snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
-    char *md5_path = str2md5(path, strlen(path));
-    snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
+    snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    size_t safe_len = NAME_MAX - strlen(md5_path);
-    strncpy(file_path_safe, file_path, safe_len);
-    if (safe_len > 0)
-      file_path_safe[safe_len - 1] = '\0';
-    strcat(file_path_safe, md5_path);
-    free(md5_path);
+    get_safe_path(file_path, strlen(path), file_path_safe);
 
     if (access(file_path_safe, F_OK) != -1)
     {
