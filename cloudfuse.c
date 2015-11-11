@@ -420,6 +420,9 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
       // TODO: just to prevent this craziness for now
       temp_file = fopen(file_path_safe, "w+b");
+      if (temp_file == NULL) {
+        debugf("Cannot open temp_file=[%s] err=%s", file_path_safe, strerror(errno));
+      }
 
       if (!cloudfs_object_write_fp(path, temp_file))
       {
@@ -432,6 +435,9 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
   else
   {
     temp_file = tmpfile();
+    if (temp_file == NULL) {
+      debugf("Cannot create temp_file err=%s", strerror(errno));
+    }
     if (!(info->flags & O_TRUNC))
     {
       if (!cloudfs_object_write_fp(path, temp_file) && !(info->flags & O_CREAT))
