@@ -370,7 +370,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
   debugf("Open path=[%s]", path);
-  FILE *temp_file;
+  FILE *temp_file = NULL;
   dir_entry *de = path_info(path);
 
   if (*temp_dir)
@@ -434,6 +434,9 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
         debugf("Open error 1 path=[%s]", path);
         return -ENOENT;
       }
+    }
+    else{
+      debugf("Unknown case");
     }
   }
   else
