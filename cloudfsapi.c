@@ -441,10 +441,10 @@ static int send_request_size(const char *method, const char *path, void *fp,
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
     //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);dir_entry *de = local_path_info(orig_path);
+    dir_entry *de = local_path_info(path);
     if (!de)
       debugf("No file found in cache for path=%s", orig_path);
     else {
-    
       //debugf("File found in cache, path=%s", de->full_name);
       debugf("Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li", orig_path,
         de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec, de->atime.tv_sec, de->atime.tv_nsec);
