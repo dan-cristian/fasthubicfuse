@@ -375,7 +375,6 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
   if (*temp_dir)
   {
-    debugf("pz");
     char tmp_path[PATH_MAX];
     strncpy(tmp_path, path, PATH_MAX);
 
@@ -402,7 +401,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       debugf("file exists");
     }
     else //if (!(info->flags & O_WRONLY))
-    if (access(file_path_safe, W_OK) != -1)
+    //if (access(file_path_safe, W_OK) != -1)
     {
       debugf("opening for write");
 
@@ -436,12 +435,12 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
         return -ENOENT;
       }
     }
-    else{
+    /*else{
       debugf("Unable to create a temp file=%s", file_path_safe);
       if (temp_file == NULL){
         debugf("Temp file is null");
       }
-    }
+    }*/
   }
   else
   {
