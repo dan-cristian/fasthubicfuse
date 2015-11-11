@@ -286,7 +286,7 @@ static void header_set_time_from_str(char *time_str, struct timespec time_entry)
   sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
   sec = strtoll(sec_value, NULL, 10);
   nsec = atol(nsec_value);
-  debugf("Received time=%li.%li / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
+  debugf("Received time=%s.%s / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
   //strptime(sec_value, "%FT%T", &read_time);
   
   if (sec != time_entry.tv_sec || nsec != time_entry.tv_nsec){
@@ -317,7 +317,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     char time_str[64];
 
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
-      header_set_time_from_str(value, de->atime);
+      header_set_time_from_str(value, &de->atime);
       /*strncpy(storage, value, sizeof(storage));
       debugf("Received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
@@ -329,7 +329,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       */
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
-      header_set_time_from_str(value, de->ctime);
+      header_set_time_from_str(value, &de->ctime);
       /*
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
@@ -342,7 +342,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       */
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
-      header_set_time_from_str(value, de->mtime);
+      header_set_time_from_str(value, &de->mtime);
       /*strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
