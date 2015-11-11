@@ -382,7 +382,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     char *md5_path = str2md5(path, strlen(path));
     snprintf(file_path, PATH_MAX, "%s/.cloudfuse%ld-%s", temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    size_t safe_len = NAME_MAX - strlen(md5len);
+    size_t safe_len = NAME_MAX - strlen(md5_path);
     strncpy(file_path_safe, file_path, safe_len);
     if (safe_len > 0)
       file_path_safe[safe_len - 1] = '\0';
