@@ -1198,7 +1198,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->next = *dir_list;
         *dir_list = de;
         //TODO: attempt to read extended attributes on each entry
-        get_file_metadata(de->full_name);
+        //get_file_metadata(de->full_name);
       }
       else
       {
