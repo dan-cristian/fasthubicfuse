@@ -324,7 +324,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     char file_path_safe[NAME_MAX];
     int md5len = strlen(md5_path);
     size_t safe_len = NAME_MAX - md5len;
-    strncpy(file_path_safe, file_path, safe_len);
+    strlcpy(file_path_safe, file_path, safe_len);
     debugf("md5len=%d strsafelen=%d slen=%d", md5len, strlen(file_path_safe), safe_len);
     strcat(file_path_safe, md5_path);
     free(md5_path);
