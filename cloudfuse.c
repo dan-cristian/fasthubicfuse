@@ -677,6 +677,15 @@ static int cfs_utimens(const char *path, const struct timespec times[2]){
   return 0;
 }
 
+
+int cfs_setxattr(struct fuse_fs *fs, const char *path, const char *name, const char *value, size_t size, int flags){
+  return 0;
+}
+
+int fcfs_getxattr(struct fuse_fs *fs, const char *path, const char *name, char *value, size_t size){
+  return 0;
+}
+
 char *get_home_dir()
 {
   char *home;
@@ -818,6 +827,8 @@ int main(int argc, char **argv)
     .init = cfs_init,
     // implementing utimens capabilities
     .utimens = cfs_utimens,
+    .setxattr = cfs_setxattr,
+    .getxattr = cfs_getxattr,
   };
 
   pthread_mutex_init(&dmut, NULL);
