@@ -441,7 +441,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
     //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);dir_entry *de = local_path_info(orig_path);
-    dir_entry *de = local_path_info(path);
+    dir_entry *de = local_path_info(orig_path);
     if (!de)
       debugf("No file found in cache for path=%s", orig_path);
     else {
