@@ -277,6 +277,22 @@ static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream
   return size * nmemb;
 }
 
+static void header_set_time_from_str(char time_str[], int time_str_size, struct timespec time_entry){
+  static char sec_value[TIME_CHARS], nsec_value[TIME_CHARS];
+  struct tm read_time;
+  long sec, nsec;
+  sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
+  //debugf("Received time=%li.%li, existing=%li.%li", sec_value, nsec_value, time_entry.tv_sec, time_entry.tv_nsec);
+  strptime(sec_value, "%FT%T", &read_time);
+  sec = atol(sec_value);
+  nsec = atol(nsec_value);
+  if (sec != time_entry.tv_sec || nsec != time_entry.tv_nsec){
+    debugf("Received new time=%li.%li, existing was=%li.%li, storing", sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
+    time_entry.tv_sec = atol(sec_value);
+    time_entry.tv_nsec = atol(nsec_value);
+  }
+}
+
 static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
 {
   //debugf("Dispatching utimens response headers");
@@ -298,7 +314,8 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
     char time_str[64];
 
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
-      strncpy(storage, value, sizeof(storage));
+      header_set_time_from_str(storage, sizeof(time_str), de->atime);
+      /*strncpy(storage, value, sizeof(storage));
       debugf("Received atime=[%s], existing=%li.%li", storage, de->atime.tv_sec, de->atime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
       //debugf("Parsed atime [%s][%s]", sec_value, nsec_value);
@@ -306,8 +323,11 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       de->atime.tv_sec = atol(sec_value);
       de->atime.tv_nsec = atol(nsec_value);
       debugf("Stored new atime [%li][%li]", de->atime.tv_sec, de->atime.tv_nsec);
+      */
     }
     if (!strncasecmp(head, HEADER_TEXT_CTIME, size * nmemb)){
+      header_set_time_from_str(storage, sizeof(time_str), de->ctime);
+      /*
       strncpy(storage, value, sizeof(storage));
       debugf("received ctime=[%s], existing=%li.%li", storage, de->ctime.tv_sec, de->ctime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
@@ -316,9 +336,11 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       de->ctime.tv_sec = atol(sec_value);
       de->ctime.tv_nsec = atol(nsec_value);
       debugf("Stored new ctime [%li][%li]", de->ctime.tv_sec, de->ctime.tv_nsec);
+      */
     }
     if (!strncasecmp(head, HEADER_TEXT_MTIME, size * nmemb)){
-      strncpy(storage, value, sizeof(storage));
+      header_set_time_from_str(storage, sizeof(time_str), de->mtime);
+      /*strncpy(storage, value, sizeof(storage));
       debugf("received mtime=[%s], existing=%li.%li", storage, de->mtime.tv_sec, de->mtime.tv_nsec);
       sscanf(storage, "%[^.].%[^\n]", sec_value, nsec_value);
       //debugf("Parsed mtime [%s][%s]", sec_value, nsec_value);
@@ -326,6 +348,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
       de->mtime.tv_sec = atol(sec_value);
       de->mtime.tv_nsec = atol(nsec_value);
       debugf("Stored new mtime [%li][%li]", de->mtime.tv_sec, de->mtime.tv_nsec);
+      */
     }
   }
   else {
