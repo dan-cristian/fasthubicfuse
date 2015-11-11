@@ -283,8 +283,8 @@ static void header_set_time_from_str(char time_str[], int time_str_size, struct 
   time_t sec;
   long nsec;
   sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
-  sec = atol(sec_value);
-  nsec = atol(nsec_value);
+  sec = atol(&sec_value);
+  nsec = atol(&nsec_value);
   debugf("Received time=%li.%li / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry.tv_sec, time_entry.tv_nsec);
   //strptime(sec_value, "%FT%T", &read_time);
   
