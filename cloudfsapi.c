@@ -185,7 +185,7 @@ dir_cache *new_cache(const char *path)
 
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-  debugf("Update dir cache %s", path);
+  debugf("Update dir cache path=[%s]", path);
   //pthread_mutex_lock(&dmut);
   dir_cache *cw;
   dir_entry *de;
@@ -1278,7 +1278,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->next = *dir_list;
         *dir_list = de;
         //TODO: attempt to read extended attributes on each entry
-        update_dir_cache(path, (de ? de->size : 0), de->isdir, de->islink);
+        update_dir_cache(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
         get_file_metadata(de->full_name);
       }
       else
