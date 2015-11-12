@@ -222,6 +222,68 @@ static dir_entry *local_path_info(const char *path)
   return NULL;
 }
 
+void local_update_dir_cache(const char *path, off_t size, int isdir, int islink)
+{
+	debugf("Update dir cache [%s]", path);
+	int lock_ok = pthread_mutex_trylock(&dmut);
+	debugf("Mutex local_update_dir_cache attempted lock=%d", lock_ok);
+	//pthread_mutex_lock(&dmut);
+	dir_cache *cw;
+	dir_entry *de;
+	char dir[MAX_PATH_SIZE];
+	dir_for(path, dir);
+	for (cw = dcache; cw; cw = cw->next)
+	{
+		if (!strcmp(cw->path, dir))
+		{
+			for (de = cw->entries; de; de = de->next)
+			{
+				if (!strcmp(de->full_name, path))
+				{
+					de->size = size;
+					//pthread_mutex_unlock(&dmut);
+					return;
+				}
+			}
+			debugf("Create new cache entry on update_dir_cache for path %s", path);
+			de = (dir_entry *)malloc(sizeof(dir_entry));
+			de->size = size;
+			de->isdir = isdir;
+			de->islink = islink;
+			de->name = strdup(&path[strlen(cw->path) + 1]);
+			de->full_name = strdup(path);
+			de->md5sum = NULL;
+
+			if (isdir)
+			{
+				de->content_type = strdup("application/link");
+			}
+			if (islink)
+			{
+				de->content_type = strdup("application/directory");
+			}
+			else
+			{
+				de->content_type = strdup("application/octet-stream");
+			}
+			de->last_modified = time(NULL);
+			// utimens change
+			de->mtime.tv_sec = time(NULL);
+			de->atime.tv_sec = time(NULL);
+			de->ctime.tv_sec = time(NULL);
+			de->mtime.tv_nsec = 0;
+			de->atime.tv_nsec = 0;
+			de->ctime.tv_nsec = 0;
+			// change end
+			de->next = cw->entries;
+			cw->entries = de;
+			if (isdir)
+				new_cache(path);
+			break;
+		}
+	}
+	//pthread_mutex_unlock(&dmut);
+}
 
 
 static size_t xml_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
@@ -1043,10 +1105,12 @@ int get_file_metadata(const char *path, off_t size, int isdir, int islink){
   dir_entry *de = local_path_info(path);
   if (!de) {
 	  debugf("ODD! as no file found in cache for path=%s", path);
-	  //update_dir_cache(path, (de ? de->size : 0), de->isdir, de->islink);
-	  //de = local_path_info(path);
-	  //if (de)
-		//  debugf("Created new cache metadata entry path=%s", path);
+	  local_update_dir_cache(path, (de ? de->size : 0), de->isdir, de->islink);
+	  de = local_path_info(path);
+		if (de)
+			debugf("Created new cache metadata entry path=%s", path);
+		else
+			debugf("No luck creating dir cache");
   }
 
   
