@@ -21,7 +21,7 @@
 static char *temp_dir;
 
 static pthread_mutex_t dmut;
-int cache_timeout;
+static int cache_timeout;
 dir_cache *dcache;
 
 typedef struct
