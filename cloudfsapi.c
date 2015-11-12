@@ -185,7 +185,7 @@ dir_cache *new_cache(const char *path)
 
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-  //debugf("Update dir cache %s", path);
+  debugf("Update dir cache %s", path);
   pthread_mutex_lock(&dmut);
   dir_cache *cw;
   dir_entry *de;
@@ -246,7 +246,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
-  //debugf("check local dir caching path=%s", path);
+  debugf("local_caching_list_directory path=%s", path);
   int res = -1;
   //int lock_ok = pthread_mutex_trylock(&dmut);
   //debugf("Mutex local_caching_list_directory attempted lock=%d", lock_ok);
