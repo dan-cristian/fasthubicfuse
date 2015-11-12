@@ -190,7 +190,7 @@ dir_cache *new_cache(const char *path)
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   debugf("Update dir cache path=[%s]", path);
-  //pthread_mutex_lock(&dmut);
+  pthread_mutex_lock(&dmut);
   dir_cache *cw;
   dir_entry *de;
   char dir[MAX_PATH_SIZE];
@@ -204,7 +204,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
         if (!strcmp(de->full_name, path))
         {
           de->size = size;
-          //pthread_mutex_unlock(&dmut);
+          pthread_mutex_unlock(&dmut);
           return;
         }
       }
@@ -245,7 +245,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       break;
     }
   }
-  //pthread_mutex_unlock(&dmut);
+  pthread_mutex_unlock(&dmut);
 }
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
