@@ -29,6 +29,7 @@
   _min1 < _min2 ? _min1 : _min2; })
 
 pthread_mutex_t dmut;
+dir_cache *dcache;
 
 typedef struct curl_slist curl_slist;
 

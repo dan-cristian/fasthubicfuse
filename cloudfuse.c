@@ -23,7 +23,8 @@ static char *temp_dir;
 //static pthread_mutex_t dmut;
 extern pthread_mutex_t dmut;
 int cache_timeout;
-dir_cache *dcache;
+//dir_cache *dcache;
+extern dir_cache *dcache;
 
 typedef struct
 {
