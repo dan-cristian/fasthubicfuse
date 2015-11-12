@@ -1566,9 +1566,10 @@ void debugf(char *fmt, ...)
     pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
     int tid = pthread_getthreadid_np();
     va_list args;
-    fputs("=====DEBUG", stderr);
-    va_start(args, " %s-%d=====", thread_name, tid);
-    vfprintf(stderr, fmt, args);
+    char prefix[] = "=====DEBUG%s-%d=====";
+    char line [THREAD_NAMELEN + strlen(prefix)+25];
+    sprintf(line, prefix, thread_name, tid);
+    fputs(line, fmt);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
