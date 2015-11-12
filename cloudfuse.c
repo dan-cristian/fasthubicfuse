@@ -756,7 +756,7 @@ void interrupt_handler(int sig) {
 
 int main(int argc, char **argv)
 {
-  debugf("Starting hubicfuse");
+  debugf("Starting hubicfuse!");
   signal(SIGINT, interrupt_handler);
 
   char settings_filename[MAX_PATH_SIZE] = "";
