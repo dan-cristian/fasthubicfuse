@@ -68,14 +68,20 @@ static int caching_list_directory(const char *path, dir_entry **list)
     }
   if (!cw)
   {
-    if (!cloudfs_list_directory(path, list))
+    if (!cloudfs_list_directory(path, list)){
+      //mutex unlock was forgotten?
+      pthread_mutex_unlock(&dmut);
       return  0;
+    }
     cw = new_cache(path);
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
-    if (!cloudfs_list_directory(path, list))
+    if (!cloudfs_list_directory(path, list)){
+      //mutex unlock was forgotten?
+      pthread_mutex_unlock(&dmut);
       return  0;
+    }
     cloudfs_free_dir_list(cw->entries);
     cw->cached = time(NULL);
   }
