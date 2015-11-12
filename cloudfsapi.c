@@ -1569,7 +1569,7 @@ void debugf(char *fmt, ...)
     char prefix[] = "=====DEBUG%s-%d=====";
     char line [THREAD_NAMELEN + strlen(prefix)+25];
     sprintf(line, prefix, thread_name, tid);
-    fputs(line, fmt);
+    fputs(line, stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
