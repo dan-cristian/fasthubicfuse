@@ -101,6 +101,8 @@ static int caching_list_directory(const char *path, dir_entry **list)
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   debugf("Update dir cache [%s]", path);
+  int lock_ok = pthread_mutex_trylock(&dmut);
+  debugf("Mutex update_dir_cache attempted lock=%d", lock_ok);
   pthread_mutex_lock(&dmut);
   dir_cache *cw;
   dir_entry *de;
