@@ -1565,11 +1565,10 @@ void debugf(char *fmt, ...)
     pthread_t thread_id = (unsigned int)pthread_self();
     char thread_name[THREAD_NAMELEN];
     pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
-    pid_t tid = gettid();
     va_list args;
     char prefix[] = "=====DEBUG%s-%d=====";
     char line [THREAD_NAMELEN + strlen(prefix)+25];
-    sprintf(line, prefix, thread_name, tid);
+    sprintf(line, prefix, thread_name, pthread_t);
     fputs(line, stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
