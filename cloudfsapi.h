@@ -13,6 +13,7 @@
 #define MAX_URL_SIZE (MAX_PATH_SIZE * 3)
 #define USER_AGENT "CloudFuse"
 #define OPTION_SIZE 1024
+#define THREAD_NAMELEN 16
 
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
