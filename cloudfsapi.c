@@ -178,9 +178,9 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   debugf("local_caching_list_directory path=%s", path);
   int res = -1;
-  //int lock_ok = pthread_mutex_trylock(&dmut);
-  //debugf("Mutex local_caching_list_directory attempted lock=%d", lock_ok);
-  //pthread_mutex_lock(&dmut);
+  int lock_ok = pthread_mutex_trylock(&dmut);
+  debugf("Mutex local_caching_list_directory attempted lock=%d", lock_ok);
+  pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
     path = "";
   dir_cache *cw;
@@ -189,14 +189,14 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
       //debugf("Local caching dir found in cache, path=%s", path);
       *list = cw->entries;
       cw->entries = *list;
-      //pthread_mutex_unlock(&dmut);
+      pthread_mutex_unlock(&dmut);
       return 1;
     }
     else {
       //debugf("on cache list check not matched path=%s", cw->path);
     }
   }  
-  //pthread_mutex_unlock(&dmut); 
+  pthread_mutex_unlock(&dmut); 
   debugf("local caching dir not found path=%s", path);
   return 0;
 }
@@ -1037,20 +1037,26 @@ int cloudfs_object_truncate(const char *path, off_t size)
   return (response >= 200 && response < 300);
 }
 
-//get metadata from cloud, like time attribs
-int get_file_metadata(const char *path){
+//get metadata from cloud, like time attribs. create new entry if not cached yet.
+int get_file_metadata(const char *path, off_t size, int isdir, int islink){
   debugf("Retrieve file metadata path=%s", path);
   dir_entry *de = local_path_info(path);
-  if (!de)
-    debugf("ODD! as no file found in cache for path=%s", path);
-  else {
-    //todo: retrieve metadata with a short? query
-    char *encoded = curl_escape(path, 0);
-    int response = send_request("GET", encoded, NULL, NULL, NULL);
-    curl_free(encoded);
-    return 0;
+  if (!de) {
+	  debugf("ODD! as no file found in cache for path=%s", path);
+	  //update_dir_cache(path, (de ? de->size : 0), de->isdir, de->islink);
+	  //de = local_path_info(path);
+	  //if (de)
+		//  debugf("Created new cache metadata entry path=%s", path);
   }
-  return 1;
+
+  
+	//todo: retrieve metadata with a short? query
+	char *encoded = curl_escape(path, 0);
+	int response = send_request("GET", encoded, NULL, NULL, NULL);
+	curl_free(encoded);
+	return 0;
+  
+  //return 1;
 }
 
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
@@ -1208,8 +1214,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->next = *dir_list;
         *dir_list = de;
         //TODO: attempt to read extended attributes on each entry
-        update_dir_cache(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
-        get_file_metadata(de->full_name);
+        get_file_metadata(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
       }
       else
       {
