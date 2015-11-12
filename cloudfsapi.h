@@ -28,8 +28,7 @@
   (void)(&_min1 == &_min2);      \
   _min1 < _min2 ? _min1 : _min2; })
 
-pthread_mutex_t dmut;
-dir_cache *dcache;
+
 
 typedef struct curl_slist curl_slist;
 
@@ -82,7 +81,8 @@ typedef struct dir_cache
   struct dir_cache *next, *prev;
 } dir_cache;
 extern dir_cache *dcache;
-
+pthread_mutex_t dmut;
+dir_cache *dcache;
 
 void cloudfs_init(void);
 void cloudfs_free(void);
