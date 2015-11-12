@@ -187,7 +187,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   //debugf("check local dir caching path=%s", path);
   int res = -1;
-  pthread_mutex_lock(&dmut);
+  //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
     path = "";
   dir_cache *cw;
@@ -196,14 +196,14 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
       //debugf("Local caching dir found in cache, path=%s", path);
       *list = cw->entries;
       cw->entries = *list;
-      pthread_mutex_unlock(&dmut);
+      //pthread_mutex_unlock(&dmut);
       return 1;
     }
     else {
       //debugf("on cache list check not matched path=%s", cw->path);
     }
   }  
-  pthread_mutex_unlock(&dmut); 
+  //pthread_mutex_unlock(&dmut); 
   debugf("local caching dir not found path=%s", path);
   return 0;
 }
