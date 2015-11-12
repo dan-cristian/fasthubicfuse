@@ -248,8 +248,8 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   //debugf("check local dir caching path=%s", path);
   int res = -1;
-  int lock_ok = pthread_mutex_trylock(&dmut);
-  debugf("Mutex local_caching_list_directory attempted lock=%d", lock_ok);
+  //int lock_ok = pthread_mutex_trylock(&dmut);
+  //debugf("Mutex local_caching_list_directory attempted lock=%d", lock_ok);
   //pthread_mutex_lock(&dmut);
   if (!strcmp(path, "/"))
     path = "";
