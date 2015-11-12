@@ -28,6 +28,8 @@
   (void)(&_min1 == &_min2);      \
   _min1 < _min2 ? _min1 : _min2; })
 
+pthread_mutex_t dmut;
+
 typedef struct curl_slist curl_slist;
 
 typedef struct dir_entry
