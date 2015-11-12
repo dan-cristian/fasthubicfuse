@@ -33,7 +33,8 @@ typedef struct
 } openfile;
 
 
-static void dir_for(const char *path, char *dir)
+//static 
+void dir_for(const char *path, char *dir)
 {
   strncpy(dir, path, MAX_PATH_SIZE);
   char *slash = strrchr(dir, '/');
@@ -43,7 +44,8 @@ static void dir_for(const char *path, char *dir)
 
 
 
-static dir_cache *new_cache(const char *path)
+//static 
+dir_cache *new_cache(const char *path)
 {
   debugf("Adding new_cache path=%s", path);
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
@@ -95,7 +97,8 @@ static int caching_list_directory(const char *path, dir_entry **list)
 }
 
 
-static void update_dir_cache(const char *path, off_t size, int isdir, int islink)
+//static 
+void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   //debugf("Update dir cache %s", path);
   pthread_mutex_lock(&dmut);
