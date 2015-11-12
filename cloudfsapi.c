@@ -1562,7 +1562,7 @@ void debugf(char *fmt, ...)
   if (debug)
   {
     pthread_t thread_id = (unsigned int)pthread_self();
-    thread_name char[THREAD_NAMELEN];
+    char thread_name[THREAD_NAMELEN];
     pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
     int tid = pthread_getthreadid_np();
     va_list args;
