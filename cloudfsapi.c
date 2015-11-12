@@ -1105,7 +1105,7 @@ int get_file_metadata(const char *path, off_t size, int isdir, int islink){
   dir_entry *de = local_path_info(path);
   if (!de) {
 	  debugf("ODD! as no file found in cache for path=%s", path);
-	  local_update_dir_cache(path, (de ? de->size : 0), de->isdir, de->islink);
+	  local_update_dir_cache(path, size, isdir, islink);
 	  de = local_path_info(path);
 		if (de)
 			debugf("Created new cache metadata entry path=%s", path);
