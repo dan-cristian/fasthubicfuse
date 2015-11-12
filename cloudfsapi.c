@@ -1208,7 +1208,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->next = *dir_list;
         *dir_list = de;
         //TODO: attempt to read extended attributes on each entry
-        //update_dir_cache(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
+        update_dir_cache(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
         get_file_metadata(de->full_name);
       }
       else
