@@ -61,9 +61,9 @@ static struct statvfs statcache = {
 
 extern FuseOptions options;
 
-extern pthread_mutex_t dmut;
+//extern pthread_mutex_t dmut;
 extern dir_cache *dcache;
-extern int cache_timeout;
+//extern int cache_timeout;
 
 #ifdef HAVE_OPENSSL
 #include <openssl/crypto.h>
@@ -171,81 +171,6 @@ char *str2md5(const char *str, int length) {
   }
 
   return out;
-}
-
-dir_cache *new_cache(const char *path)
-{
-  debugf("Adding new_cache path=%s", path);
-  dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
-  cw->path = strdup(path);
-  cw->prev = NULL;
-  cw->entries = NULL;
-  cw->cached = time(NULL);
-  if (dcache)
-    dcache->prev = cw;
-  cw->next = dcache;
-  return (dcache = cw);
-}
-
-void update_dir_cache(const char *path, off_t size, int isdir, int islink)
-{
-  debugf("Update dir cache path=[%s]", path);
-  pthread_mutex_lock(&dmut);
-  dir_cache *cw;
-  dir_entry *de;
-  char dir[MAX_PATH_SIZE];
-  dir_for(path, dir);
-  for (cw = dcache; cw; cw = cw->next)
-  {
-    if (!strcmp(cw->path, dir))
-    {
-      for (de = cw->entries; de; de = de->next)
-      {
-        if (!strcmp(de->full_name, path))
-        {
-          de->size = size;
-          pthread_mutex_unlock(&dmut);
-          return;
-        }
-      }
-      debugf("Create new cache entry on update_dir_cache for path %s", path);
-      de = (dir_entry *)malloc(sizeof(dir_entry));
-      de->size = size;
-      de->isdir = isdir;
-      de->islink = islink;
-      de->name = strdup(&path[strlen(cw->path) + 1]);
-      de->full_name = strdup(path);
-      de->md5sum = NULL;
-
-      if (isdir)
-      {
-        de->content_type = strdup("application/link");
-      }
-      if (islink)
-      {
-        de->content_type = strdup("application/directory");
-      }
-      else
-      {
-        de->content_type = strdup("application/octet-stream");
-      }
-      de->last_modified = time(NULL);
-      // utimens change
-      de->mtime.tv_sec = time(NULL);
-      de->atime.tv_sec = time(NULL);
-      de->ctime.tv_sec = time(NULL);
-      de->mtime.tv_nsec = 0;
-      de->atime.tv_nsec = 0;
-      de->ctime.tv_nsec = 0;
-      // change end
-      de->next = cw->entries;
-      cw->entries = de;
-      if (isdir)
-        new_cache(path);
-      break;
-    }
-  }
-  pthread_mutex_unlock(&dmut);
 }
 
 static int local_caching_list_directory(const char *path, dir_entry **list)
@@ -1282,7 +1207,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->next = *dir_list;
         *dir_list = de;
         //TODO: attempt to read extended attributes on each entry
-        update_dir_cache(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
+        //update_dir_cache(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
         get_file_metadata(de->full_name);
       }
       else
