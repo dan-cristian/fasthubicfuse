@@ -81,8 +81,7 @@ typedef struct dir_cache
   struct dir_cache *next, *prev;
 } dir_cache;
 extern dir_cache *dcache;
-pthread_mutex_t dmut;
-dir_cache *dcache;
+extern pthread_mutex_t dmut;
 
 void cloudfs_init(void);
 void cloudfs_free(void);
@@ -123,6 +122,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list);
 int cloudfs_statfs(const char *path, struct statvfs *stat);
 
 char *str2md5(const char *str, int length);
+dir_cache *new_cache(const char *path);
 
 void debugf(char *fmt, ...);
 #endif

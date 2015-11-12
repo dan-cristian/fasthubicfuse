@@ -169,6 +169,20 @@ char *str2md5(const char *str, int length) {
   return out;
 }
 
+dir_cache *new_cache(const char *path)
+{
+  debugf("Adding new_cache path=%s", path);
+  dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
+  cw->path = strdup(path);
+  cw->prev = NULL;
+  cw->entries = NULL;
+  cw->cached = time(NULL);
+  if (dcache)
+    dcache->prev = cw;
+  cw->next = dcache;
+  return (dcache = cw);
+}
+
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   //debugf("check local dir caching path=%s", path);

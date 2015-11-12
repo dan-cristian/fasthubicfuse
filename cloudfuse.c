@@ -20,11 +20,9 @@
 
 static char *temp_dir;
 
-//static pthread_mutex_t dmut;
-extern pthread_mutex_t dmut;
+pthread_mutex_t dmut;
 int cache_timeout;
-//dir_cache *dcache;
-extern dir_cache *dcache;
+dir_cache *dcache;
 
 typedef struct
 {
@@ -41,6 +39,7 @@ static void dir_for(const char *path, char *dir)
     *slash = '\0';
 }
 
+/*
 static dir_cache *new_cache(const char *path)
 {
   debugf("Adding new_cache path=%s", path);
@@ -54,7 +53,7 @@ static dir_cache *new_cache(const char *path)
   cw->next = dcache;
   return (dcache = cw);
 }
-
+*/
 static int caching_list_directory(const char *path, dir_entry **list)
 {
   pthread_mutex_lock(&dmut);
