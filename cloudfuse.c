@@ -20,7 +20,7 @@
 
 static char *temp_dir;
 
-pthread_mutex_t dmut;
+static pthread_mutex_t dmut;
 int cache_timeout;
 dir_cache *dcache;
 
@@ -30,7 +30,7 @@ typedef struct
   int flags;
 } openfile;
 
-/*
+
 static void dir_for(const char *path, char *dir)
 {
   strncpy(dir, path, MAX_PATH_SIZE);
@@ -38,9 +38,9 @@ static void dir_for(const char *path, char *dir)
   if (slash)
     *slash = '\0';
 }
-*/
 
-/*
+
+
 static dir_cache *new_cache(const char *path)
 {
   debugf("Adding new_cache path=%s", path);
@@ -54,7 +54,7 @@ static dir_cache *new_cache(const char *path)
   cw->next = dcache;
   return (dcache = cw);
 }
-*/
+
 static int caching_list_directory(const char *path, dir_entry **list)
 {
   pthread_mutex_lock(&dmut);
@@ -92,7 +92,7 @@ static int caching_list_directory(const char *path, dir_entry **list)
   return 1;
 }
 
-/*
+
 static void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   //debugf("Update dir cache %s", path);
@@ -153,7 +153,7 @@ static void update_dir_cache(const char *path, off_t size, int isdir, int islink
   }
   pthread_mutex_unlock(&dmut);
 }
-*/
+
 
 static void dir_decache(const char *path)
 {
