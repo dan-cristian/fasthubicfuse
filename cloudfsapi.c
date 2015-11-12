@@ -131,7 +131,7 @@ void time_t get_now_time_as_gmt(time_t gmt_time){
 
 
 
-static void local_dir_for(const char *path, char *dir)
+void dir_for(const char *path, char *dir)
 {
   //debugf("local dir for [%s]", path);
   strncpy(dir, path, MAX_PATH_SIZE);
@@ -211,7 +211,7 @@ static dir_entry *local_path_info(const char *path)
 {
   //debugf("local path info path=%s", path);
   char dir[MAX_PATH_SIZE];
-  local_dir_for(path, dir);
+  dir_for(path, dir);
   dir_entry *tmp;
   if (!local_caching_list_directory(dir, &tmp)){
     debugf("Path info not (1) found in cache, path=%s, dir=%s", path, dir);

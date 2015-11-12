@@ -30,7 +30,7 @@ typedef struct
   int flags;
 } openfile;
 
-
+/*
 static void dir_for(const char *path, char *dir)
 {
   strncpy(dir, path, MAX_PATH_SIZE);
@@ -38,6 +38,7 @@ static void dir_for(const char *path, char *dir)
   if (slash)
     *slash = '\0';
 }
+*/
 
 /*
 static dir_cache *new_cache(const char *path)

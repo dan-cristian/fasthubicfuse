@@ -123,6 +123,7 @@ int cloudfs_statfs(const char *path, struct statvfs *stat);
 
 char *str2md5(const char *str, int length);
 dir_cache *new_cache(const char *path);
+void dir_for(const char *path, char *dir);
 
 void debugf(char *fmt, ...);
 #endif
