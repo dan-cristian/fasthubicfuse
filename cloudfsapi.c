@@ -355,7 +355,7 @@ static void header_set_time_from_str(char *time_str, struct timespec *time_entry
   sscanf(time_str, "%[^.].%[^\n]", sec_value, nsec_value);
   sec = strtoll(sec_value, NULL, 10);//to allow for larger numbers
   nsec = atol(nsec_value);
-  //debugf("Received time=%s.%s / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry->tv_sec, time_entry->tv_nsec);
+  debugf("Received time=%s.%s / %li.%li, existing=%li.%li", sec_value, nsec_value, sec, nsec, time_entry->tv_sec, time_entry->tv_nsec);
   if (sec != time_entry->tv_sec || nsec != time_entry->tv_nsec){
     debugf("Setting new time=%li.%li, existing was=%li.%li", sec, nsec, time_entry->tv_sec, time_entry->tv_nsec);
     time_entry->tv_sec = atol(sec_value);
@@ -375,7 +375,7 @@ static size_t header_get_utimens_dispatch(void *ptr, size_t size, size_t nmemb, 
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     //strncpy(storage, header, sizeof(storage));
-    //debugf("received utimens header=[%s]", storage);
+    debugf("received utimens header=[%s]", storage);
     strncpy(storage, head, sizeof(storage));
     dir_entry *de = (dir_entry*)userdata;
     if (!strncasecmp(head, HEADER_TEXT_ATIME, size * nmemb)){
