@@ -646,7 +646,7 @@ void run_segment_threads(const char *method, int segments, int full_segments, in
       info[i].size = i < full_segments ? size_of_segments : remaining;
       info[i].seg_base = seg_base;
       pthread_create(&threads[i], NULL, upload_segment, (void *)&(info[i]));
-      pthread_setname_np(&threads[i], "run_segment");
+      pthread_setname_np(threads[i], "run_segment");
     }
 
     for (i = 0; i < segments; i++) {
