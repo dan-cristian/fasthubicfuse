@@ -314,7 +314,6 @@ static int get_safe_path(const char *file_path, int file_path_len, char *file_pa
   //  file_path, md5len, strlen(file_path_safe), safe_len_prefix, file_path_len, NAME_MAX - md5len);
   strcat(file_path_safe, md5_path);
   //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
-  //if (safe_len_prefix + md5len > 0)
   file_path_safe[safe_len_prefix + md5len - 1] = '\0';
   free(md5_path);
   return strlen(file_path_safe);
