@@ -5,7 +5,6 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <fcntl.h>
 #ifdef __linux__
 #include <alloca.h>
@@ -1568,7 +1567,7 @@ void debugf(char *fmt, ...)
     va_list args;
     char prefix[] = "=====DEBUG%s-%d=====";
     char line [THREAD_NAMELEN + strlen(prefix)+25];
-    sprintf(line, prefix, thread_name, pthread_t);
+    sprintf(line, prefix, thread_name, thread_id);
     fputs(line, stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
