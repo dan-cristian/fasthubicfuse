@@ -92,6 +92,7 @@ static int caching_list_directory(const char *path, dir_entry **list)
   return 1;
 }
 
+/*
 static void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   //debugf("Update dir cache %s", path);
@@ -152,6 +153,7 @@ static void update_dir_cache(const char *path, off_t size, int isdir, int islink
   }
   pthread_mutex_unlock(&dmut);
 }
+*/
 
 static void dir_decache(const char *path)
 {
