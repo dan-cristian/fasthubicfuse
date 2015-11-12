@@ -4,7 +4,6 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <fuse.h>
-#include <pthread.h>
 #include <time.h>
 
 #define BUFFER_INITIAL_SIZE 4096
@@ -72,7 +71,6 @@ typedef struct options {
 } FuseOptions;
 
 
-extern int cache_timeout;
 typedef struct dir_cache
 {
   char *path;
@@ -80,8 +78,8 @@ typedef struct dir_cache
   time_t cached;
   struct dir_cache *next, *prev;
 } dir_cache;
-extern dir_cache *dcache;
-extern pthread_mutex_t dmut;
+
+
 
 void cloudfs_init(void);
 void cloudfs_free(void);

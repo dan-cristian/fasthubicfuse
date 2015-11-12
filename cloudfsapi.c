@@ -61,6 +61,10 @@ static struct statvfs statcache = {
 
 extern FuseOptions options;
 
+extern pthread_mutex_t dmut;
+extern dir_cache *dcache;
+extern int cache_timeout;
+
 #ifdef HAVE_OPENSSL
 #include <openssl/crypto.h>
 static pthread_mutex_t *ssl_lockarray;
