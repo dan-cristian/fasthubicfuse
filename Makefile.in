@@ -42,6 +42,7 @@ maintainer-clean: clean
 debug: CFLAGS += -g
 debug: hubicfuse
 
+
 config.h.in: stamp-h.in
 stamp-h.in: configure.in
 	autoheader
