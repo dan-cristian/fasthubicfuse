@@ -763,7 +763,7 @@ void interrupt_handler(int sig) {
 
 int main(int argc, char **argv)
 {
-  debugf("Starting hubicfuse!");
+  fprintf(stderr, "Starting hubicfuse on homedir %s!", get_home_dir());
   signal(SIGINT, interrupt_handler);
 
   char settings_filename[MAX_PATH_SIZE] = "";

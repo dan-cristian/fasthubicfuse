@@ -185,6 +185,7 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
     path = "";
   dir_cache *cw;
   for (cw = dcache; cw; cw = cw->next){
+    debugf("local_caching_list_directory element.path=[%s] target-compare=[%s]", cw->path, path);
     if (!strcmp(cw->path, path)){
       //debugf("Local caching dir found in cache, path=%s", path);
       *list = cw->entries;
@@ -203,16 +204,17 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
 
 static dir_entry *local_path_info(const char *path)
 {
-  //debugf("local path info path=%s", path);
+  debugf("CHECK local path info path=%s", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry *tmp;
   if (!local_caching_list_directory(dir, &tmp)){
-    debugf("Path info not (1) found in cache, path=%s, dir=%s", path, dir);
+    debugf("local_path_info not found in cache, path=%s, dir=%s", path, dir);
     return NULL;
   }
   for (; tmp; tmp = tmp->next)
   {
+    debugf("local_path_info element.full_name=[%s]", tmp->full_name);
     if (!strcmp(tmp->full_name, path)){
       //debugf("Path info found in cache, path=%s", path);
       return tmp;
@@ -224,7 +226,7 @@ static dir_entry *local_path_info(const char *path)
 
 void local_update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-	debugf("Update dir cache [%s]", path);
+	debugf("local_update_dir_cache [%s] isdir=%d", path, isdir);
 	int lock_ok = pthread_mutex_trylock(&dmut);
 	debugf("Mutex local_update_dir_cache attempted lock=%d", lock_ok);
 	//pthread_mutex_lock(&dmut);
@@ -234,10 +236,12 @@ void local_update_dir_cache(const char *path, off_t size, int isdir, int islink)
 	dir_for(path, dir);
 	for (cw = dcache; cw; cw = cw->next)
 	{
+    debugf("Compare local_update_dir_cache cwpath=[%s] targetdir=[%s]", cw->path, dir);
 		if (!strcmp(cw->path, dir))
 		{
 			for (de = cw->entries; de; de = de->next)
 			{
+        debugf("Compare local_update_dir_cache fullname=[%s] target=[%s]", de->full_name, path);
 				if (!strcmp(de->full_name, path))
 				{
 					de->size = size;
@@ -277,8 +281,10 @@ void local_update_dir_cache(const char *path, off_t size, int isdir, int islink)
 			// change end
 			de->next = cw->entries;
 			cw->entries = de;
-			if (isdir)
-				new_cache(path);
+      if (isdir) {
+        new_cache(path);
+        debugf("Added DIR local_update_dir_cache=[%s]", path);
+      }
 			break;
 		}
 	}
@@ -810,6 +816,7 @@ int format_segments(const char *path, char * seg_base,  long *segments,
       issegmented = 0;
   }
   debugf("File segmented=%d", issegmented);
+  //end change
 
   if (internal_is_segmented(seg_path, object)) {
     char manifest[MAX_URL_SIZE];
@@ -1277,6 +1284,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         }
         de->next = *dir_list;
         *dir_list = de;
+        debugf("Added new dir_entry name=%s path=%s", de->name, de->full_name);
         //TODO: attempt to read extended attributes on each entry
         get_file_metadata(de->full_name, (de ? de->size : 0), de->isdir, de->islink);
       }
