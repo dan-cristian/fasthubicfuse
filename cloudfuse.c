@@ -20,14 +20,9 @@
 
 static char *temp_dir;
 
-//static pthread_mutex_t dmut;
-//static int cache_timeout;
-//extern 
-pthread_mutex_t dmut;
+extern pthread_mutex_t dmut;
 extern pthread_mutexattr_t mutex_attr;
 extern int cache_timeout;
-
-//extern dir_cache *dcache;
 
 typedef struct
 {
@@ -35,220 +30,25 @@ typedef struct
   int flags;
 } openfile;
 
-
-/*
-//static 
-void dir_for(const char *path, char *dir)
-{
-  strncpy(dir, path, MAX_PATH_SIZE);
-  char *slash = strrchr(dir, '/');
-  if (slash)
-    *slash = '\0';
-}
-*/
-
-/*
-//static 
-dir_cache *new_cache(const char *path)
-{
-  debugf("Adding new_cache path=%s", path);
-  dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
-  cw->path = strdup(path);
-  cw->prev = NULL;
-  cw->entries = NULL;
-  cw->cached = time(NULL);
-  if (dcache)
-    dcache->prev = cw;
-  cw->next = dcache;
-  return (dcache = cw);
-}
-*/
-
-/*
-static int caching_list_directory(const char *path, dir_entry **list)
-{
-  pthread_mutex_lock(&dmut);
-  if (!strcmp(path, "/"))
-    path = "";
-  dir_cache *cw;
-  for (cw = dcache; cw; cw = cw->next)
-    if (!strcmp(cw->path, path)){
-      //debugf("Found in list directory %s", cw->path);
-      break;
-    }
-  if (!cw)
-  {
-    if (!cloudfs_list_directory(path, list)){
-      //mutex unlock was forgotten?
-      pthread_mutex_unlock(&dmut);
-      return  0;
-    }
-    cw = new_cache(path);
-  }
-  else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
-  {
-    if (!cloudfs_list_directory(path, list)){
-      //mutex unlock was forgotten?
-      pthread_mutex_unlock(&dmut);
-      return  0;
-    }
-    cloudfs_free_dir_list(cw->entries);
-    cw->cached = time(NULL);
-  }
-  else
-    *list = cw->entries;
-  cw->entries = *list;
-  pthread_mutex_unlock(&dmut);
-  return 1;
-}
-*/
-
-/*
-//static 
-void update_dir_cache(const char *path, off_t size, int isdir, int islink)
-{
-  debugf("Update dir cache [%s]", path);
-  int lock_ok = pthread_mutex_trylock(&dmut);
-  debugf("Mutex update_dir_cache attempted lock=%d", lock_ok);
-  pthread_mutex_lock(&dmut);
-  dir_cache *cw;
-  dir_entry *de;
-  char dir[MAX_PATH_SIZE];
-  dir_for(path, dir);
-  for (cw = dcache; cw; cw = cw->next)
-  {
-    if (!strcmp(cw->path, dir))
-    {
-      for (de = cw->entries; de; de = de->next)
-      {
-        if (!strcmp(de->full_name, path))
-        {
-          de->size = size;
-          pthread_mutex_unlock(&dmut);
-          return;
-        }
-      }
-      debugf("Create new cache entry on update_dir_cache for path %s", path);
-      de = (dir_entry *)malloc(sizeof(dir_entry));
-      de->size = size;
-      de->isdir = isdir;
-      de->islink = islink;
-      de->name = strdup(&path[strlen(cw->path)+1]);
-      de->full_name = strdup(path);
-      de->md5sum = NULL;
-
-      if (isdir)
-      {
-        de->content_type = strdup("application/link");
-      }
-      if(islink)
-      {
-        de->content_type = strdup("application/directory");
-      }
-      else
-      {
-        de->content_type = strdup("application/octet-stream");
-      }
-      de->last_modified = time(NULL);
-      // utimens change
-      de->mtime.tv_sec = time(NULL);
-      de->atime.tv_sec = time(NULL);
-      de->ctime.tv_sec = time(NULL);
-      de->mtime.tv_nsec = 0;
-      de->atime.tv_nsec = 0;
-      de->ctime.tv_nsec = 0;
-      // change end
-      de->next = cw->entries;
-      cw->entries = de;
-      if (isdir)
-        new_cache(path);
-      break;
-    }
-  }
-  pthread_mutex_unlock(&dmut);
-}
-*/
-/*
-static void dir_decache(const char *path)
-{
-  dir_cache *cw;
-  pthread_mutex_lock(&dmut);
-  dir_entry *de, *tmpde;
-  char dir[MAX_PATH_SIZE];
-  dir_for(path, dir);
-  for (cw = dcache; cw; cw = cw->next)
-  {
-    if (!strcmp(cw->path, path))
-    {
-      if (cw == dcache)
-        dcache = cw->next;
-      if (cw->prev)
-        cw->prev->next = cw->next;
-      if (cw->next)
-        cw->next->prev = cw->prev;
-      cloudfs_free_dir_list(cw->entries);
-      free(cw->path);
-      free(cw);
-    }
-    else if (cw->entries && !strcmp(dir, cw->path))
-    {
-      if (!strcmp(cw->entries->full_name, path))
-      {
-        de = cw->entries;
-        cw->entries = de->next;
-        de->next = NULL;
-        cloudfs_free_dir_list(de);
-      }
-      else for (de = cw->entries; de->next; de = de->next)
-      {
-        if (!strcmp(de->next->full_name, path))
-        {
-          tmpde = de->next;
-          de->next = de->next->next;
-          tmpde->next = NULL;
-          cloudfs_free_dir_list(tmpde);
-          break;
-        }
-      }
-    }
-  }
-  pthread_mutex_unlock(&dmut);
-}
-*/
-/*
-static dir_entry *path_info(const char *path)
-{
-  //debugf("Path info for %s", path);
-  char dir[MAX_PATH_SIZE];
-  dir_for(path, dir);
-  dir_entry *tmp;
-  if (!caching_list_directory(dir, &tmp))
-    return NULL;
-  for (; tmp; tmp = tmp->next)
-  {
-    if (!strcmp(tmp->full_name, path)){
-      //debugf("FOUND in cache %s", tmp->full_name);
-      return tmp;
-    }
-  }
-  return NULL;
-}
-*/
 // updated to support utimens
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
-  debugf("Getattr path=[%s]", path);
+  debugf(KBLU "cfs_getattr(%s)", path);
   stbuf->st_uid = geteuid();
   stbuf->st_gid = getegid();
   if (!strcmp(path, "/"))
   {
     stbuf->st_mode = S_IFDIR | 0755;
     stbuf->st_nlink = 2;
+		debug_list_cache_content();
+		debugf(KBLU "exit 0: cfs_getattr(%s)", path);
     return 0;
   }
+	//get file. if not in cache will be downloaded.
   dir_entry *de = path_info(path);
   if (!de) {
-    debugf("On getattr failed to get cache entry");
+		debug_list_cache_content();
+		debugf(KBLU "exit 1: cfs_getattr(%s)", path);
     return -ENOENT;
   }
   else {
@@ -286,45 +86,56 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
     stbuf->st_mode = S_IFREG | 0666;
     stbuf->st_nlink = 1;
   }
-  //debugf("Getattr finished path=[%s]", path);
+	debug_list_cache_content();
+	debugf(KBLU "exit 2: cfs_getattr(%s)", path);
   return 0;
 }
 
 static int cfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_info *info)
 {
-  debugf("FGetattr path=[%s]", path);
+  debugf(KBLU "cfs_fgetattr(%s)", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (of)
   {
     stbuf->st_size = cloudfs_file_size(of->fd);
     stbuf->st_mode = S_IFREG | 0666;
     stbuf->st_nlink = 1;
+		debugf(KBLU "exit 0: cfs_fgetattr(%s)", path);
     return 0;
   }
+	debugf(KBLU "exit 1: cfs_fgetattr(%s)", path);
   return -ENOENT;
 }
 
 static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off_t offset, struct fuse_file_info *info)
 {
-  debugf("Readdir path=[%s]", path);
+  debugf(KBLU "cfs_readdir(%s)", path);
   dir_entry *de;
-  if (!caching_list_directory(path, &de))
-    return -ENOLINK;
+	if (!caching_list_directory(path, &de)) {
+		debug_list_cache_content();
+		debugf(KBLU "exit 0: cfs_readdir(%s)", path);
+		return -ENOLINK;
+	}
   filldir(buf, ".", NULL, 0);
   filldir(buf, "..", NULL, 0);
   for (; de; de = de->next)
     filldir(buf, de->name, NULL, 0);
-  return 0;
+	debug_list_cache_content();
+	debugf(KBLU "exit 1: cfs_readdir(%s)", path);
+	return 0;
 }
 
 static int cfs_mkdir(const char *path, mode_t mode)
 {
-  debugf("Mkdir path=[%s]", path);
+	debugf(KBLU "cfs_mkdir(%s)", path);
   if (cloudfs_create_directory(path))
   {
     update_dir_cache(path, 0, 1, 0);
+		debug_list_cache_content();
+		debugf(KBLU "exit 0: cfs_mkdir(%s)", path);
     return 0;
   }
+	debugf(KBLU "exit 1: cfs_mkdir(%s)", path);
   return -ENOENT;
 }
 
@@ -346,7 +157,7 @@ static int get_safe_path(const char *file_path, int file_path_len, char *file_pa
 
 static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info)
 {
-  debugf("Create path=[%s]", path);
+  debugf(KBLU "cfs_create(%s)", path);
   FILE *temp_file;
 
   if (*temp_dir) {
@@ -384,14 +195,15 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   info->fh = (uintptr_t)of;
   update_dir_cache(path, 0, 0, 0);
   info->direct_io = 1;
-  debugf("c6");
+	debug_list_cache_content();
+	debugf(KBLU "exit: cfs_create(%s)", path);
   return 0;
 }
 
 // open(download) file from cloud
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
-  debugf("Open path=[%s]", path);
+  debugf(KBLU "cfs_open(%s)", path);
   FILE *temp_file = NULL;
   dir_entry *de = path_info(path);
 
@@ -410,15 +222,13 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     char file_path_safe[NAME_MAX];
     get_safe_path(file_path, strlen(file_path), file_path_safe);
 
-    if (access(file_path_safe, F_OK) != -1)
-    {
+    if (access(file_path_safe, F_OK) != -1){
       // file exists
       temp_file = fopen(file_path_safe, "r");
       debugf("file exists");
     }
     //FIXME: commented out as condition will not be meet in some odd cases and program will crash
-    else //if (!(info->flags & O_WRONLY))
-    {
+    else if (!(info->flags & O_WRONLY)){
       debugf("opening for write");
 
       // we need to lock on the filename another process could open the file
@@ -447,20 +257,20 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       if (!cloudfs_object_write_fp(path, temp_file))
       {
         fclose(temp_file);
-        debugf("Open error 1 path=[%s]", path);
+				debug_list_cache_content();
+				debugf(KBLU "exit 0: cfs_open(%s)", path);
         return -ENOENT;
       }
     }
-    /*else{
-      debugf("Unable to create a temp file=%s", file_path_safe);
+    else{
+      debugf(KRED "Unable to create a temp file=%s", file_path_safe);
       if (temp_file == NULL){
-        debugf("Temp file is null");
+        debugf(KRED "Temp file is null");
       }
-    }*/
+    }
   }
   else
   {
-    debugf("p1b");
     temp_file = tmpfile();
     if (temp_file == NULL) {
       debugf("Cannot create temp_file err=%s", strerror(errno));
@@ -470,14 +280,16 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       if (!cloudfs_object_write_fp(path, temp_file) && !(info->flags & O_CREAT))
       {
         fclose(temp_file);
-        debugf("Open error 2 path=[%s]", path);
+				debug_list_cache_content();
+				debugf(KBLU "exit 1: cfs_open(%s)", path);
         return -ENOENT;
       }
     }
   }
 
   if (temp_file == NULL){
-    debugf("p4.1 attempt to null close");
+		debug_list_cache_content();
+		debugf(KBLU "exit 2: cfs_open(%s)", path);
     return -ENOENT;
   }
   else {
@@ -485,9 +297,10 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     openfile *of = (openfile *)malloc(sizeof(openfile));
     of->fd = dup(fileno(temp_file));
     if (of->fd == -1){
-      debugf("Open error 3 path=[%s]", path);
       //FIXME: potential leak if free not used?
       free(of);
+			debug_list_cache_content();
+			debugf(KBLU "exit 3: cfs_open(%s)", path);
       return -ENOENT;
     }
     fclose(temp_file);
@@ -496,92 +309,122 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     info->fh = (uintptr_t)of;
     info->direct_io = 1;
     info->nonseekable = 1;
-    debugf("Open complete path=[%s]", path);
-    //FIXME: potential leak if free not used?
-    free(of);
+    //FIXME: potential leak if free(of) not used? although if free(of) is used will generate bad descriptor errors
+		debug_list_cache_content();
+		debugf(KBLU "exit 4: cfs_open(%s)", path);
     return 0;
   }
 }
 
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
 {
-  debugf("Read path=[%s]", path);
-  return pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
+  debugf(KBLU "cfs_read(%s)", path);
+	int result = pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
+	debugf(KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
+	return result;
 }
+
 
 static int cfs_flush(const char *path, struct fuse_file_info *info)
 {
-  debugf("Flush path=[%s]", path);
+  debugf(KBLU "cfs_flush(%s)", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
-  if (of)
-  {
+
+  if (of) {
+		char proc_path[MAX_PATH_SIZE];
+		char file_path[MAX_PATH_SIZE];
+		/* Read out the link to our file descriptor. */
+		sprintf(proc_path, "/proc/self/fd/%d", of->fd);
+		memset(file_path, 0, sizeof(file_path));
+		readlink(proc_path, file_path, sizeof(file_path) - 1);
+		debugf(KCYN "cfs_flush localfile=[%s] fd=%d", file_path, of->fd);
+
     update_dir_cache(path, cloudfs_file_size(of->fd), 0, 0);
     if (of->flags & O_RDWR || of->flags & O_WRONLY)
     {
       FILE *fp = fdopen(dup(of->fd), "r");
-      rewind(fp);
-      if (!cloudfs_object_read_fp(path, fp))
-      {
-        fclose(fp);
-        return -ENOENT;
-      }
-      fclose(fp);
+			if (fp != NULL) {
+				rewind(fp);
+				if (!cloudfs_object_read_fp(path, fp))
+				{
+					fclose(fp);
+					debugf(KBLU "exit 0: cfs_flush(%s) result=%s", path, strerror(errno));
+					return -ENOENT;
+				}
+				fclose(fp);
+			}
+			else {
+				debugf(KRED "status: cfs_flush, err=%s", strerror(errno));
+			}
     }
   }
+	debugf(KBLU "exit 1: cfs_flush(%s) result=%s", path,strerror(errno));
   return 0;
 }
 
 static int cfs_release(const char *path, struct fuse_file_info *info)
 {
-  debugf("Release path=[%s]", path);
+  debugf(KBLU "cfs_release(%s)", path);
   close(((openfile *)(uintptr_t)info->fh)->fd);
+	debugf(KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
 
 static int cfs_rmdir(const char *path)
 {
-  debugf("Rmdir path=[%s]", path);
+  debugf(KBLU "cfs_rmdir(%s)", path);
   int success = cloudfs_delete_object(path);
-  if (success == -1)
-    return -ENOTEMPTY;
-  if (success)
-  {
+	if (success == -1) {
+		debugf(KBLU "exit 0: cfs_rmdir(%s)", path);
+		return -ENOTEMPTY;
+	}
+  if (success){
     dir_decache(path);
+		debugf(KBLU "exit 1: cfs_rmdir(%s)", path);
     return 0;
   }
+	debugf(KBLU "exit 2: cfs_rmdir(%s)", path);
   return -ENOENT;
 }
 
 static int cfs_ftruncate(const char *path, off_t size, struct fuse_file_info *info)
 {
-  debugf("FTruncate path=[%s]", path);
+  debugf(KBLU "cfs_ftruncate(%s)", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (ftruncate(of->fd, size))
     return -errno;
   lseek(of->fd, 0, SEEK_SET);
   update_dir_cache(path, size, 0, 0);
+	debugf(KBLU "exit: cfs_ftruncate(%s)", path);
   return 0;
 }
 
 static int cfs_write(const char *path, const char *buf, size_t length, off_t offset, struct fuse_file_info *info)
 {
-  debugf("Write path=[%s]", path);
+  debugf(KBLU "cfs_write(%s)", path);
   // FIXME: Potential inconsistent cache update if pwrite fails?
   update_dir_cache(path, offset + length, 0, 0);
-  return pwrite(((openfile *)(uintptr_t)info->fh)->fd, buf, length, offset);
+	int result = pwrite(((openfile *)(uintptr_t)info->fh)->fd, buf, length, offset);
+	debug_list_cache_content();
+	debugf(KBLU "exit: cfs_write(%s) result=%s", path, strerror(errno));
+	return result;
 }
 
 static int cfs_unlink(const char *path)
 {
-  debugf("Unlink path=[%s]", path);
+	debugf(KBLU "cfs_unlink(%s)", path);
   int success = cloudfs_delete_object(path);
-  if (success == -1)
-    return -EACCES;
+	if (success == -1) {
+		debugf(KBLU "exit 0: cfs_unlink(%s)", path);
+		return -EACCES;
+	}
   if (success)
   {
     dir_decache(path);
+		debugf(KBLU "exit 1: cfs_unlink(%s)", path);
     return 0;
   }
+	debugf(KBLU "exit 2: cfs_unlink(%s)", path);
   return -ENOENT;
 }
 
@@ -600,17 +443,20 @@ static int cfs_truncate(const char *path, off_t size)
 
 static int cfs_statfs(const char *path, struct statvfs *stat)
 {
-  debugf("Statfs path=[%s]", path);
+  debugf(KBLU "cfs_statfs(%s)", path);
   if (cloudfs_statfs(path, stat)){
+		debugf(KBLU "exit 0: cfs_statfs(%s)", path);
     return 0;
   }
-  else
-    return -EIO;
+	else {
+		debugf(KBLU "exit 1: cfs_statfs(%s)", path);
+		return -EIO;
+	}
 }
 
 static int cfs_chown(const char *path, uid_t uid, gid_t gid)
 {
-  debugf("Chown path=[%s]", path);
+  debugf(KBLU "cfs_chown(%s)", path);
   return 0;
 }
 
@@ -684,25 +530,30 @@ times: times[0] specifies the new "last access time" (atime)
 times: times[1] specifies the new "last modification time" (mtime)
 */
 static int cfs_utimens(const char *path, const struct timespec times[2]){
-  debugf("Calling utimes path=[%s] t0=[%li.%li] t1=[%li.%li]", path, times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
+	debugf(KBLU "cfs_utimens(%s)", path);
+  //debugf("Calling utimes path=[%s] t0=[%li.%li] t1=[%li.%li]", path, times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
   // looking for file entry in cache
   dir_entry *path_de = path_info(path);
   if (!path_de) {
-    debugf("File for utimes not found in cache");
+		debugf(KBLU "exit 0: cfs_utimens(%s)" KRED " file not in cache", path);
     return -ENOENT;
   }
-  /*if (path_de->isdir) {
-  debugf("Cannot set utimes on directory");
-  return -EISDIR;
-  }*/
-  debugf("Found file for utimes in cache, prev values are atime=%li.%li mtime=%li.%li", 
-    path_de->atime.tv_sec, path_de->atime.tv_nsec, path_de->mtime.tv_sec, path_de->mtime.tv_nsec);
-  path_de->atime = times[0];
-  path_de->mtime = times[1];
-  // not sure how to best obtain ctime yet. just record current date.
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
-  path_de->ctime = now;
+
+	if (path_de->atime.tv_sec != times[0].tv_sec || path_de->atime.tv_nsec != times[0].tv_nsec ||
+			path_de->mtime.tv_sec != times[1].tv_sec || path_de->mtime.tv_nsec != times[1].tv_nsec) {
+		debugf(KCYN "utime must change for %s, prev: atime=%li.%li mtime=%li.%li, to be set: atime=%li.%li mtime=%li.%li", path,
+			path_de->atime.tv_sec, path_de->atime.tv_nsec, path_de->mtime.tv_sec, path_de->mtime.tv_nsec,
+			times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec
+			);
+		path_de->atime = times[0];
+		path_de->mtime = times[1];
+		// not sure how to best obtain ctime yet. just record current date.
+		path_de->ctime = now;
+	}
+
+	debugf(KBLU "exit 1: cfs_utimens(%s)", path);
   return 0;
 }
 
@@ -715,18 +566,6 @@ int cfs_getxattr(const char *path, const char *name, char *value, size_t size){
   return 0;
 }
 
-/*
-char *get_home_dir()
-{
-  char *home;
-  if ((home = getenv("HOME")) && !access(home, R_OK))
-    return home;
-  struct passwd *pwd = getpwuid(geteuid());
-  if ((home = pwd->pw_dir) && !access(home, R_OK))
-    return home;
-  return "~";
-}
-*/
 
 FuseOptions options = {
     .cache_timeout = "600",
@@ -742,18 +581,26 @@ FuseOptions options = {
     .refresh_token = ""
 };
 
+ExtraFuseOptions extra_options = {
+	.get_extended_metadata = "false" //true or false
+};
+
+
 int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
   if (sscanf(arg, " cache_timeout = %[^\r\n ]", options.cache_timeout) ||
-      sscanf(arg, " verify_ssl = %[^\r\n ]", options.verify_ssl) ||
-      sscanf(arg, " segment_above = %[^\r\n ]", options.segment_above) ||
-      sscanf(arg, " segment_size = %[^\r\n ]", options.segment_size) ||
-      sscanf(arg, " storage_url = %[^\r\n ]", options.storage_url) ||
-      sscanf(arg, " container = %[^\r\n ]", options.container) ||
-      sscanf(arg, " temp_dir = %[^\r\n ]", options.temp_dir) ||
-      sscanf(arg, " client_id = %[^\r\n ]", options.client_id) ||
-      sscanf(arg, " client_secret = %[^\r\n ]", options.client_secret) ||
-      sscanf(arg, " refresh_token = %[^\r\n ]", options.refresh_token))
+		sscanf(arg, " verify_ssl = %[^\r\n ]", options.verify_ssl) ||
+    sscanf(arg, " segment_above = %[^\r\n ]", options.segment_above) ||
+    sscanf(arg, " segment_size = %[^\r\n ]", options.segment_size) ||
+    sscanf(arg, " storage_url = %[^\r\n ]", options.storage_url) ||
+    sscanf(arg, " container = %[^\r\n ]", options.container) ||
+    sscanf(arg, " temp_dir = %[^\r\n ]", options.temp_dir) ||
+    sscanf(arg, " client_id = %[^\r\n ]", options.client_id) ||
+    sscanf(arg, " client_secret = %[^\r\n ]", options.client_secret) ||
+    sscanf(arg, " refresh_token = %[^\r\n ]", options.refresh_token) ||
+
+		sscanf(arg, " get_extended_metadata = %[^\r\n ]", extra_options.get_extended_metadata)
+		)
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
     cloudfs_debug(1);
@@ -809,12 +656,14 @@ int main(int argc, char **argv)
     fprintf(stderr, "  refresh_token=[Get it running hubic_token]\n");
     fprintf(stderr, "The following settings are optional:\n\n");
     fprintf(stderr, "  cache_timeout=[Seconds for directory caching, default 600]\n");
-    fprintf(stderr, "  verify_ssl=[False to disable SSL cert verification]\n");
+    fprintf(stderr, "  verify_ssl=[false to disable SSL cert verification]\n");
     fprintf(stderr, "  segment_size=[Size to use when creating DLOs, default 1073741824]\n");
     fprintf(stderr, "  segment_above=[File size at which to use segments, defult 2147483648]\n");
     fprintf(stderr, "  storage_url=[Storage URL for other tenant to view container]\n");
     fprintf(stderr, "  container=[Public container to view of tenant specified by storage_url]\n");
     fprintf(stderr, "  temp_dir=[Directory to store temp files]\n");
+
+		fprintf(stderr, "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
 
     return 1;
   }
@@ -822,6 +671,7 @@ int main(int argc, char **argv)
   cloudfs_init();
 
   cloudfs_verify_ssl(!strcasecmp(options.verify_ssl, "true"));
+	cloudfs_option_get_extended_metadata(!strcasecmp(extra_options.get_extended_metadata, "true"));
 
   cloudfs_set_credentials(options.client_id, options.client_secret, options.refresh_token);
 
