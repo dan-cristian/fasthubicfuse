@@ -13,46 +13,7 @@
 #define USER_AGENT "CloudFuse"
 #define OPTION_SIZE 1024
 
-/*
-#define THREAD_NAMELEN 16
-
-// utimens support
-#define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
-#define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
-#define HEADER_TEXT_CTIME "X-Object-Meta-Ctime"
-#define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
-#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
-
-#define min(x, y) ({                \
-  typeof(x) _min1 = (x);          \
-  typeof(y) _min2 = (y);          \
-  (void)(&_min1 == &_min2);      \
-  _min1 < _min2 ? _min1 : _min2; })
-
-
-  */
 typedef struct curl_slist curl_slist;
-/*
-typedef struct dir_entry
-{
-  char *name;
-  char *full_name;
-  char *content_type;
-  off_t size;
-  time_t last_modified;
-  // implement utimens
-  struct timespec mtime;
-  struct timespec ctime;
-  struct timespec atime;
-  char *md5sum; //interesting capability for rsync/scrub
-  int chmod;
-  // end change
-  int isdir;
-  int islink;
-  int issegmented;
-  struct dir_entry *next;
-} dir_entry;
-*/
 
 #define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL 3
 struct curl_progress {
@@ -73,16 +34,9 @@ typedef struct options {
     char refresh_token[OPTION_SIZE];
 } FuseOptions;
 
-/*
-typedef struct dir_cache
-{
-  char *path;
-  dir_entry *entries;
-  time_t cached;
-  struct dir_cache *next, *prev;
-} dir_cache;
-*/
-
+typedef struct extra_options {
+	char get_extended_metadata[OPTION_SIZE];
+} ExtraFuseOptions;
 
 void cloudfs_init(void);
 void cloudfs_free(void);
@@ -117,17 +71,8 @@ int cloudfs_create_symlink(const char *src, const char *dst);
 int cloudfs_create_directory(const char *label);
 int cloudfs_object_truncate(const char *path, off_t size);
 off_t cloudfs_file_size(int fd);
-//void cloudfs_debug(int dbg);
 void cloudfs_verify_ssl(int dbg);
-//void cloudfs_free_dir_list(dir_entry *dir_list);
+void cloudfs_option_get_extended_metadata(int option);
 int cloudfs_statfs(const char *path, struct statvfs *stat);
 
-/*
-char *str2md5(const char *str, int length);
-dir_cache *new_cache(const char *path);
-void dir_for(const char *path, char *dir);
-void update_dir_cache(const char *path, off_t size, int isdir, int islink);
-
-void debugf(char *fmt, ...);
-*/
 #endif
