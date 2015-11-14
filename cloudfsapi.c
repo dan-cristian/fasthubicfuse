@@ -17,10 +17,10 @@
 #include <libxml/tree.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
-#include <openssl/md5.h>
 #include <json.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+#include "commonfs.h"
 #include "cloudfsapi.h"
 #include "config.h"
 #include <fuse.h>
@@ -44,7 +44,7 @@ static char storage_token[MAX_HEADER_SIZE];
 static pthread_mutex_t pool_mut;
 static CURL *curl_pool[1024];
 static int curl_pool_count = 0;
-static int debug = 0;
+extern int debug;
 static int verify_ssl = 2;
 static int rhel5_mode = 0;
 static struct statvfs statcache = {
@@ -61,9 +61,9 @@ static struct statvfs statcache = {
 
 extern FuseOptions options;
 
-extern pthread_mutex_t dmut;
-extern dir_cache *dcache;
-extern int cache_timeout;
+//extern pthread_mutex_t dmut;
+//extern dir_cache *dcache;
+//extern int cache_timeout;
 
 #ifdef HAVE_OPENSSL
 #include <openssl/crypto.h>
@@ -82,6 +82,7 @@ static unsigned long thread_id()
 }
 #endif
 
+/*
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
 time_t my_timegm(struct tm *tm) {
@@ -90,7 +91,7 @@ time_t my_timegm(struct tm *tm) {
   time_t utc = mktime(tm);
   return difftime(utc, offset);
 }
-
+*/
 // hubic stores time as GMT so we have to do conversions
 
 /*void time_t set_now_time_to_gmt(){
@@ -99,6 +100,7 @@ time_t my_timegm(struct tm *tm) {
   http://stackoverflow.com/questions/1764710/converting-string-containing-localtime-into-utc-in-c
 }
 */
+/*
 //expect time_str as a friendly string format
 time_t get_time_from_str_as_gmt(char *time_str){
   struct tm val_time_tm;
@@ -126,6 +128,7 @@ int get_time_as_string(time_t time_t_val, char *time_str){
   time_val_tm = *gmtime(&time_t_val);
   return strftime(time_str, strlen(time_str), "%c", &time_val_tm);
 }
+*/
 
 /*
 void time_t get_now_time_as_gmt(time_t gmt_time){
@@ -144,7 +147,7 @@ void dir_for(const char *path, char *dir)
     *slash = '\0';
   //debugf("local dir becomes [%s]", dir);
 }
-*/
+
 
 char *str2md5(const char *str, int length) {
   int n;
@@ -173,7 +176,8 @@ char *str2md5(const char *str, int length) {
 
   return out;
 }
-
+*/
+/*
 static int local_caching_list_directory(const char *path, dir_entry **list)
 {
   debugf("local_caching_list_directory path=[%s]", path);
@@ -201,7 +205,9 @@ static int local_caching_list_directory(const char *path, dir_entry **list)
   debugf("local caching dir not found path=%s", path);
   return 0;
 }
+*/
 
+/*
 static dir_entry *local_path_info(const char *path)
 {
   debugf("CHECK local path info path=%s", path);
@@ -223,7 +229,8 @@ static dir_entry *local_path_info(const char *path)
   //debugf("Path info not (2) found in cache, path=%s", path);
   return NULL;
 }
-
+*/
+/*
 void local_update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
 	debugf("local_update_dir_cache [%s] isdir=%d", path, isdir);
@@ -291,7 +298,7 @@ void local_update_dir_cache(const char *path, off_t size, int isdir, int islink)
 	//pthread_mutex_unlock(&dmut);
 }
 
-
+*/
 static size_t xml_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
 {
   xmlParseChunk((xmlParserCtxtPtr)stream, (char *)ptr, size * nmemb, 0);
@@ -473,7 +480,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
                         xmlParserCtxtPtr xmlctx, curl_slist *extra_headers,
                         off_t file_size, int is_segment)
 {
-  debugf("Send request path=%s", path);
+  debugf("send_request_size path=%s", path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -517,7 +524,8 @@ static int send_request_size(const char *method, const char *path, void *fp,
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
     //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);dir_entry *de = local_path_info(orig_path);
-    dir_entry *de = local_path_info(orig_path);
+    //dir_entry *de = local_path_info(orig_path);
+    dir_entry *de = check_path_info(orig_path);
     if (!de)
       debugf("No file found in cache for path=%s", orig_path);
     else {
@@ -805,7 +813,8 @@ int format_segments(const char *path, char * seg_base,  long *segments,
 
   //todo: try to avoid one additional http request for small files
   int issegmented;
-  dir_entry *de = local_path_info(path);
+  //dir_entry *de = local_path_info(path);
+  dir_entry *de = check_path_info(path);
   if (!de) {
     issegmented = -1;
   }
@@ -1029,7 +1038,8 @@ int cloudfs_object_read_fp(const char *path, FILE *fp)
   rewind(fp);
   char *encoded = curl_escape(path, 0);
   // utimens changes
-  dir_entry *de = local_path_info(path);
+  //dir_entry *de = local_path_info(path);
+  dir_entry *de = path_info(path);
   if (!de)
     debugf("No file found in cache at cloudfs_object_read_fp for path=%s", path);
   else {
@@ -1109,11 +1119,21 @@ int cloudfs_object_truncate(const char *path, off_t size)
 //get metadata from cloud, like time attribs. create new entry if not cached yet.
 int get_file_metadata(const char *path, off_t size, int isdir, int islink){
   debugf("Retrieve file metadata path=%s", path);
-  dir_entry *de = local_path_info(path);
+  //check if file exists in cache
+  dir_entry *de = check_path_info(path);
   if (!de) {
-	  debugf("ODD! as no file found in cache for path=%s", path);
-	  local_update_dir_cache(path, size, isdir, islink);
-	  de = local_path_info(path);
+		//check if parent folder exists
+		de = check_parent_folder_for_file(path);
+		if (!de) {
+			debugf("get_file_metadata: no parent folder found in cache");
+			//update_dir_cache(path, size, isdir, islink);
+		}
+		else {
+			debugf("get_file_metadata: parent folder found in cache, file not found");
+		}
+	  
+	  
+    de = check_path_info(path);
 		if (de)
 			debugf("Created new cache metadata entry path=%s", path);
 		else
@@ -1130,9 +1150,11 @@ int get_file_metadata(const char *path, off_t size, int isdir, int islink){
   //return 1;
 }
 
+//get list of folders from cloud
+// return 1 for OK, 0 for error
 int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 {
-  debugf("List dir %s", path);
+  debugf("cloudfs_list_directory(%s)", path);
   char container[MAX_PATH_SIZE * 3] = "";
   char object[MAX_PATH_SIZE] = "";
   char last_subdir[MAX_PATH_SIZE] = "";
@@ -1325,6 +1347,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
   return retval;
 }
 
+/*
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
   while (dir_list)
@@ -1339,7 +1362,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
     free(de);
   }
 }
-
+*/
 int cloudfs_delete_object(const char *path)
 {
 
@@ -1423,10 +1446,7 @@ off_t cloudfs_file_size(int fd)
   return buf.st_size;
 }
 
-void cloudfs_debug(int dbg)
-{
-  debug = dbg;
-}
+
 
 void cloudfs_verify_ssl(int vrfy)
 {
@@ -1645,6 +1665,7 @@ int cloudfs_connect()
   return (response >= 200 && response < 300 && storage_token[0] && storage_url[0]);
 }
 
+/*
 void debugf(char *fmt, ...)
 {
   if (debug)
@@ -1664,4 +1685,4 @@ void debugf(char *fmt, ...)
 	putc('\r', stderr);
   }
 }
-
+*/
