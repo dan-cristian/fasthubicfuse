@@ -14,7 +14,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stddef.h>
-
+#include "commonfs.h"
 #include "cloudfsapi.h"
 #include "config.h"
 
@@ -22,9 +22,12 @@ static char *temp_dir;
 
 //static pthread_mutex_t dmut;
 //static int cache_timeout;
+//extern 
 pthread_mutex_t dmut;
-int cache_timeout;
-dir_cache *dcache;
+extern pthread_mutexattr_t mutex_attr;
+extern int cache_timeout;
+
+//extern dir_cache *dcache;
 
 typedef struct
 {
@@ -33,6 +36,7 @@ typedef struct
 } openfile;
 
 
+/*
 //static 
 void dir_for(const char *path, char *dir)
 {
@@ -41,9 +45,9 @@ void dir_for(const char *path, char *dir)
   if (slash)
     *slash = '\0';
 }
+*/
 
-
-
+/*
 //static 
 dir_cache *new_cache(const char *path)
 {
@@ -58,7 +62,9 @@ dir_cache *new_cache(const char *path)
   cw->next = dcache;
   return (dcache = cw);
 }
+*/
 
+/*
 static int caching_list_directory(const char *path, dir_entry **list)
 {
   pthread_mutex_lock(&dmut);
@@ -95,8 +101,9 @@ static int caching_list_directory(const char *path, dir_entry **list)
   pthread_mutex_unlock(&dmut);
   return 1;
 }
+*/
 
-
+/*
 //static 
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
@@ -160,8 +167,8 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
   }
   pthread_mutex_unlock(&dmut);
 }
-
-
+*/
+/*
 static void dir_decache(const char *path)
 {
   dir_cache *cw;
@@ -207,7 +214,8 @@ static void dir_decache(const char *path)
   }
   pthread_mutex_unlock(&dmut);
 }
-
+*/
+/*
 static dir_entry *path_info(const char *path)
 {
   //debugf("Path info for %s", path);
@@ -225,7 +233,7 @@ static dir_entry *path_info(const char *path)
   }
   return NULL;
 }
-
+*/
 // updated to support utimens
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
@@ -707,6 +715,7 @@ int cfs_getxattr(const char *path, const char *name, char *value, size_t size){
   return 0;
 }
 
+/*
 char *get_home_dir()
 {
   char *home;
@@ -717,6 +726,7 @@ char *get_home_dir()
     return home;
   return "~";
 }
+*/
 
 FuseOptions options = {
     .cache_timeout = "600",
@@ -855,6 +865,8 @@ int main(int argc, char **argv)
     .getxattr = cfs_getxattr,
   };
 
-  pthread_mutex_init(&dmut, NULL);
+	pthread_mutexattr_init(&mutex_attr);
+	pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(&dmut, &mutex_attr);
   return fuse_main(args.argc, args.argv, &cfs_oper, &options);
 }
