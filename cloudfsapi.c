@@ -270,7 +270,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
                         off_t file_size, int is_segment,
 												dir_entry *de_cached_entry)
 {
-  debugf("send_request_size(%s) (%s)", path, method);
+  debugf(KYEL "send_request_size(%s) (%s)", path, method);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
