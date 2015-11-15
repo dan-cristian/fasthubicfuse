@@ -45,9 +45,10 @@ static pthread_mutex_t pool_mut;
 static CURL *curl_pool[1024];
 static int curl_pool_count = 0;
 extern int debug;
-static int verify_ssl = 2;
-static bool option_get_extended_metadata = false;
-static bool option_curl_verbose = false;
+int verify_ssl = 2;
+bool option_get_extended_metadata = false;
+bool option_curl_verbose = false;
+int option_cache_statfs_timeout = 0;
 static int rhel5_mode = 0;
 static struct statvfs statcache = {
   .f_bsize = 4096,
@@ -384,13 +385,14 @@ static int send_request_size(const char *method, const char *path, void *fp,
     {
       if (is_segment)
       {
-        debugf("GET file segment path=%s", orig_path);
+				//fixme: full segment is downloaded also only when size matters (via a simple HEAD)
+        debugf("GET SEGMENT (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
       }
       else if (fp)
       {
-        debugf("GET file FP path=%s", orig_path);
+        debugf("GET FP (%s)", orig_path);
         rewind(fp); // make sure the file is ready for a-writin'
         fflush(fp);
         if (ftruncate(fileno(fp), 0) < 0)
@@ -412,13 +414,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
       }
       else if (xmlctx)
       {
-        debugf("GET file XML path=%s", orig_path);
+        debugf("GET XML (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
       else {
         //asumming retrieval of headers only
-        debugf("Attempt to retrieve only headers");
+        debugf("GET HEADERS only(%s)");
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
@@ -620,9 +622,9 @@ int format_segments(const char *path, char * seg_base,  long *segments,
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
 
-	debugf(KMAG"split(%s)(%s)", path, seg_base);
+	//debugf(KMAG"split(%s)(%s)", path, seg_base);
   split_path(path, seg_base, container, object);
-	debugf(KMAG"endsplit(%s)(%s)", container, object);
+	//debugf(KMAG"endsplit(%s)(%s)", container, object);
 
   char seg_path[MAX_URL_SIZE];
   snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
@@ -1211,7 +1213,7 @@ int cloudfs_statfs(const char *path, struct statvfs *stat)
 {
 	time_t now = get_time_now();
 	int lapsed = now - last_stat_read_time;
-	if (lapsed > 10) {
+	if (lapsed > option_cache_statfs_timeout) {
 		int response = send_request("HEAD", "/", NULL, NULL, NULL, NULL);
 		*stat = statcache;
 		debugf("exit: cloudfs_statfs (new recent values, was cached since %d seconds)", lapsed);
