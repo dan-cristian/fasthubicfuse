@@ -37,6 +37,7 @@ typedef struct options {
 typedef struct extra_options {
 	char get_extended_metadata[OPTION_SIZE];
 	char curl_verbose[OPTION_SIZE];
+	char cache_statfs_timeout[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);

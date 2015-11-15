@@ -23,6 +23,7 @@ static char *temp_dir;
 extern pthread_mutex_t dmut;
 extern pthread_mutexattr_t mutex_attr;
 extern int cache_timeout;
+extern int option_cache_statfs_timeout;
 
 typedef struct
 {
@@ -626,7 +627,8 @@ FuseOptions options = {
 
 ExtraFuseOptions extra_options = {
 	.get_extended_metadata = "false",
-	.curl_verbose = "false"
+	.curl_verbose = "false",
+	.cache_statfs_timeout = 0
 };
 
 int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs)
@@ -643,7 +645,8 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
     sscanf(arg, " refresh_token = %[^\r\n ]", options.refresh_token) ||
 
 		sscanf(arg, " get_extended_metadata = %[^\r\n ]", extra_options.get_extended_metadata) ||
-		sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose)
+		sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose) ||
+		sscanf(arg, " cache_statfs_timeout = %[^\r\n ]", extra_options.cache_statfs_timeout)
 		)
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -660,6 +663,15 @@ void interrupt_handler(int sig) {
 
   pthread_mutex_destroy(&dmut);
   exit(0);
+}
+
+void initialise_options() {
+	cloudfs_verify_ssl(!strcasecmp(options.verify_ssl, "true"));
+	cloudfs_option_get_extended_metadata(!strcasecmp(extra_options.get_extended_metadata, "true"));
+	cloudfs_option_curl_verbose(!strcasecmp(extra_options.curl_verbose, "true"));
+	if (*extra_options.cache_statfs_timeout) {
+		option_cache_statfs_timeout = atoi(extra_options.cache_statfs_timeout);
+	}
 }
 
 int main(int argc, char **argv)
@@ -709,15 +721,14 @@ int main(int argc, char **argv)
 
 		fprintf(stderr, "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
 		fprintf(stderr, "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
-
+		fprintf(stderr, "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
+		
     return 1;
   }
 
   cloudfs_init();
-
-  cloudfs_verify_ssl(!strcasecmp(options.verify_ssl, "true"));
-	cloudfs_option_get_extended_metadata(!strcasecmp(extra_options.get_extended_metadata, "true"));
-	cloudfs_option_curl_verbose(!strcasecmp(extra_options.curl_verbose, "true"));
+	initialise_options();
+  
 
   cloudfs_set_credentials(options.client_id, options.client_secret, options.refresh_token);
 
