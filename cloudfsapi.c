@@ -46,7 +46,8 @@ static CURL *curl_pool[1024];
 static int curl_pool_count = 0;
 extern int debug;
 static int verify_ssl = 2;
-static bool extra_option_get_extended_metadata = false;
+static bool option_get_extended_metadata = false;
+static bool option_curl_verbose = false;
 static int rhel5_mode = 0;
 static struct statvfs statcache = {
   .f_bsize = 4096,
@@ -59,7 +60,7 @@ static struct statvfs statcache = {
   .f_favail = 0,
   .f_namemax = INT_MAX
 };
-
+static time_t last_stat_read_time = 0;//used to compute cache interval
 extern FuseOptions options;
 
 #ifdef HAVE_OPENSSL
@@ -310,8 +311,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
-    //curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
-		curl_easy_setopt(curl, CURLOPT_VERBOSE, 0);//in production
+		curl_easy_setopt(curl, CURLOPT_VERBOSE, option_curl_verbose ? 1 : 0);
     add_header(&headers, "X-Auth-Token", storage_token);
     /**/
     //debugf("Get file from cache, path=%s, orig=%s, url=%s", path, orig_path, url);dir_entry *de = local_path_info(orig_path);
@@ -332,7 +332,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
       debugf("Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li", orig_path,
         de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec, de->atime.tv_sec, de->atime.tv_nsec);
       // add headers to save utimens attribs only on upload
-      if (!strcasecmp(method, "PUT") && fp) {
+      if ((!strcasecmp(method, "PUT") && fp) || (!strcasecmp(method, "MKDIR"))) {
         debugf("Saving utimens to file %s", orig_path);
         char mtime_str[TIME_CHARS], atime_str[TIME_CHARS], ctime_str[TIME_CHARS];
         char string_float[TIME_CHARS];
@@ -426,6 +426,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     }
     else
     {
+			// this posts an HEAD request (e.g. for statfs)
       curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
       curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
     }
@@ -557,26 +558,26 @@ void split_path(const char *path, char *seg_base, char *container,
         char *object)
 {
   char *string = strdup(path);
-
   snprintf(seg_base, MAX_URL_SIZE, "%s", strsep(&string, "/"));
-
   strncat(container, strsep(&string, "/"),
       MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
-
   char *_object = strsep(&string, "/");
-
+	
   char *remstr;
 
   while (remstr = strsep(&string, "/")) {
-      strncat(container, "/",
+		strncat(container, "/",
           MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
       strncat(container, _object,
           MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
       _object = remstr;
   }
-
-  strncpy(object, _object, MAX_URL_SIZE);
-  free(string);
+	//fixme: when removing root folders this will generate a segfault
+	if (_object == NULL)
+		_object = object;
+	else
+		strncpy(object, _object, MAX_URL_SIZE);
+	free(string);
 }
 
 int internal_is_segmented(const char *seg_path, const char *object)
@@ -619,7 +620,9 @@ int format_segments(const char *path, char * seg_base,  long *segments,
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
 
+	debugf(KMAG"split(%s)(%s)", path, seg_base);
   split_path(path, seg_base, container, object);
+	debugf(KMAG"endsplit(%s)(%s)", container, object);
 
   char seg_path[MAX_URL_SIZE];
   snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
@@ -945,7 +948,7 @@ int cloudfs_object_truncate(const char *path, off_t size)
 
 //get metadata from cloud, like time attribs. create new entry if not cached yet.
 void get_file_metadata(dir_entry *de){
-	if (extra_option_get_extended_metadata) {
+	if (option_get_extended_metadata) {
 		debugf(KCYN "get_file_metadata(%s)", de->full_name);
 		//retrieve additional file metadata with a quick HEAD query
 		char *encoded = curl_escape(de->full_name, 0);
@@ -1155,7 +1158,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
 
 int cloudfs_delete_object(const char *path)
 {
-
+	debugf("cloudfs_delete_object(%s)", path);
   char seg_base[MAX_URL_SIZE] = "";
 
   long segments;
@@ -1172,8 +1175,10 @@ int cloudfs_delete_object(const char *path)
       snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, i);
       char *encoded = curl_escape(seg_path, 0);
       response = send_request("DELETE", encoded, NULL, NULL, NULL, NULL);
-      if (response < 200 || response >= 300)
-        return 0;
+			if (response < 200 || response >= 300) {
+				debugf("exit 1: cloudfs_delete_object(%s) response=%d", path, response);
+				return 0;
+			}
     }
   }
 
@@ -1181,8 +1186,11 @@ int cloudfs_delete_object(const char *path)
   int response = send_request("DELETE", encoded, NULL, NULL, NULL, NULL);
   curl_free(encoded);
   int ret = (response >= 200 && response < 300);
-  if (response == 409)
-    ret = -1;
+	debugf("status: cloudfs_delete_object(%s) response=%d", path, response);
+	if (response == 409) {
+		debugf("status: cloudfs_delete_object(%s) NOT EMPTY", path);
+		ret = -1;
+	}
   return ret;
 }
 
@@ -1198,13 +1206,21 @@ int cloudfs_copy_object(const char *src, const char *dst)
   return (response >= 200 && response < 300);
 }
 
+//optimise this
 int cloudfs_statfs(const char *path, struct statvfs *stat)
 {
-  int response = send_request("HEAD", "/", NULL, NULL, NULL, NULL);
-
-  debugf("Assigning statvfs values from cache.");
-  *stat = statcache;
-  return (response >= 200 && response < 300);
+	time_t now = get_time_now();
+	int lapsed = now - last_stat_read_time;
+	if (lapsed > 10) {
+		int response = send_request("HEAD", "/", NULL, NULL, NULL, NULL);
+		*stat = statcache;
+		debugf("exit: cloudfs_statfs (new recent values, was cached since %d seconds)", lapsed);
+		last_stat_read_time = now;
+		return (response >= 200 && response < 300);
+	}
+	else {
+		debugf("exit: cloudfs_statfs (old values, cached since %d seconds)", lapsed);
+	}
 }
 
 int cloudfs_create_symlink(const char *src, const char *dst)
@@ -1223,9 +1239,11 @@ int cloudfs_create_symlink(const char *src, const char *dst)
 
 int cloudfs_create_directory(const char *path)
 {
+	debugf("cloudfs_create_directory(%s)", path);
   char *encoded = curl_escape(path, 0);
   int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL);
   curl_free(encoded);
+	debugf("cloudfs_create_directory(%s) response=%d", path, response);
   return (response >= 200 && response < 300);
 }
 
@@ -1243,9 +1261,13 @@ void cloudfs_verify_ssl(int vrfy)
 
 void cloudfs_option_get_extended_metadata(int option)
 {
-	extra_option_get_extended_metadata  = option ? true : false;
+	option_get_extended_metadata  = option ? true : false;
 }
 
+void cloudfs_option_curl_verbose(int option)
+{
+	option_curl_verbose = option ? true : false;
+}
 
 static struct {
   char client_id    [MAX_HEADER_SIZE];
@@ -1285,6 +1307,7 @@ char* htmlStringGet(CURL *curl)
 	struct htmlString chunk;
 	chunk.text = malloc(sizeof(char));
 	chunk.size = 0;
+	chunk.text[0] = '\0';//added to avoid valgrind unitialised warning
 
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
 	do {

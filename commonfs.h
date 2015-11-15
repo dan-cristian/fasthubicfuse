@@ -61,6 +61,7 @@ time_t my_timegm(struct tm *tm);
 time_t get_time_from_str_as_gmt(char *time_str);
 time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size);
 int get_time_as_string(time_t time_t_val, char *time_str);
+time_t get_time_now();
 
 char *str2md5(const char *str, int length);
 dir_cache *new_cache(const char *path);
@@ -69,7 +70,6 @@ void debug_list_cache_content();
 void update_dir_cache(const char *path, off_t size, int isdir, int islink);
 dir_entry *path_info(const char *path);
 dir_entry *check_path_info(const char *path);
-dir_entry *local_path_info(const char *path);
 dir_entry * check_parent_folder_for_file(const char *path);
 void dir_decache(const char *path);
 void cloudfs_free_dir_list(dir_entry *dir_list);
