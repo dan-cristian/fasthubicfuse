@@ -146,11 +146,12 @@ static int get_safe_path(const char *file_path, int file_path_len, char *file_pa
   int md5len = strlen(md5_path);
   size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
   strncpy(file_path_safe, file_path, safe_len_prefix);
-  //debugf("local=[%s] md5len=%d strsafelen=%d slen=%d fpl=%d comp=%d", 
-  //  file_path, md5len, strlen(file_path_safe), safe_len_prefix, file_path_len, NAME_MAX - md5len);
-  strcat(file_path_safe, md5_path);
+	strncpy(file_path_safe+safe_len_prefix, md5_path, md5len);
+  //strcat(file_path_safe, md5_path);
   //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
   file_path_safe[safe_len_prefix + md5len - 1] = '\0';
+	debugf("f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
+		file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
   free(md5_path);
   return strlen(file_path_safe);
 }
@@ -159,6 +160,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
 {
   debugf(KBLU "cfs_create(%s)", path);
   FILE *temp_file;
+	int errsv;
 
   if (*temp_dir) {
     char tmp_path[PATH_MAX];
@@ -172,41 +174,68 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
     char file_path_safe[NAME_MAX] = "";
     get_safe_path(file_path, strlen(file_path), file_path_safe);
     temp_file = fopen(file_path_safe, "w+b");
+		errsv = errno;
     if (temp_file == NULL){
-      debugf("Cannot open temp file %s.error %s\n", file_path_safe, strerror(errno));
+      debugf(KRED "Cannot open temp file %s.error %s\n", file_path_safe, strerror(errsv));
       //return -EIO;
     }
   }
   else {
     temp_file = tmpfile();
     if (temp_file == NULL){
-      debugf("Cannot open tmp file for path %s.error %s\n", path, strerror(errno));
+      debugf(KRED "Cannot open tmp file for path %s.error %s\n", path, strerror(errsv));
       //return -EIO;
     }
   }
-  debugf("c4");
   openfile *of = (openfile *)malloc(sizeof(openfile));
-  debugf("c41");
   of->fd = dup(fileno(temp_file));
-  debugf("c42");
   fclose(temp_file);
-  debugf("c5");
+	errsv = errno;
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   update_dir_cache(path, 0, 0, 0);
   info->direct_io = 1;
 	debug_list_cache_content();
-	debugf(KBLU "exit: cfs_create(%s)", path);
+	debugf(KBLU "exit: cfs_create(%s) result=%d:%s", path, errsv, strerror(errsv));
   return 0;
 }
 
+static void get_file_path_from_fd(int fd, char *path, int size_path) {
+	char proc_path[MAX_PATH_SIZE];
+	/* Read out the link to our file descriptor. */
+	sprintf(proc_path, "/proc/self/fd/%d", fd);
+	memset(path, 0, size_path);
+	readlink(proc_path, path, size_path - 1);
+}
+
+void debug_print_flags(int flags) {
+	int accmode, val;
+	accmode = flags & O_ACCMODE;
+	if (accmode == O_RDONLY)				debugf(KRED "read only");
+	else if (accmode == O_WRONLY)   debugf(KRED "write only");
+	else if (accmode == O_RDWR)     debugf(KRED "read write");
+	else debugf(KRED "unknown access mode");
+
+	if (val & O_APPEND)         debugf(KRED ", append");
+	if (val & O_NONBLOCK)       debugf(KRED ", nonblocking");
+#if !defined(_POSIX_SOURCE) && defined(O_SYNC)
+	if (val & O_SYNC)           debugf(KRED ", synchronous writes");
+#endif
+
+}
 // open(download) file from cloud
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_open(%s)", path);
   FILE *temp_file = NULL;
+	int errsv;
   dir_entry *de = path_info(path);
 
+	char file_path[MAX_PATH_SIZE];
+	get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
+	debugf(KCYN "cfs_open localfile=[%s] fd=%d", file_path, info->fh);
+	debug_print_flags(info->flags);
+	
   if (*temp_dir)
   {
     char tmp_path[PATH_MAX];
@@ -225,49 +254,54 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     if (access(file_path_safe, F_OK) != -1){
       // file exists
       temp_file = fopen(file_path_safe, "r");
+			errsv = errno;
       debugf("file exists");
     }
     //FIXME: commented out as condition will not be meet in some odd cases and program will crash
-    else if (!(info->flags & O_WRONLY)){
-      debugf("opening for write");
+		else {
+			//debugf("")
+			//if (!(info->flags & O_WRONLY)) {
+				debugf("opening for write");
 
-      // we need to lock on the filename another process could open the file
-      // while we are writing to it and then only read part of the file
+				// we need to lock on the filename another process could open the file
+				// while we are writing to it and then only read part of the file
 
-      // duplicate the directory caching datastructure to make the code easier
-      // to understand.
+				// duplicate the directory caching datastructure to make the code easier
+				// to understand.
 
-      // each file in the cache needs:
-      //  filename, is_writing, last_closed, is_removing
-      // the first time a file is opened a new entry is created in the cache
-      // setting the filename and is_writing to true.  This check needs to be
-      // wrapped with a lock.
-      //
-      // each time a file is closed we set the last_closed for the file to now
-      // and we check the cache for files whose last
-      // closed is greater than cache_timeout, then start a new thread rming
-      // that file.
+				// each file in the cache needs:
+				//  filename, is_writing, last_closed, is_removing
+				// the first time a file is opened a new entry is created in the cache
+				// setting the filename and is_writing to true.  This check needs to be
+				// wrapped with a lock.
+				//
+				// each time a file is closed we set the last_closed for the file to now
+				// and we check the cache for files whose last
+				// closed is greater than cache_timeout, then start a new thread rming
+				// that file.
 
-      // TODO: just to prevent this craziness for now
-      temp_file = fopen(file_path_safe, "w+b");
-      if (temp_file == NULL) {
-        debugf("Cannot open temp_file=[%s] err=%s", file_path_safe, strerror(errno));
-      }
+				// TODO: just to prevent this craziness for now
+				temp_file = fopen(file_path_safe, "w+b");
+				errsv = errno;
+				if (temp_file == NULL) {
+					debugf("Cannot open temp_file=[%s] err=%d:%s", file_path_safe, errsv, strerror(errsv));
+				}
 
-      if (!cloudfs_object_write_fp(path, temp_file))
-      {
-        fclose(temp_file);
-				debug_list_cache_content();
-				debugf(KBLU "exit 0: cfs_open(%s)", path);
-        return -ENOENT;
-      }
-    }
-    else{
-      debugf(KRED "Unable to create a temp file=%s", file_path_safe);
-      if (temp_file == NULL){
-        debugf(KRED "Temp file is null");
-      }
-    }
+				if (!cloudfs_object_write_fp(path, temp_file))
+				{
+					fclose(temp_file);
+					debug_list_cache_content();
+					debugf(KBLU "exit 0: cfs_open(%s)", path);
+					return -ENOENT;
+				}
+				/*}
+			else {
+				debugf(KRED "Unable to create a temp file=%s", file_path_safe);
+				if (temp_file == NULL) {
+					debugf(KRED "Temp file is null");
+				}
+			}*/
+		}
   }
   else
   {
@@ -325,40 +359,41 @@ static int cfs_read(const char *path, char *buf, size_t size, off_t offset, stru
 }
 
 
+
 static int cfs_flush(const char *path, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_flush(%s)", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
+	int errsv;
 
   if (of) {
-		char proc_path[MAX_PATH_SIZE];
 		char file_path[MAX_PATH_SIZE];
-		/* Read out the link to our file descriptor. */
-		sprintf(proc_path, "/proc/self/fd/%d", of->fd);
-		memset(file_path, 0, sizeof(file_path));
-		readlink(proc_path, file_path, sizeof(file_path) - 1);
+		get_file_path_from_fd(of->fd, file_path, sizeof(file_path));
 		debugf(KCYN "cfs_flush localfile=[%s] fd=%d", file_path, of->fd);
 
     update_dir_cache(path, cloudfs_file_size(of->fd), 0, 0);
     if (of->flags & O_RDWR || of->flags & O_WRONLY)
     {
       FILE *fp = fdopen(dup(of->fd), "r");
+			errsv = errno;
 			if (fp != NULL) {
 				rewind(fp);
 				if (!cloudfs_object_read_fp(path, fp))
 				{
 					fclose(fp);
-					debugf(KBLU "exit 0: cfs_flush(%s) result=%s", path, strerror(errno));
+					errsv = errno;
+					debugf(KBLU "exit 0: cfs_flush(%s) result=%d:%s", path, errsv, strerror(errno));
 					return -ENOENT;
 				}
 				fclose(fp);
+				errsv = errno;
 			}
 			else {
-				debugf(KRED "status: cfs_flush, err=%s", strerror(errno));
+				debugf(KRED "status: cfs_flush, err=%d:%s", errsv, strerror(errno));
 			}
     }
   }
-	debugf(KBLU "exit 1: cfs_flush(%s) result=%s", path,strerror(errno));
+	debugf(KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv, strerror(errno));
   return 0;
 }
 
@@ -404,9 +439,12 @@ static int cfs_write(const char *path, const char *buf, size_t length, off_t off
   debugf(KBLU "cfs_write(%s)", path);
   // FIXME: Potential inconsistent cache update if pwrite fails?
   update_dir_cache(path, offset + length, 0, 0);
+	//int result = pwrite(info->fh, buf, length, offset);
+	debug_print_flags(info->flags);
 	int result = pwrite(((openfile *)(uintptr_t)info->fh)->fd, buf, length, offset);
-	debug_list_cache_content();
-	debugf(KBLU "exit: cfs_write(%s) result=%s", path, strerror(errno));
+	int errsv = errno;
+	//debug_list_cache_content();
+	debugf(KBLU "exit: cfs_write(%s) result=%d:%s", path, errsv, strerror(errsv));
 	return result;
 }
 
