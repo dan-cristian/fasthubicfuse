@@ -70,6 +70,12 @@ int get_time_as_string(time_t time_t_val, char *time_str){
   return strftime(time_str, strlen(time_str), "%c", &time_val_tm);
 }
 
+time_t get_time_now() {
+	struct timespec now;
+	clock_gettime(CLOCK_REALTIME, &now);
+	return now.tv_sec;
+}
+
 char *str2md5(const char *str, int length) {
   int n;
   MD5_CTX c;
@@ -275,13 +281,9 @@ int caching_list_directory(const char *path, dir_entry **list)
 	//debugf("Mutex lock on caching_list_directory=%d", lock);
   pthread_mutex_lock(&dmut);
 	bool new_entry = false;
-	//if (!strcmp(path, "/"))
-  //  path = "";
+	if (!strcmp(path, "/"))
+    path = "";
   
-	//root folder appears with path="", change to "/" so it can be found by childs
-	if (!strcmp(path, ""))
-		  path = "/";
-
 	dir_cache *cw;
   for (cw = dcache; cw; cw = cw->next)
   if (!strcmp(cw->path, path)){
@@ -348,58 +350,6 @@ dir_entry *path_info(const char *path)
 }
 
 
-
-
-//retrieve folder from local cache if exists, otherwise create an entry
-int local_caching_list_directory(const char *path, dir_entry **list)
-{
-	debugf("local_caching_list_directory(%s)", path);
-	//int lock = pthread_mutex_trylock(&dmut);
-	//debugf("Mutex lock on caching_list_directory=%d", lock);
-	pthread_mutex_lock(&dmut);
-	//if (!strcmp(path, "/"))
-	//	path = "";
-	
-	if (!strcmp(path, ""))
-		path = "/";
-
-	dir_cache *cw;
-	for (cw = dcache; cw; cw = cw->next)
-		if (!strcmp(cw->path, path)) {
-			//debugf("Found in list directory %s", cw->path);
-			break;
-		}
-	if (!cw)	{
-		cw = new_cache(path);
-	}
-	else {
-		*list = cw->entries;
-	}
-	cw->entries = *list;
-	pthread_mutex_unlock(&dmut);
-	return 1;
-}
-
-//used to retrieve path from local cache, without downloading from cloud if not in cache
-//new path will be created if does not exist in cache
-dir_entry *local_path_info(const char *path)
-{
-	debugf("local_path_info(%s)", path);
-	char dir[MAX_PATH_SIZE];
-	dir_for(path, dir);
-	dir_entry *tmp;
-	
-	if (!local_caching_list_directory(dir, &tmp))
-		return NULL;
-	/*for (; tmp; tmp = tmp->next)
-	{
-		if (!strcmp(tmp->full_name, path)) {
-			//debugf("FOUND in cache %s", tmp->full_name);
-			return tmp;
-		}
-	}*/
-	return NULL;
-}
 //retrieve folder from local cache if exists, return null if does not exist
 int check_caching_list_directory(const char *path, dir_entry **list)
 {
@@ -455,7 +405,12 @@ dir_entry *check_path_info(const char *path)
 			return tmp;
 		}
 	}
-	debugf("exit 2: check_path_info(%s) %s[CACHE-MISS]", path, KRED);
+	if (!strcmp(path, "/")) {
+		debugf("exit 2: check_path_info(%s) "KYEL "ignoring root [CACHE-MISS]", path);
+	}
+	else {
+		debugf("exit 3: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+	}
 	return NULL;
 }
 

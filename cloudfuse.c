@@ -128,14 +128,14 @@ static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off
 static int cfs_mkdir(const char *path, mode_t mode)
 {
 	debugf(KBLU "cfs_mkdir(%s)", path);
-  if (cloudfs_create_directory(path))
-  {
+	int response = cloudfs_create_directory(path);
+  if (response){
     update_dir_cache(path, 0, 1, 0);
 		debug_list_cache_content();
 		debugf(KBLU "exit 0: cfs_mkdir(%s)", path);
     return 0;
   }
-	debugf(KBLU "exit 1: cfs_mkdir(%s)", path);
+	debugf(KBLU "exit 1: cfs_mkdir(%s) response=%d", path, response);
   return -ENOENT;
 }
 
@@ -223,6 +223,14 @@ void debug_print_flags(int flags) {
 #endif
 
 }
+
+void debug_print_descriptor(struct fuse_file_info *info) {
+	char file_path[MAX_PATH_SIZE];
+	get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
+	debugf(KCYN "cfs_open localfile=[%s] fd=%d", file_path, info->fh);
+	debug_print_flags(info->flags);
+}
+
 // open(download) file from cloud
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
@@ -231,10 +239,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 	int errsv;
   dir_entry *de = path_info(path);
 
-	char file_path[MAX_PATH_SIZE];
-	get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
-	debugf(KCYN "cfs_open localfile=[%s] fd=%d", file_path, info->fh);
-	debug_print_flags(info->flags);
+	debug_print_descriptor(info);
 	
   if (*temp_dir)
   {
@@ -353,24 +358,20 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_read(%s)", path);
+	debug_print_descriptor(info);
 	int result = pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
 	debugf(KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
 	return result;
 }
 
-
-
 static int cfs_flush(const char *path, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_flush(%s)", path);
+	debug_print_descriptor(info);
   openfile *of = (openfile *)(uintptr_t)info->fh;
 	int errsv;
 
   if (of) {
-		char file_path[MAX_PATH_SIZE];
-		get_file_path_from_fd(of->fd, file_path, sizeof(file_path));
-		debugf(KCYN "cfs_flush localfile=[%s] fd=%d", file_path, of->fd);
-
     update_dir_cache(path, cloudfs_file_size(of->fd), 0, 0);
     if (of->flags & O_RDWR || of->flags & O_WRONLY)
     {
@@ -400,6 +401,7 @@ static int cfs_flush(const char *path, struct fuse_file_info *info)
 static int cfs_release(const char *path, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_release(%s)", path);
+	debug_print_descriptor(info);
   close(((openfile *)(uintptr_t)info->fh)->fd);
 	debugf(KBLU "exit: cfs_release(%s)", path);
   return 0;
@@ -437,6 +439,8 @@ static int cfs_ftruncate(const char *path, off_t size, struct fuse_file_info *in
 static int cfs_write(const char *path, const char *buf, size_t length, off_t offset, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_write(%s)", path);
+	
+	debug_print_descriptor(info);
   // FIXME: Potential inconsistent cache update if pwrite fails?
   update_dir_cache(path, offset + length, 0, 0);
 	//int result = pwrite(info->fh, buf, length, offset);
@@ -479,6 +483,7 @@ static int cfs_truncate(const char *path, off_t size)
   return 0;
 }
 
+//todo: called regularly on large copy (via mc), can be optimised (cached)?
 static int cfs_statfs(const char *path, struct statvfs *stat)
 {
   debugf(KBLU "cfs_statfs(%s)", path);
@@ -620,9 +625,9 @@ FuseOptions options = {
 };
 
 ExtraFuseOptions extra_options = {
-	.get_extended_metadata = "false" //true or false
+	.get_extended_metadata = "false",
+	.curl_verbose = "false"
 };
-
 
 int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
@@ -637,7 +642,8 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
     sscanf(arg, " client_secret = %[^\r\n ]", options.client_secret) ||
     sscanf(arg, " refresh_token = %[^\r\n ]", options.refresh_token) ||
 
-		sscanf(arg, " get_extended_metadata = %[^\r\n ]", extra_options.get_extended_metadata)
+		sscanf(arg, " get_extended_metadata = %[^\r\n ]", extra_options.get_extended_metadata) ||
+		sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose)
 		)
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -702,6 +708,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "  temp_dir=[Directory to store temp files]\n");
 
 		fprintf(stderr, "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
+		fprintf(stderr, "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
 
     return 1;
   }
@@ -710,6 +717,7 @@ int main(int argc, char **argv)
 
   cloudfs_verify_ssl(!strcasecmp(options.verify_ssl, "true"));
 	cloudfs_option_get_extended_metadata(!strcasecmp(extra_options.get_extended_metadata, "true"));
+	cloudfs_option_curl_verbose(!strcasecmp(extra_options.curl_verbose, "true"));
 
   cloudfs_set_credentials(options.client_id, options.client_secret, options.refresh_token);
 

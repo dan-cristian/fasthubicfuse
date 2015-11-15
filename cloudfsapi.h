@@ -36,6 +36,7 @@ typedef struct options {
 
 typedef struct extra_options {
 	char get_extended_metadata[OPTION_SIZE];
+	char curl_verbose[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);
@@ -71,8 +72,8 @@ int cloudfs_create_symlink(const char *src, const char *dst);
 int cloudfs_create_directory(const char *label);
 int cloudfs_object_truncate(const char *path, off_t size);
 off_t cloudfs_file_size(int fd);
+int cloudfs_statfs(const char *path, struct statvfs *stat);
 void cloudfs_verify_ssl(int dbg);
 void cloudfs_option_get_extended_metadata(int option);
-int cloudfs_statfs(const char *path, struct statvfs *stat);
-
+void cloudfs_option_curl_verbose(int option);
 #endif
