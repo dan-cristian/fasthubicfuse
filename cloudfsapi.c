@@ -628,9 +628,11 @@ int is_segmented(const char *path)
   return internal_is_segmented(seg_path, object);
 }
 
-
+//returns segmented file properties by parsing and retrieving the folder structure on the cloud
+//added totalsize as parameter to return the file size on list directory for segmented files
+//old implementation returns file size=0 (issue #91)
 int format_segments(const char *path, char * seg_base,  long *segments,
-        long *full_segments, long *remaining, long *size_of_segments)
+        long *full_segments, long *remaining, long *size_of_segments, long *total_size, bool force_parse_segment)
 {
   debugf("format_segments(%s)", path);
   char container[MAX_URL_SIZE] = "";
@@ -648,8 +650,11 @@ int format_segments(const char *path, char * seg_base,  long *segments,
   //dir_entry *de = local_path_info(path);
   dir_entry *de = check_path_info(path);
   if (!de) {
-		debugf(KRED"format_segments file not found, it should be in cache already?");
-		potentially_segmented = false;
+		//when files in folders are first loaded the path will not be yet in cache, so need 
+		//to force segment meta download for segmented files
+		
+		//debugf(KRED"format_segments file not found, should be in cache already?");
+		potentially_segmented = force_parse_segment;
   }
   else {
 		//potentially segmented, assumption is that 0 size files are potentially segmented
@@ -682,25 +687,27 @@ int format_segments(const char *path, char * seg_base,  long *segments,
 
     char *str_size = seg_dir->name;
     snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, str_size);
-		debugf(KMAG"format_segments manifest2(%s)", manifest);
+		debugf(KMAG"format_segments manifest2(%s) size=%s", manifest, str_size);
 		if (!cloudfs_list_directory(manifest, &seg_dir)) {
 			debugf("exit 2: format_segments(%s)", path);
 			return 0;
 		}
 
+		//following folder name actually represents the parent file size
     char *str_segment = seg_dir->name;
     snprintf(seg_path, MAX_URL_SIZE, "%s/%s", manifest, str_segment);
 		debugf(KMAG"format_segments seg_path2(%s)", seg_path);
+		//here is where we get a list with all segment files composing the parent large file
 		if (!cloudfs_list_directory(seg_path, &seg_dir)) {
 			debugf("exit 3: format_segments(%s)", path);
 			return 0;
 		}
 
-    long total_size = strtoll(str_size, NULL, 10);
+    *total_size = strtoll(str_size, NULL, 10);
     *size_of_segments = strtoll(str_segment, NULL, 10);
 
-    *remaining = total_size % *size_of_segments;
-    *full_segments = total_size / *size_of_segments;
+    *remaining = *total_size % *size_of_segments;
+    *full_segments = *total_size / *size_of_segments;
     *segments = *full_segments + (*remaining > 0);
 
     snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%s/%s/",
@@ -710,8 +717,8 @@ int format_segments(const char *path, char * seg_base,  long *segments,
     strncpy(tmp, seg_base, MAX_URL_SIZE);
     snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
 		debugf(KMAG"format_segments seg_base(%s)", seg_base);
-		debugf(KMAG"exit 4: format_segments(%s) size_of_segments=%d remaining=%d, full_segments=%d segments=%d", 
-			path, size_of_segments, remaining, full_segments, segments);
+		debugf(KMAG"exit 4: format_segments(%s) total=%d size_of_segments=%d remaining=%d, full_segments=%d segments=%d", 
+			path, &total_size, &size_of_segments, &remaining, &full_segments, &segments);
     return 1;
   }
 
@@ -917,10 +924,11 @@ int cloudfs_object_write_fp(const char *path, FILE *fp)
   long full_segments;
   long remaining;
   long size_of_segments;
+	long total_size;
 
 	//checks if this file is a segmented one
   if (format_segments(path, seg_base, &segments, &full_segments, &remaining,
-        &size_of_segments)) {
+        &size_of_segments, &total_size, false)) {
 
     rewind(fp);
     fflush(fp);
@@ -979,6 +987,17 @@ void get_file_metadata(dir_entry *de){
 	if (de->size == 0 && !de->isdir){
 		//this can be a potential segmented file, try to read segments size
 		debugf(KMAG"ZERO size file=%s", de->full_name);
+		char seg_base[MAX_URL_SIZE] = "";
+		long segments;
+		long full_segments;
+		long remaining;
+		long size_of_segments;
+		long total_size;
+
+		if (format_segments(de->full_name, seg_base, &segments, &full_segments, &remaining,
+			&size_of_segments, &total_size, true)) {
+			de->size = total_size;
+		}
 	}
 	if (option_get_extended_metadata) {
 		debugf(KCYN "get_file_metadata(%s)", de->full_name);
@@ -1202,9 +1221,10 @@ int cloudfs_delete_object(const char *path)
   long full_segments;
   long remaining;
   long size_of_segments;
+	long total_size;
 
   if (format_segments(path, seg_base, &segments, &full_segments, &remaining,
-        &size_of_segments)) {
+        &size_of_segments, &total_size, false)) {
     int response;
     int i;
     char seg_path[MAX_URL_SIZE] = "";
