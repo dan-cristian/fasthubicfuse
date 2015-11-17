@@ -1,5 +1,6 @@
 #ifndef _COMMONFS_H
 #define _COMMONFS_H
+#include <fuse.h>
 
 typedef enum { false, true } bool;
 #define MAX_PATH_SIZE (1024 + 256 + 3)
@@ -41,10 +42,11 @@ typedef struct dir_entry
   struct timespec atime;
   char *md5sum; //interesting capability for rsync/scrub
   int chmod;
+	int issegmented;
+	time_t accessed_in_cache;//cache support based on access time
   // end change
   int isdir;
   int islink;
-  int issegmented;
   struct dir_entry *next;
 } dir_entry;
 
@@ -54,6 +56,9 @@ typedef struct dir_cache
   char *path;
   dir_entry *entries;
   time_t cached;
+	//added cache support based on access time
+	time_t accessed_in_cache;
+	//end change
   struct dir_cache *next, *prev;
 } dir_cache;
 
@@ -64,6 +69,9 @@ int get_time_as_string(time_t time_t_val, char *time_str);
 time_t get_time_now();
 
 char *str2md5(const char *str, int length);
+void debug_print_descriptor(struct fuse_file_info *info);
+
+void init_dir_entry(dir_entry *de);
 dir_cache *new_cache(const char *path);
 void dir_for(const char *path, char *dir);
 void debug_list_cache_content();

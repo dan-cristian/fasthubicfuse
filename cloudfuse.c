@@ -201,36 +201,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   return 0;
 }
 
-static void get_file_path_from_fd(int fd, char *path, int size_path) {
-	char proc_path[MAX_PATH_SIZE];
-	/* Read out the link to our file descriptor. */
-	sprintf(proc_path, "/proc/self/fd/%d", fd);
-	memset(path, 0, size_path);
-	readlink(proc_path, path, size_path - 1);
-}
 
-void debug_print_flags(int flags) {
-	int accmode, val;
-	accmode = flags & O_ACCMODE;
-	if (accmode == O_RDONLY)				debugf(KRED "read only");
-	else if (accmode == O_WRONLY)   debugf(KRED "write only");
-	else if (accmode == O_RDWR)     debugf(KRED "read write");
-	else debugf(KRED "unknown access mode");
-
-	if (val & O_APPEND)         debugf(KRED ", append");
-	if (val & O_NONBLOCK)       debugf(KRED ", nonblocking");
-#if !defined(_POSIX_SOURCE) && defined(O_SYNC)
-	if (val & O_SYNC)           debugf(KRED ", synchronous writes");
-#endif
-
-}
-
-void debug_print_descriptor(struct fuse_file_info *info) {
-	char file_path[MAX_PATH_SIZE];
-	get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
-	debugf(KCYN "cfs_open localfile=[%s] fd=%d", file_path, info->fh);
-	debug_print_flags(info->flags);
-}
 
 // open(download) file from cloud
 static int cfs_open(const char *path, struct fuse_file_info *info)
@@ -257,6 +228,7 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     char file_path_safe[NAME_MAX];
     get_safe_path(file_path, strlen(file_path), file_path_safe);
 
+		debugf("cfs_open status: try open (%s)", file_path_safe);
     if (access(file_path_safe, F_OK) != -1){
       // file exists
       temp_file = fopen(file_path_safe, "r");
@@ -265,6 +237,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     }
     //FIXME: commented out as condition will not be meet in some odd cases and program will crash
 		else {
+			errsv = errno;
+			debugf("cfs_open status: file not in cache, err=%s", strerror(errsv));
 			//debugf("")
 			//if (!(info->flags & O_WRONLY)) {
 				debugf("opening for write");

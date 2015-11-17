@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include <openssl/md5.h>
 #include <pwd.h>
+#include <fuse.h>
 #include "commonfs.h"
 #include "config.h"
 
@@ -104,6 +105,37 @@ char *str2md5(const char *str, int length) {
   return out;
 }
 
+void get_file_path_from_fd(int fd, char *path, int size_path) {
+	char proc_path[MAX_PATH_SIZE];
+	/* Read out the link to our file descriptor. */
+	sprintf(proc_path, "/proc/self/fd/%d", fd);
+	memset(path, 0, size_path);
+	readlink(proc_path, path, size_path - 1);
+}
+
+void debug_print_flags(int flags) {
+	int accmode, val;
+	accmode = flags & O_ACCMODE;
+	if (accmode == O_RDONLY)				debugf(KRED "read only");
+	else if (accmode == O_WRONLY)   debugf(KRED "write only");
+	else if (accmode == O_RDWR)     debugf(KRED "read write");
+	else debugf(KRED "unknown access mode");
+
+	if (val & O_APPEND)         debugf(KRED ", append");
+	if (val & O_NONBLOCK)       debugf(KRED ", nonblocking");
+#if !defined(_POSIX_SOURCE) && defined(O_SYNC)
+	if (val & O_SYNC)           debugf(KRED ", synchronous writes");
+#endif
+
+}
+
+void debug_print_descriptor(struct fuse_file_info *info) {
+	char file_path[MAX_PATH_SIZE];
+	get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
+	debugf(KCYN "descriptor localfile=[%s] fd=%d", file_path, info->fh);
+	debug_print_flags(info->flags);
+}
+
 void dir_for(const char *path, char *dir)
 {
   strncpy(dir, path, MAX_PATH_SIZE);
@@ -136,6 +168,8 @@ dir_cache *new_cache(const char *path)
   cw->prev = NULL;
   cw->entries = NULL;
   cw->cached = time(NULL);
+	//added cache by access
+	cw->accessed_in_cache = time(NULL);
   if (dcache)
     dcache->prev = cw;
   cw->next = dcache;
@@ -210,6 +244,19 @@ void dir_decache(const char *path)
   pthread_mutex_unlock(&dmut);
 }
 
+void init_dir_entry(dir_entry *de) {
+	de->size = 0;
+	de->next = NULL;
+	de->md5sum = NULL;
+	de->accessed_in_cache = time(NULL);
+	de->last_modified = time(NULL);
+	de->mtime.tv_sec = time(NULL);
+	de->atime.tv_sec = time(NULL);
+	de->ctime.tv_sec = time(NULL);
+	de->mtime.tv_nsec = 0;
+	de->atime.tv_nsec = 0;
+	de->ctime.tv_nsec = 0;
+}
 //check for file in cache, if found size will be updated, if not found and this is a dir, a new dir cache entry is created
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
@@ -234,13 +281,26 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
         }
       }
       de = (dir_entry *)malloc(sizeof(dir_entry));
+			init_dir_entry(de);
+
       de->size = size;
       de->isdir = isdir;
       de->islink = islink;
       de->name = strdup(&path[strlen(cw->path) + 1]);
       de->full_name = strdup(path);
+			/*
       de->md5sum = NULL;
-
+			de->accessed_in_cache = time(NULL);
+			de->last_modified = time(NULL);
+			// utimens change
+			de->mtime.tv_sec = time(NULL);
+			de->atime.tv_sec = time(NULL);
+			de->ctime.tv_sec = time(NULL);
+			de->mtime.tv_nsec = 0;
+			de->atime.tv_nsec = 0;
+			de->ctime.tv_nsec = 0;
+			// change end
+			*/
       if (isdir)
       {
         de->content_type = strdup("application/link");
@@ -253,15 +313,6 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       {
         de->content_type = strdup("application/octet-stream");
       }
-      de->last_modified = time(NULL);
-      // utimens change
-      de->mtime.tv_sec = time(NULL);
-      de->atime.tv_sec = time(NULL);
-      de->ctime.tv_sec = time(NULL);
-      de->mtime.tv_nsec = 0;
-      de->atime.tv_nsec = 0;
-      de->ctime.tv_nsec = 0;
-      // change end
       de->next = cw->entries;
       cw->entries = de;
       if (isdir)
@@ -319,7 +370,7 @@ int caching_list_directory(const char *path, dir_entry **list)
 		debugf("status: caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
 		*list = cw->entries;
 	}
-	//adding new dir file list to global cache, now becomes visible
+	//adding new dir file list to global cache, now the dir becomes visible
   cw->entries = *list;
   pthread_mutex_unlock(&dmut);
 	debugf("exit 2: caching_list_directory(%s)", path);
@@ -394,7 +445,7 @@ dir_entry *check_path_info(const char *path)
 
 	//get parent folder cache entry
 	if (!check_caching_list_directory(dir, &tmp)) {
-		debugf("exit 0: check_path_info(%s) %s[CACHE-MISS]", path, KRED);
+		debugf("exit 0: check_path_info(%s) "KRED"[CACHE-MISS]", path);
 		return NULL;
 	}
 	for (; tmp; tmp = tmp->next)
@@ -449,7 +500,22 @@ void debugf(char *fmt, ...)
 		fputs(KNRM, stderr);
 		putc('\n', stderr);
 		putc('\r', stderr);
-		
+		/*
+		Program received signal SIGSEGV, Segmentation fault.
+		0x00007ffff65c1e2c in _IO_vfprintf_internal (s=<optimized out>, format=<optimized out>, ap=<optimized out>) at vfprintf.c:1642
+		1642    vfprintf.c: No such file or directory.
+		(gdb) back
+		#0  0x00007ffff65c1e2c in _IO_vfprintf_internal (s=<optimized out>, format=<optimized out>, ap=<optimized out>) at vfprintf.c:1642
+		#1  0x00007ffff65c2b61 in buffered_vfprintf (s=s@entry=0x7ffff691b060 <_IO_2_1_stderr_>, format=format@entry=0x4096d8 "Received http code=%d %s %s[HTTP ERR]",
+		args=args@entry=0x7fffffff6718) at vfprintf.c:2348
+		#2  0x00007ffff65bd3de in _IO_vfprintf_internal (s=0x7ffff691b060 <_IO_2_1_stderr_>, format=format@entry=0x4096d8 "Received http code=%d %s %s[HTTP ERR]",
+		ap=ap@entry=0x7fffffff6718) at vfprintf.c:1296
+		#3  0x000000000040827c in debugf (fmt=0x4096d8 "Received http code=%d %s %s[HTTP ERR]") at commonfs.c:447
+		#4  0x0000000000404c4e in send_request_size (method=0x408ebd "PUT",
+		path=0x7aad41 "backup/movies/Action%20War/Tropa.de.Elite.Elite.Squad.2007.blu-ray.x264.720P.DTS-CHD/Tropa.de.Elite.Elite.Squad.2007.blu-ray.x264.720P.DTS-CHD.mkv", fp=0x20, fp@entry=0x0, xmlctx=0xffffffffffffffff, xmlctx@entry=0x0, extra_headers=0x191, file_size=140737326623226, file_size@entry=0, is_segment=0,
+		de_cached_entry=0x0) at cloudfsapi.c:463
+
+		*/
   }
 }
 

@@ -1,6 +1,6 @@
 killall hubicfuse
 git pull origin utime
-make
+make debug
 sudo umount -l /mnt/hubic
 sudo make install
 if [ "$?" == "0" ]; then
