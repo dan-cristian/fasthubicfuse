@@ -28,7 +28,7 @@
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
 
-#define REQUEST_RETRIES 1
+#define REQUEST_RETRIES 4
 
 #define MAX_FILES 10000
 
@@ -116,7 +116,7 @@ static void add_header(curl_slist **headers, const char *name,
   *headers = curl_slist_append(*headers, x_header);
 }
 
-static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *stream)
+static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *dir_entry)
 {
   //debugf("Dispatching response headers");
   char *header = (char *)alloca(size * nmemb + 1);
@@ -272,7 +272,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
                         off_t file_size, int is_segment,
 												dir_entry *de_cached_entry)
 {
-  debugf(KYEL "send_request_size(%s) (%s)", path, method);
+  debugf(KYEL "send_request_size(%s) (%s)", method, path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -386,13 +386,21 @@ static int send_request_size(const char *method, const char *path, void *fp,
       if (is_segment)
       {
 				//fixme: full segment is downloaded also only when size matters (via a simple HEAD)
-        debugf("GET SEGMENT (%s)", orig_path);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+        debugf(KYEL"GET SEGMENT (%s)", orig_path);
+
+				//if (de != NULL) {
+				//	curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
+				//	curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
+				//	curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
+				//}
+				//else {
+					curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+					curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+				//}
       }
       else if (fp)
       {
-        debugf("GET FP (%s)", orig_path);
+        debugf(KYEL"GET FP (%s)", orig_path);
         rewind(fp); // make sure the file is ready for a-writin'
         fflush(fp);
         if (ftruncate(fileno(fp), 0) < 0)
@@ -414,13 +422,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
       }
       else if (xmlctx)
       {
-        debugf("GET XML (%s)", orig_path);
+        debugf(KYEL"GET XML (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
       else {
         //asumming retrieval of headers only
-        debugf("GET HEADERS only(%s)");
+        debugf(KYEL"GET HEADERS only(%s)");
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
@@ -452,7 +460,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_reset(curl);
     return_connection(curl);
 		if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409)) {
-			debugf("exit 0: send_request_size(%s) (%s) %s[HTTP OK]", path, method, KGRN);
+			debugf("exit 0: send_request_size(%s) (%s) "KGRN"[HTTP OK]", orig_path, method);
 			return response;
 		}
     //handle cases when segment is not found
@@ -490,20 +498,22 @@ static int send_request(char *method, const char *path, FILE *fp,
 
 }
 
+//thread that downloads or uploads large file segments
 void *upload_segment(void *seginfo)
 {
   struct segment_info *info = (struct segment_info *)seginfo;
   
   char seg_path[MAX_URL_SIZE] = { 0 };
-
+	//set pointer to the segment start index in the complete large file (several threads will write to same large file)
   fseek(info->fp, info->part * info->segment_size, SEEK_SET);
   setvbuf(info->fp, NULL, _IOFBF, DISK_BUFF_SIZE);
 
   snprintf(seg_path, MAX_URL_SIZE, "%s%08i", info->seg_base, info->part);
   char *encoded = curl_escape(seg_path, 0);
 
-  debugf("Uploading segment=%s path=%s", info->method, seg_path);
+  debugf(KCYN"upload_segment(%s) part=%d size=%d seg_size=%d %s", info->method, info->part, info->size, info->segment_size, seg_path);
 
+	//
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
       info->size, 1, NULL);
 
@@ -521,11 +531,12 @@ void *upload_segment(void *seginfo)
 void run_segment_threads(const char *method, int segments, int full_segments, int remaining,
         FILE *fp, char *seg_base, int size_of_segments)
 {
-    char file_path[PATH_MAX] = { 0 };
-    struct segment_info *info = (struct segment_info *)
-            malloc(segments * sizeof(struct segment_info));
+	debugf("run_segment_threads(%s)", method);
+  char file_path[PATH_MAX] = { 0 };
+  struct segment_info *info = (struct segment_info *)
+          malloc(segments * sizeof(struct segment_info));
 
-    pthread_t *threads = (pthread_t *)malloc(segments * sizeof(pthread_t));
+  pthread_t *threads = (pthread_t *)malloc(segments * sizeof(pthread_t));
 #ifdef __linux__
     snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fileno(fp));
     debugf("On run segment filepath=%s", file_path);
@@ -535,25 +546,27 @@ void run_segment_threads(const char *method, int segments, int full_segments, in
       fprintf(stderr, "couldn't get the path name\n");
 #endif
 
-    int i, ret;
-    for (i = 0; i < segments; i++) {
-      info[i].method = method;
-      info[i].fp = fopen(file_path, method[0] == 'G' ? "r+" : "r");
-      info[i].part = i;
-      info[i].segment_size = size_of_segments;
-      info[i].size = i < full_segments ? size_of_segments : remaining;
-      info[i].seg_base = seg_base;
-      pthread_create(&threads[i], NULL, upload_segment, (void *)&(info[i]));
-      //set a thread name for debug purposes
-      pthread_setname_np(threads[i], "run_segment");
-    }
+  int i, ret;
+  for (i = 0; i < segments; i++) {
+    info[i].method = method;
 
-    for (i = 0; i < segments; i++) {
-      if ((ret = pthread_join(threads[i], NULL)) != 0)
-        fprintf(stderr, "error waiting for thread %d, status = %d\n", i, ret);
-    }
-    free(info);
-    free(threads);
+    info[i].fp = fopen(file_path, method[0] == 'G' ? "r+" : "r");
+    info[i].part = i;
+    info[i].segment_size = size_of_segments;
+    info[i].size = i < full_segments ? size_of_segments : remaining;
+    info[i].seg_base = seg_base;
+    pthread_create(&threads[i], NULL, upload_segment, (void *)&(info[i]));
+    //set a thread name for debug purposes
+    //pthread_setname_np(threads[i], "run_segment");
+  }
+
+  for (i = 0; i < segments; i++) {
+    if ((ret = pthread_join(threads[i], NULL)) != 0)
+      fprintf(stderr, "error waiting for thread %d, status = %d\n", i, ret);
+  }
+  free(info);
+  free(threads);
+	debugf("exit: run_segment_threads(%s)", method);
 }
 
 void split_path(const char *path, char *seg_base, char *container,
@@ -582,6 +595,7 @@ void split_path(const char *path, char *seg_base, char *container,
 	free(string);
 }
 
+//checks on the cloud if this file (seg_path) have an associated segment folder
 int internal_is_segmented(const char *seg_path, const char *object)
 {
   debugf("internal_is_segmented(%s)", seg_path);
@@ -590,13 +604,13 @@ int internal_is_segmented(const char *seg_path, const char *object)
     if (seg_dir && seg_dir->isdir) {
         do {
             if (!strncmp(seg_dir->name, object, MAX_URL_SIZE)) {
-							debugf("exit 1: internal_is_segmented(%s)", seg_path);
+							debugf("exit 1: internal_is_segmented(%s) "KGRN"TRUE", seg_path);
                 return 1;
             }
         } while ((seg_dir = seg_dir->next));
     }
   }
-	debugf("exit 0: internal_is_segmented(%s)", seg_path);
+	debugf("exit 0: internal_is_segmented(%s) "KYEL"FALSE", seg_path);
   return 0;
 }
 
@@ -630,26 +644,27 @@ int format_segments(const char *path, char * seg_base,  long *segments,
   snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
 
   //todo: try to avoid one additional http request for small files
-  int issegmented;
+  bool potentially_segmented;
   //dir_entry *de = local_path_info(path);
   dir_entry *de = check_path_info(path);
   if (!de) {
-    issegmented = -1;
+		debugf(KRED"format_segments file not found, it should be in cache already?");
+		potentially_segmented = false;
   }
   else {
-    if (de->size >= segment_above)
-      issegmented = 1;
-    else
-      issegmented = 0;
+		//potentially segmented, assumption is that 0 size files are potentially segmented
+		//while size>0 is for sure not segmented, so no point in making an expensive HTTP GET call
+		potentially_segmented = de->size == 0 ? true : false;
   }
-  debugf("File segmented=%d", issegmented);
+  debugf("File potentially segmented=%d", potentially_segmented);
   //end change
 
-  if (internal_is_segmented(seg_path, object)) {
+  if (potentially_segmented && internal_is_segmented(seg_path, object)) {
     char manifest[MAX_URL_SIZE];
     dir_entry *seg_dir;
 
     snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, object);
+		debugf(KMAG"format_segments manifest(%s)", manifest);
 		if (!cloudfs_list_directory(manifest, &seg_dir)) {
 			debugf("exit 0: format_segments(%s)", path);
 			return 0;
@@ -659,6 +674,7 @@ int format_segments(const char *path, char * seg_base,  long *segments,
     // the total_size and the segment size as well as the actual objects
     char *timestamp = seg_dir->name;
     snprintf(seg_path, MAX_URL_SIZE, "%s/%s", manifest, timestamp);
+		debugf(KMAG"format_segments seg_path(%s)", seg_path);
 		if (!cloudfs_list_directory(seg_path, &seg_dir)) {
 			debugf("exit 1: format_segments(%s)", path);
 			return 0;
@@ -666,6 +682,7 @@ int format_segments(const char *path, char * seg_base,  long *segments,
 
     char *str_size = seg_dir->name;
     snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, str_size);
+		debugf(KMAG"format_segments manifest2(%s)", manifest);
 		if (!cloudfs_list_directory(manifest, &seg_dir)) {
 			debugf("exit 2: format_segments(%s)", path);
 			return 0;
@@ -673,6 +690,7 @@ int format_segments(const char *path, char * seg_base,  long *segments,
 
     char *str_segment = seg_dir->name;
     snprintf(seg_path, MAX_URL_SIZE, "%s/%s", manifest, str_segment);
+		debugf(KMAG"format_segments seg_path2(%s)", seg_path);
 		if (!cloudfs_list_directory(seg_path, &seg_dir)) {
 			debugf("exit 3: format_segments(%s)", path);
 			return 0;
@@ -691,13 +709,14 @@ int format_segments(const char *path, char * seg_base,  long *segments,
     char tmp[MAX_URL_SIZE];
     strncpy(tmp, seg_base, MAX_URL_SIZE);
     snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
-
-		debugf("exit 4: format_segments(%s)", path);
+		debugf(KMAG"format_segments seg_base(%s)", seg_base);
+		debugf(KMAG"exit 4: format_segments(%s) size_of_segments=%d remaining=%d, full_segments=%d segments=%d", 
+			path, size_of_segments, remaining, full_segments, segments);
     return 1;
   }
 
   else {
-		debugf("exit 5: format_segments(%s)", path);
+		debugf(KMAG"exit 5: format_segments(%s) not segmented?", path);
     return 0;
   }
 }
@@ -899,6 +918,7 @@ int cloudfs_object_write_fp(const char *path, FILE *fp)
   long remaining;
   long size_of_segments;
 
+	//checks if this file is a segmented one
   if (format_segments(path, seg_base, &segments, &full_segments, &remaining,
         &size_of_segments)) {
 
@@ -911,8 +931,14 @@ int cloudfs_object_write_fp(const char *path, FILE *fp)
       abort();
     }
     //fixme: this might be unnecessary as it looks for segments when you only want to read a small file
-    debugf("Checking for segment for file %s", path);
-    run_segment_threads("GET", segments, full_segments, remaining, fp,
+		dir_entry *de = path_info(path);
+		if (de) {
+			debugf(KCYN"cloudfs_object_write_fp status: Checking for segment cached file %s size=%d", path, de->size);
+		}
+		else
+			debugf("cloudfs_object_write_fp status: Checking for segment new file %s", path);
+    //this retrieves the complete file
+		run_segment_threads("GET", segments, full_segments, remaining, fp,
             seg_base, size_of_segments);
 		debugf("exit 0: cloudfs_object_write_fp(%s)", path);
     return 1;
@@ -950,6 +976,10 @@ int cloudfs_object_truncate(const char *path, off_t size)
 
 //get metadata from cloud, like time attribs. create new entry if not cached yet.
 void get_file_metadata(dir_entry *de){
+	if (de->size == 0 && !de->isdir){
+		//this can be a potential segmented file, try to read segments size
+		debugf(KMAG"ZERO size file=%s", de->full_name);
+	}
 	if (option_get_extended_metadata) {
 		debugf(KCYN "get_file_metadata(%s)", de->full_name);
 		//retrieve additional file metadata with a quick HEAD query
@@ -1030,7 +1060,9 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         entry_count++;
         //debugf("Create empty cache entry cloudfs_list_directory for path=%s", path);
         dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
-        de->next = NULL;
+				init_dir_entry(de);
+				/*
+				de->next = NULL;
         de->size = 0;
         de->last_modified = time(NULL);
         // utimens changes, initialise additional fields as empty
@@ -1042,7 +1074,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         de->ctime.tv_nsec = 0;
         de->md5sum = NULL;
         // change end
-        
+        */
         //http://developer.openstack.org/api-ref-objectstorage-v1.html
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
@@ -1073,8 +1105,10 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             
           }
           //debugf("List DIR anode=%s", de->name);
-          if (!strcasecmp((const char *)anode->name, "bytes"))
-            de->size = strtoll(content, NULL, 10);
+					if (!strcasecmp((const char *)anode->name, "bytes")) {
+						//fixme: this returns 0 for large files (segmented), this generates many issues on rsync / copy etc. fix needed to show real size
+						de->size = strtoll(content, NULL, 10);
+					}
           if (!strcasecmp((const char *)anode->name, "content_type"))
           {
             de->content_type = strdup(content);
@@ -1117,7 +1151,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         }
         de->next = *dir_list;
         *dir_list = de;
-        debugf("Added new dir_entry name=%s path=%s", de->name, de->full_name);
+        debugf("Added new dir_entry name=%s path=%s size=%d content=%s dir=%d link=%d", 
+					de->name, de->full_name, de->size, de->content_type, de->isdir, de->islink);
         //attempt to read extended attributes on each dir entry
         get_file_metadata(de);
       }
@@ -1131,9 +1166,9 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
     entry_count = 1;
     debugf("Init cache entry container=[%s]", public_container);
     dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
+		init_dir_entry(de);
     de->name = strdup(public_container);
     struct tm last_modified;
-    de->md5sum = NULL;
     // TODO check what this default time means?
     strptime("1388434648.01238", "%FT%T", &last_modified);
     de->last_modified = mktime(&last_modified);
