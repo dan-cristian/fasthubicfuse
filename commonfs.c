@@ -25,6 +25,7 @@ pthread_mutexattr_t mutex_attr;
 dir_cache *dcache;
 int cache_timeout;
 int debug = 0;
+long fuse_active_opp_count = 0;
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -183,6 +184,7 @@ dir_cache *new_cache(const char *path)
 
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
+	debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
   while (dir_list)
   {
     dir_entry *de = dir_list;
@@ -196,7 +198,8 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
   }
 }
 
-
+//todo: check if the program behaves ok  when decache 
+//is made on a folder that has an operation in progress
 void dir_decache(const char *path)
 {
   dir_cache *cw;
@@ -257,7 +260,8 @@ void init_dir_entry(dir_entry *de) {
 	de->atime.tv_nsec = 0;
 	de->ctime.tv_nsec = 0;
 }
-//check for file in cache, if found size will be updated, if not found and this is a dir, a new dir cache entry is created
+//check for file in cache, if found size will be updated, if not found 
+//and this is a dir, a new dir cache entry is created
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   debugf(KCYN "update_dir_cache(%s)", path);
@@ -288,29 +292,14 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       de->islink = islink;
       de->name = strdup(&path[strlen(cw->path) + 1]);
       de->full_name = strdup(path);
-			/*
-      de->md5sum = NULL;
-			de->accessed_in_cache = time(NULL);
-			de->last_modified = time(NULL);
-			// utimens change
-			de->mtime.tv_sec = time(NULL);
-			de->atime.tv_sec = time(NULL);
-			de->ctime.tv_sec = time(NULL);
-			de->mtime.tv_nsec = 0;
-			de->atime.tv_nsec = 0;
-			de->ctime.tv_nsec = 0;
-			// change end
-			*/
-      if (isdir)
-      {
+			//todo: check if the conditions below are mixed up dir -> link?
+      if (isdir) {
         de->content_type = strdup("application/link");
       }
-      if (islink)
-      {
+      if (islink) {
         de->content_type = strdup("application/directory");
       }
-      else
-      {
+      else {
         de->content_type = strdup("application/octet-stream");
       }
       de->next = cw->entries;
@@ -514,8 +503,6 @@ void debugf(char *fmt, ...)
 		#4  0x0000000000404c4e in send_request_size (method=0x408ebd "PUT",
 		path=0x7aad41 "backup/movies/Action%20War/Tropa.de.Elite.Elite.Squad.2007.blu-ray.x264.720P.DTS-CHD/Tropa.de.Elite.Elite.Squad.2007.blu-ray.x264.720P.DTS-CHD.mkv", fp=0x20, fp@entry=0x0, xmlctx=0xffffffffffffffff, xmlctx@entry=0x0, extra_headers=0x191, file_size=140737326623226, file_size@entry=0, is_segment=0,
 		de_cached_entry=0x0) at cloudfsapi.c:463
-
 		*/
   }
 }
-
