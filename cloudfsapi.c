@@ -616,6 +616,7 @@ int internal_is_segmented(const char *seg_path, const char *object)
 
 int is_segmented(const char *path)
 {
+	debugf("is_segmented(%s)", path);
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
   char seg_base[MAX_URL_SIZE] = "";
@@ -1080,20 +1081,6 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         //debugf("Create empty cache entry cloudfs_list_directory for path=%s", path);
         dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
 				init_dir_entry(de);
-				/*
-				de->next = NULL;
-        de->size = 0;
-        de->last_modified = time(NULL);
-        // utimens changes, initialise additional fields as empty
-        de->mtime.tv_sec = time(NULL);
-        de->atime.tv_sec = time(NULL);
-        de->ctime.tv_sec = time(NULL);
-        de->mtime.tv_nsec = 0;
-        de->atime.tv_nsec = 0;
-        de->ctime.tv_nsec = 0;
-        de->md5sum = NULL;
-        // change end
-        */
         //http://developer.openstack.org/api-ref-objectstorage-v1.html
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
@@ -1161,6 +1148,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             ((strstr(de->content_type, "application/link") != NULL));
         if (de->isdir)
         {
+					//i guess this will remove a file in cache which is not found on the disk
           if (!strncasecmp(de->name, last_subdir, sizeof(last_subdir)))
           {
             cloudfs_free_dir_list(de);

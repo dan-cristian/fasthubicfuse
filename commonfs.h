@@ -11,7 +11,8 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
 #define HEADER_TEXT_CTIME "X-Object-Meta-Ctime"
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
-#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
+//#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
+#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse_%s"
 
 #define KNRM  "\x1B[0m"
 #define KRED  "\x1B[31m"
@@ -70,6 +71,7 @@ time_t get_time_now();
 
 char *str2md5(const char *str, int length);
 void debug_print_descriptor(struct fuse_file_info *info);
+int get_safe_cache_file_path(const char *file_path, char *file_path_safe, char *temp_dir);
 
 void init_dir_entry(dir_entry *de);
 dir_cache *new_cache(const char *path);

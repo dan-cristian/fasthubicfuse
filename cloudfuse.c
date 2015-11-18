@@ -18,7 +18,7 @@
 #include "cloudfsapi.h"
 #include "config.h"
 
-static char *temp_dir;
+extern char *temp_dir;
 
 extern pthread_mutex_t dmut;
 extern pthread_mutexattr_t mutex_attr;
@@ -154,23 +154,6 @@ static int cfs_mkdir(const char *path, mode_t mode)
 	return -ENOENT;
 }
 
-static int get_safe_path(const char *file_path, int file_path_len, char *file_path_safe){
-  //the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
-  //solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
-  char *md5_path = str2md5(file_path, file_path_len);
-  int md5len = strlen(md5_path);
-  size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
-  strncpy(file_path_safe, file_path, safe_len_prefix);
-	strncpy(file_path_safe+safe_len_prefix, md5_path, md5len);
-  //strcat(file_path_safe, md5_path);
-  //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
-  file_path_safe[safe_len_prefix + md5len - 1] = '\0';
-	debugf("f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
-		file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
-  free(md5_path);
-  return strlen(file_path_safe);
-}
-
 static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info)
 {
   debugf(KBLU "cfs_create(%s)", path);
@@ -178,16 +161,16 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
 	int errsv;
 
   if (*temp_dir) {
-    char tmp_path[PATH_MAX];
+    /*char tmp_path[PATH_MAX];
     strncpy(tmp_path, path, PATH_MAX);
     char *pch;
     while((pch = strchr(tmp_path, '/'))) {
       *pch = '.';
-    }
-    char file_path[PATH_MAX] = "";
-    snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
+    }*/
+    //char file_path[PATH_MAX] = "";
+    //snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX] = "";
-    get_safe_path(file_path, strlen(file_path), file_path_safe);
+		get_safe_cache_file_path(path, file_path_safe, temp_dir);
     temp_file = fopen(file_path_safe, "w+b");
 		errsv = errno;
     if (temp_file == NULL){
@@ -197,6 +180,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   }
   else {
     temp_file = tmpfile();
+		errsv = errno;
     if (temp_file == NULL){
       debugf(KRED "Cannot open tmp file for path %s.error %s\n", path, strerror(errsv));
       //return -EIO;
@@ -205,7 +189,6 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
   openfile *of = (openfile *)malloc(sizeof(openfile));
   of->fd = dup(fileno(temp_file));
   fclose(temp_file);
-	errsv = errno;
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   update_dir_cache(path, 0, 0, 0);
@@ -230,18 +213,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 	
   if (*temp_dir)
   {
-    char tmp_path[PATH_MAX];
-    strncpy(tmp_path, path, PATH_MAX);
-
-    char *pch;
-    while((pch = strchr(tmp_path, '/'))) {
-      *pch = '.';
-    }
-
-    char file_path[PATH_MAX];
-    snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
     char file_path_safe[NAME_MAX];
-    get_safe_path(file_path, strlen(file_path), file_path_safe);
+		get_safe_cache_file_path(path, file_path_safe, temp_dir);
 
 		debugf("cfs_open status: try open (%s)", file_path_safe);
     if (access(file_path_safe, F_OK) != -1){
