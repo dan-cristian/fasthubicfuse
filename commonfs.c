@@ -225,19 +225,23 @@ dir_cache *new_cache(const char *path)
 //is made on a folder that has an operation in progress
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
-	debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
-  while (dir_list) {
-    dir_entry *de = dir_list;
-    dir_list = dir_list->next;
-		//todo: remove file from disk cache
-		delete_file(de->full_name);
-    free(de->name);
-    free(de->full_name);
-    free(de->content_type);
-    //TODO free all added fields
-    free(de->md5sum);
-    free(de);
-  }
+	if (dir_list->full_name != NULL) {
+		debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
+		while (dir_list) {
+			dir_entry *de = dir_list;
+			dir_list = dir_list->next;
+			//todo: remove file from disk cache
+			delete_file(de->full_name);
+			free(de->name);
+			free(de->full_name);
+			free(de->content_type);
+			//TODO free all added fields
+			free(de->md5sum);
+			free(de);
+		}
+	}
+	else
+		debugf(KRED"cloudfs_free_dir_list(NULL)");
 }
 
 
