@@ -24,6 +24,7 @@ extern pthread_mutex_t dmut;
 extern pthread_mutexattr_t mutex_attr;
 extern int cache_timeout;
 extern int option_cache_statfs_timeout;
+extern long fuse_active_opp_count;
 
 typedef struct
 {
@@ -34,7 +35,8 @@ typedef struct
 // updated to support utimens
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
-  debugf(KBLU "cfs_getattr(%s)", path);
+	fuse_active_opp_count++;
+  debugf(KBLU "cfs_getattr(%s):%d", path, fuse_active_opp_count);
   stbuf->st_uid = geteuid();
   stbuf->st_gid = getegid();
   if (!strcmp(path, "/"))
@@ -43,14 +45,16 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
     stbuf->st_nlink = 2;
 		debug_list_cache_content();
 		debugf(KBLU "exit 0: cfs_getattr(%s)", path);
-    return 0;
+		fuse_active_opp_count--;
+		return 0;
   }
 	//get file. if not in cache will be downloaded.
   dir_entry *de = path_info(path);
   if (!de) {
 		debug_list_cache_content();
-		debugf(KBLU "exit 1: cfs_getattr(%s)", path);
-    return -ENOENT;
+		debugf(KRED "exit 1: cfs_getattr(%s)", path);
+		fuse_active_opp_count--;
+		return -ENOENT;
   }
   else {
     //debugf("On getattr found cache for %s ctime=%li.%li mtime=%li.%li atime=%li.%li", path,
@@ -89,11 +93,13 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   }
 	debug_list_cache_content();
 	debugf(KBLU "exit 2: cfs_getattr(%s)", path);
-  return 0;
+	fuse_active_opp_count--;
+	return 0;
 }
 
 static int cfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_fgetattr(%s)", path);
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (of)
@@ -102,19 +108,23 @@ static int cfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_i
     stbuf->st_mode = S_IFREG | 0666;
     stbuf->st_nlink = 1;
 		debugf(KBLU "exit 0: cfs_fgetattr(%s)", path);
+		fuse_active_opp_count--;
     return 0;
   }
-	debugf(KBLU "exit 1: cfs_fgetattr(%s)", path);
+	debugf(KRED "exit 1: cfs_fgetattr(%s)", path);
+	fuse_active_opp_count--;
   return -ENOENT;
 }
 
 static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off_t offset, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_readdir(%s)", path);
   dir_entry *de;
 	if (!caching_list_directory(path, &de)) {
 		debug_list_cache_content();
-		debugf(KBLU "exit 0: cfs_readdir(%s)", path);
+		debugf(KRED "exit 0: cfs_readdir(%s)", path);
+		fuse_active_opp_count--;
 		return -ENOLINK;
 	}
   filldir(buf, ".", NULL, 0);
@@ -123,21 +133,25 @@ static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off
     filldir(buf, de->name, NULL, 0);
 	debug_list_cache_content();
 	debugf(KBLU "exit 1: cfs_readdir(%s)", path);
+	fuse_active_opp_count--;
 	return 0;
 }
 
 static int cfs_mkdir(const char *path, mode_t mode)
 {
+	fuse_active_opp_count++;
 	debugf(KBLU "cfs_mkdir(%s)", path);
 	int response = cloudfs_create_directory(path);
   if (response){
     update_dir_cache(path, 0, 1, 0);
 		debug_list_cache_content();
 		debugf(KBLU "exit 0: cfs_mkdir(%s)", path);
+		fuse_active_opp_count--;
     return 0;
   }
-	debugf(KBLU "exit 1: cfs_mkdir(%s) response=%d", path, response);
-  return -ENOENT;
+	debugf(KRED "exit 1: cfs_mkdir(%s) response=%d", path, response);
+	fuse_active_opp_count--;
+	return -ENOENT;
 }
 
 static int get_safe_path(const char *file_path, int file_path_len, char *file_path_safe){
@@ -206,6 +220,7 @@ static int cfs_create(const char *path, mode_t mode, struct fuse_file_info *info
 // open(download) file from cloud
 static int cfs_open(const char *path, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_open(%s)", path);
   FILE *temp_file = NULL;
 	int errsv;
@@ -271,7 +286,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 				{
 					fclose(temp_file);
 					debug_list_cache_content();
-					debugf(KBLU "exit 0: cfs_open(%s)", path);
+					debugf(KRED "exit 0: cfs_open(%s)", path);
+					fuse_active_opp_count--;
 					return -ENOENT;
 				}
 				/*}
@@ -295,7 +311,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       {
         fclose(temp_file);
 				debug_list_cache_content();
-				debugf(KBLU "exit 1: cfs_open(%s)", path);
+				debugf(KRED"exit 1: cfs_open(%s)", path);
+				fuse_active_opp_count--;
         return -ENOENT;
       }
     }
@@ -303,7 +320,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
   if (temp_file == NULL){
 		debug_list_cache_content();
-		debugf(KBLU "exit 2: cfs_open(%s)", path);
+		debugf(KRED "exit 2: cfs_open(%s)", path);
+		fuse_active_opp_count--;
     return -ENOENT;
   }
   else {
@@ -314,7 +332,8 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
       //FIXME: potential leak if free not used?
       free(of);
 			debug_list_cache_content();
-			debugf(KBLU "exit 3: cfs_open(%s)", path);
+			debugf(KRED "exit 3: cfs_open(%s)", path);
+			fuse_active_opp_count--;
       return -ENOENT;
     }
     fclose(temp_file);
@@ -326,21 +345,25 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
     //FIXME: potential leak if free(of) not used? although if free(of) is used will generate bad descriptor errors
 		debug_list_cache_content();
 		debugf(KBLU "exit 4: cfs_open(%s)", path);
+		fuse_active_opp_count--;
     return 0;
   }
 }
 
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_read(%s)", path);
 	debug_print_descriptor(info);
 	int result = pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
 	debugf(KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
+	fuse_active_opp_count--;
 	return result;
 }
 
 static int cfs_flush(const char *path, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_flush(%s)", path);
 	debug_print_descriptor(info);
   openfile *of = (openfile *)(uintptr_t)info->fh;
@@ -358,7 +381,8 @@ static int cfs_flush(const char *path, struct fuse_file_info *info)
 				{
 					fclose(fp);
 					errsv = errno;
-					debugf(KBLU "exit 0: cfs_flush(%s) result=%d:%s", path, errsv, strerror(errno));
+					debugf(KRED"exit 0: cfs_flush(%s) result=%d:%s", path, errsv, strerror(errno));
+					fuse_active_opp_count--;
 					return -ENOENT;
 				}
 				fclose(fp);
@@ -370,16 +394,19 @@ static int cfs_flush(const char *path, struct fuse_file_info *info)
     }
   }
 	debugf(KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv, strerror(errno));
-  return 0;
+	fuse_active_opp_count--;
+	return 0;
 }
 
 static int cfs_release(const char *path, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_release(%s)", path);
 	debug_print_descriptor(info);
   close(((openfile *)(uintptr_t)info->fh)->fd);
 	debugf(KBLU "exit: cfs_release(%s)", path);
-  return 0;
+	fuse_active_opp_count--;
+	return 0;
 }
 
 static int cfs_rmdir(const char *path)
@@ -413,6 +440,7 @@ static int cfs_ftruncate(const char *path, off_t size, struct fuse_file_info *in
 
 static int cfs_write(const char *path, const char *buf, size_t length, off_t offset, struct fuse_file_info *info)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_write(%s)", path);
 	
 	debug_print_descriptor(info);
@@ -424,6 +452,7 @@ static int cfs_write(const char *path, const char *buf, size_t length, off_t off
 	int errsv = errno;
 	//debug_list_cache_content();
 	debugf(KBLU "exit: cfs_write(%s) result=%d:%s", path, errsv, strerror(errsv));
+	fuse_active_opp_count--;
 	return result;
 }
 
@@ -461,13 +490,16 @@ static int cfs_truncate(const char *path, off_t size)
 //todo: called regularly on large copy (via mc), can be optimised (cached)?
 static int cfs_statfs(const char *path, struct statvfs *stat)
 {
+	fuse_active_opp_count++;
   debugf(KBLU "cfs_statfs(%s)", path);
   if (cloudfs_statfs(path, stat)){
 		debugf(KBLU "exit 0: cfs_statfs(%s)", path);
+		fuse_active_opp_count--;
     return 0;
   }
 	else {
-		debugf(KBLU "exit 1: cfs_statfs(%s)", path);
+		debugf(KRED"exit 1: cfs_statfs(%s)", path);
+		fuse_active_opp_count--;
 		return -EIO;
 	}
 }

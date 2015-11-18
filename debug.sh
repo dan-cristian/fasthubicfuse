@@ -5,7 +5,7 @@ sudo umount -l /mnt/hubic
 sudo make install
 if [ "$?" == "0" ]; then
 #hubicfuse /mnt/hubic -o noauto_cache,sync_read,allow_other -f
-echo run | gdb --args hubicfuse /mnt/hubic -o noauto_cache,sync_read,allow_other -f
+gdb --args hubicfuse /mnt/hubic -o noauto_cache,sync_read,allow_other -f
 #gdbserver :12345 hubicfuse /mnt/hubic -o noauto_cache,sync_read,allow_other -f
 #standard test
 #valgrind  -v --suppressions=test/valgrind-suppressions-all.supp --tool=memcheck --leak-check=yes --track-origins=yes  hubicfuse /mnt/hubic -o noauto_cache,sync_read,allow_other -f
