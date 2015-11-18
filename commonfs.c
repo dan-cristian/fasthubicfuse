@@ -17,12 +17,14 @@
 #include <openssl/md5.h>
 #include <pwd.h>
 #include <fuse.h>
+#include <limits.h>
 #include "commonfs.h"
 #include "config.h"
 
 pthread_mutex_t dmut;
 pthread_mutexattr_t mutex_attr;
 dir_cache *dcache;
+char *temp_dir;
 int cache_timeout;
 int debug = 0;
 long fuse_active_opp_count = 0;
@@ -106,6 +108,35 @@ char *str2md5(const char *str, int length) {
   return out;
 }
 
+
+int get_safe_cache_file_path(const char *path, char *file_path_safe, char *temp_dir) {
+	char tmp_path[PATH_MAX];
+	strncpy(tmp_path, path, PATH_MAX);
+	char *pch;
+	while ((pch = strchr(tmp_path, '/'))) {
+		*pch = '.';
+	}
+	char file_path[PATH_MAX] = "";
+	//snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
+	snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, tmp_path);
+	int file_path_len = strlen(file_path);
+
+	//the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
+	//solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
+	char *md5_path = str2md5(file_path, file_path_len);
+	int md5len = strlen(md5_path);
+	size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
+	strncpy(file_path_safe, file_path, safe_len_prefix);
+	strncpy(file_path_safe + safe_len_prefix, md5_path, md5len);
+	//strcat(file_path_safe, md5_path);
+	//sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
+	file_path_safe[safe_len_prefix + md5len - 1] = '\0';
+	debugf("f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
+		file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
+	free(md5_path);
+	return strlen(file_path_safe);
+}
+
 void get_file_path_from_fd(int fd, char *path, int size_path) {
 	char proc_path[MAX_PATH_SIZE];
 	/* Read out the link to our file descriptor. */
@@ -160,6 +191,15 @@ void debug_list_cache_content() {
 	}
 }
 
+int delete_file(char *path) {
+	debugf(KRED"delete_file(%s)", path);
+	char file_path_safe[NAME_MAX] = "";
+	get_safe_cache_file_path(path, file_path_safe, temp_dir);
+	int result = unlink(file_path_safe);
+	debugf(KRED"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
+	return result;
+}
+
 //adding a directory in cache
 dir_cache *new_cache(const char *path)
 {
@@ -181,14 +221,16 @@ dir_cache *new_cache(const char *path)
 }
 
 
-
+//todo: check if the program behaves ok  when free_dir 
+//is made on a folder that has an operation in progress
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
 	debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
-  while (dir_list)
-  {
+  while (dir_list) {
     dir_entry *de = dir_list;
     dir_list = dir_list->next;
+		//todo: remove file from disk cache
+		delete_file(de->full_name);
     free(de->name);
     free(de->full_name);
     free(de->content_type);
@@ -198,8 +240,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
   }
 }
 
-//todo: check if the program behaves ok  when decache 
-//is made on a folder that has an operation in progress
+
 void dir_decache(const char *path)
 {
   dir_cache *cw;
