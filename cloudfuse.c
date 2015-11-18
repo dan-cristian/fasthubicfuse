@@ -340,7 +340,7 @@ static int cfs_flush(const char *path, struct fuse_file_info *info)
   debugf(KBLU "cfs_flush(%s)", path);
 	debug_print_descriptor(info);
   openfile *of = (openfile *)(uintptr_t)info->fh;
-	int errsv;
+	int errsv = 0;
 
   if (of) {
     update_dir_cache(path, cloudfs_file_size(of->fd), 0, 0);
