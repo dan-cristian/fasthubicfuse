@@ -21,7 +21,7 @@
 #include "commonfs.h"
 #include "config.h"
 
-pthread_mutex_t dmut;
+pthread_mutex_t dcachemut;
 pthread_mutexattr_t mutex_attr;
 dir_cache *dcache;
 char *temp_dir;
@@ -131,8 +131,8 @@ int get_safe_cache_file_path(const char *path, char *file_path_safe, char *temp_
 	//strcat(file_path_safe, md5_path);
 	//sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
 	file_path_safe[safe_len_prefix + md5len - 1] = '\0';
-	debugf("f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
-		file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
+	//debugf("f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
+	//	file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
 	free(md5_path);
 	return strlen(file_path_safe);
 }
@@ -225,23 +225,20 @@ dir_cache *new_cache(const char *path)
 //is made on a folder that has an operation in progress
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
-	if (dir_list->full_name != NULL) {
-		debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
-		while (dir_list) {
-			dir_entry *de = dir_list;
-			dir_list = dir_list->next;
-			//todo: remove file from disk cache
-			delete_file(de->full_name);
-			free(de->name);
-			free(de->full_name);
-			free(de->content_type);
-			//TODO free all added fields
-			free(de->md5sum);
-			free(de);
-		}
+	//check for NULL as dir might be already removed from cache by other thread
+	debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
+	while (dir_list) {
+		dir_entry *de = dir_list;
+		dir_list = dir_list->next;
+		//todo: remove file from disk cache
+		delete_file(de->full_name);
+		free(de->name);
+		free(de->full_name);
+		free(de->content_type);
+		//TODO free all added fields
+		free(de->md5sum);
+		free(de);
 	}
-	else
-		debugf(KRED"cloudfs_free_dir_list(NULL)");
 }
 
 
@@ -249,7 +246,7 @@ void dir_decache(const char *path)
 {
   dir_cache *cw;
 	debugf(KCYN "dir_decache(%s)", path);
-  pthread_mutex_lock(&dmut);
+  pthread_mutex_lock(&dcachemut);
   dir_entry *de, *tmpde;
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
@@ -289,10 +286,11 @@ void dir_decache(const char *path)
       }
     }
   }
-  pthread_mutex_unlock(&dmut);
+  pthread_mutex_unlock(&dcachemut);
 }
 
-void init_dir_entry(dir_entry *de) {
+dir_entry* init_dir_entry() {
+	dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
 	de->size = 0;
 	de->next = NULL;
 	de->md5sum = NULL;
@@ -304,13 +302,14 @@ void init_dir_entry(dir_entry *de) {
 	de->mtime.tv_nsec = 0;
 	de->atime.tv_nsec = 0;
 	de->ctime.tv_nsec = 0;
+	return de;
 }
 //check for file in cache, if found size will be updated, if not found 
 //and this is a dir, a new dir cache entry is created
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
   debugf(KCYN "update_dir_cache(%s)", path);
-  pthread_mutex_lock(&dmut);
+  pthread_mutex_lock(&dcachemut);
   dir_cache *cw;
   dir_entry *de;
   char dir[MAX_PATH_SIZE];
@@ -324,14 +323,13 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
         if (!strcmp(de->full_name, path))
         {
           de->size = size;
-          pthread_mutex_unlock(&dmut);
+          pthread_mutex_unlock(&dcachemut);
 					debugf("exit 0: update_dir_cache(%s)", path);
           return;
         }
       }
-      de = (dir_entry *)malloc(sizeof(dir_entry));
-			init_dir_entry(de);
-
+      //de = (dir_entry *)malloc(sizeof(dir_entry));
+			de = init_dir_entry();
       de->size = size;
       de->isdir = isdir;
       de->islink = islink;
@@ -355,16 +353,16 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
     }
   }
 	debugf("exit 1: update_dir_cache(%s)", path);
-  pthread_mutex_unlock(&dmut);
+  pthread_mutex_unlock(&dcachemut);
 }
 
 //returns first file entry in linked list. if not in cache will be downloaded.
 int caching_list_directory(const char *path, dir_entry **list)
 {
 	debugf("caching_list_directory(%s)", path);
-	//int lock = pthread_mutex_trylock(&dmut);
+	//int lock = pthread_mutex_trylock(&dcachemut);
 	//debugf("Mutex lock on caching_list_directory=%d", lock);
-  pthread_mutex_lock(&dmut);
+  pthread_mutex_lock(&dcachemut);
 	bool new_entry = false;
 	if (!strcmp(path, "/"))
     path = "";
@@ -375,12 +373,11 @@ int caching_list_directory(const char *path, dir_entry **list)
     //debugf("Found in list directory %s", cw->path);
     break;
   }
-  if (!cw)
-  {
+  if (!cw) {
 		//trying to download this entry from cloud, list will point to cached or downloaded entries
     if (!cloudfs_list_directory(path, list)){
 			//download was not ok
-      pthread_mutex_unlock(&dmut);
+      pthread_mutex_unlock(&dcachemut);
 			debugf("exit 0: caching_list_directory(%s) "KRED"[CACHE-DIR-MISS]", path);
       return  0;
     }
@@ -392,7 +389,7 @@ int caching_list_directory(const char *path, dir_entry **list)
   {
     if (!cloudfs_list_directory(path, list)){
       //mutex unlock was forgotten?
-      pthread_mutex_unlock(&dmut);
+      pthread_mutex_unlock(&dcachemut);
 			debugf("exit 1: caching_list_directory(%s)", path);
       return  0;
     }
@@ -404,9 +401,9 @@ int caching_list_directory(const char *path, dir_entry **list)
 		debugf("status: caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
 		*list = cw->entries;
 	}
-	//adding new dir file list to global cache, now the dir becomes visible
+	//adding new dir file list to global cache, now this dir becomes visible in cache
   cw->entries = *list;
-  pthread_mutex_unlock(&dmut);
+  pthread_mutex_unlock(&dcachemut);
 	debugf("exit 2: caching_list_directory(%s)", path);
   return 1;
 }
@@ -422,8 +419,7 @@ dir_entry *path_info(const char *path)
 		return NULL;
 	}
 	//iterate in file list obtained from cache or downloaded
-	for (; tmp; tmp = tmp->next)
-	{
+	for (; tmp; tmp = tmp->next) {
 		if (!strcmp(tmp->full_name, path)) {
 			//debugf("FOUND in cache %s", tmp->full_name);
 			debugf("exit 1: path_info(%s) %s[CACHE-FILE-HIT]", path, KGRN);
@@ -439,9 +435,9 @@ dir_entry *path_info(const char *path)
 int check_caching_list_directory(const char *path, dir_entry **list)
 {
 	debugf("check_caching_list_directory(%s)", path);
-	//int lock = pthread_mutex_trylock(&dmut);
+	//int lock = pthread_mutex_trylock(&dcachemut);
 	//debugf("Mutex lock on caching_list_directory=%d", lock);
-	pthread_mutex_lock(&dmut);
+	pthread_mutex_lock(&dcachemut);
 	if (!strcmp(path, "/"))
 		path = "";
 	dir_cache *cw;
@@ -450,11 +446,11 @@ int check_caching_list_directory(const char *path, dir_entry **list)
 			//debugf("Found in list directory %s", cw->path);
 			*list = cw->entries;
 			//cw->entries = *list;
-			pthread_mutex_unlock(&dmut);
+			pthread_mutex_unlock(&dcachemut);
 			debugf("exit 0: check_caching_list_directory(%s) %s[CACHE-DIR-HIT]", path, KGRN);
 			return 1;
 		}
-	pthread_mutex_unlock(&dmut);
+	pthread_mutex_unlock(&dcachemut);
 	debugf("exit 1: check_caching_list_directory(%s) %s[CACHE-DIR-MISS]", path, KRED);
 	return 0;
 }

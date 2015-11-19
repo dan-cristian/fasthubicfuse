@@ -20,7 +20,7 @@
 
 extern char *temp_dir;
 
-extern pthread_mutex_t dmut;
+extern pthread_mutex_t dcachemut;
 extern pthread_mutexattr_t mutex_attr;
 extern int cache_timeout;
 extern int option_cache_statfs_timeout;
@@ -52,7 +52,7 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   dir_entry *de = path_info(path);
   if (!de) {
 		debug_list_cache_content();
-		debugf(KRED "exit 1: cfs_getattr(%s)", path);
+		debugf(KRED "exit 1: cfs_getattr(%s) not-in-cache", path);
 		fuse_active_opp_count--;
 		return -ENOENT;
   }
@@ -640,7 +640,7 @@ void interrupt_handler(int sig) {
   cloudfs_free();
   //TODO: clear dir cache
 
-  pthread_mutex_destroy(&dmut);
+  pthread_mutex_destroy(&dcachemut);
   exit(0);
 }
 
@@ -753,6 +753,6 @@ int main(int argc, char **argv)
 
 	pthread_mutexattr_init(&mutex_attr);
 	pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
-  pthread_mutex_init(&dmut, &mutex_attr);
+  pthread_mutex_init(&dcachemut, &mutex_attr);
   return fuse_main(args.argc, args.argv, &cfs_oper, &options);
 }
