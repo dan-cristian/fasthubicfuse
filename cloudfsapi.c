@@ -1172,8 +1172,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
   else if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url) {
     entry_count = 1;
     debugf("Init cache entry container=[%s]", public_container);
-    dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
-		init_dir_entry(de);
+    //dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
+		dir_entry *de = init_dir_entry();
     de->name = strdup(public_container);
     struct tm last_modified;
     // TODO check what this default time means?

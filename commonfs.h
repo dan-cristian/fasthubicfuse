@@ -73,7 +73,7 @@ char *str2md5(const char *str, int length);
 void debug_print_descriptor(struct fuse_file_info *info);
 int get_safe_cache_file_path(const char *file_path, char *file_path_safe, char *temp_dir);
 
-void init_dir_entry(dir_entry *de);
+dir_entry *init_dir_entry();
 dir_cache *new_cache(const char *path);
 void dir_for(const char *path, char *dir);
 void debug_list_cache_content();
