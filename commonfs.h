@@ -59,6 +59,7 @@ typedef struct dir_cache
   time_t cached;
 	//added cache support based on access time
 	time_t accessed_in_cache;
+	bool was_deleted;
 	//end change
   struct dir_cache *next, *prev;
 } dir_cache;
