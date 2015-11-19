@@ -211,6 +211,7 @@ dir_cache *new_cache(const char *path)
   cw->cached = time(NULL);
 	//added cache by access
 	cw->accessed_in_cache = time(NULL);
+	cw->was_deleted = false;
   if (dcache)
     dcache->prev = cw;
   cw->next = dcache;
@@ -368,11 +369,26 @@ int caching_list_directory(const char *path, dir_entry **list)
     path = "";
   
 	dir_cache *cw;
-  for (cw = dcache; cw; cw = cw->next)
-  if (!strcmp(cw->path, path)){
-    //debugf("Found in list directory %s", cw->path);
-    break;
-  }
+	for (cw = dcache; cw; cw = cw->next) {
+		if (cw->was_deleted == true) {
+			debugf(KMAG"caching_list_directory status: dir(%s) is empty as cached expired, reload from cloud", cw->path);
+			if (!cloudfs_list_directory(cw->path, list)) {
+				debugf(KMAG"caching_list_directory status: cannot reload dir(%s)", cw->path);
+			}
+			else {
+				debugf(KMAG"caching_list_directory status: reloaded dir(%s)", cw->path);
+				//cw->entries = *list;
+				cw->was_deleted = false;
+				cw->cached = time(NULL);
+			}
+		}
+		if (cw->was_deleted == false) {
+			if (!strcmp(cw->path, path)) {
+				//debugf("Found in list directory %s", cw->path);
+				break;
+			}
+		}
+	}
   if (!cw) {
 		//trying to download this entry from cloud, list will point to cached or downloaded entries
     if (!cloudfs_list_directory(path, list)){
@@ -393,8 +409,11 @@ int caching_list_directory(const char *path, dir_entry **list)
 			debugf("exit 1: caching_list_directory(%s)", path);
       return  0;
     }
+		//fixme: this frees dir subentries but leaves the dir parent entry, this confuses path_info
+		//which believes this dir has no entries
     cloudfs_free_dir_list(cw->entries);
-    cw->cached = time(NULL);
+		cw->was_deleted = true;
+		cw->cached = time(NULL);
 		debugf("status: caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
   }
 	else {
@@ -445,7 +464,6 @@ int check_caching_list_directory(const char *path, dir_entry **list)
 		if (!strcmp(cw->path, path)) {
 			//debugf("Found in list directory %s", cw->path);
 			*list = cw->entries;
-			//cw->entries = *list;
 			pthread_mutex_unlock(&dcachemut);
 			debugf("exit 0: check_caching_list_directory(%s) %s[CACHE-DIR-HIT]", path, KGRN);
 			return 1;

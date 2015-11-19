@@ -1400,7 +1400,7 @@ int safe_json_string(json_object *jobj, char *buffer, char *name)
     }
 
   if (!result)
-    debugf("HUBIC cannot get json field '%s'\n", name);
+    debugf(KRED"HUBIC cannot get json field '%s'\n", name);
 
   return result;
 }
