@@ -1079,8 +1079,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
       {
         entry_count++;
         //debugf("Create empty cache entry cloudfs_list_directory for path=%s", path);
-        dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
-				init_dir_entry(de);
+        //dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
+				dir_entry *de = init_dir_entry();
         //http://developer.openstack.org/api-ref-objectstorage-v1.html
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
