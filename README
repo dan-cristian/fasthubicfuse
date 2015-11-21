@@ -95,7 +95,7 @@ Recent additions/fixes (from https://github.com/dan-cristian):
 	2. Large files (segmented) have correct size listed (was 0 before).
 	3. Multiple speed improvements, minimised the number of HTTP calls and added more caching features.
 	4. Fixed several segmentation faults.
-	5. Cached files are deleted on cache expiration.
+	5. Cached files are deleted on cache expiration when using a custom temp folder.
 	6. Files copies have attributes preserved.
 	7. Working well with rsync due to mtime support and proper copy operations.
 	8. Major code refactoring, code documentation, extensive debugging, additional config options
