@@ -5,14 +5,24 @@
 typedef enum { false, true } bool;
 #define MAX_PATH_SIZE (1024 + 256 + 3)
 #define THREAD_NAMELEN 16
+// 64 bit time + nanoseconds
+#define TIME_CHARS 32
+#define DBG_LEVEL_NORM 0
+#define DBG_LEVEL_EXT 1
+
 
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
 #define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
 #define HEADER_TEXT_CTIME "X-Object-Meta-Ctime"
+#define HEADER_TEXT_MTIME_DISPLAY "X-Object-Meta-Mtime-Display"
+#define HEADER_TEXT_ATIME_DISPLAY "X-Object-Meta-Atime-Display"
+#define HEADER_TEXT_CTIME_DISPLAY "X-Object-Meta-Ctime-Display"
+
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
 //#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
 #define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse_%s"
+#define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
 
 #define KNRM  "\x1B[0m"
 #define KRED  "\x1B[31m"
@@ -67,14 +77,16 @@ typedef struct dir_cache
 time_t my_timegm(struct tm *tm);
 time_t get_time_from_str_as_gmt(char *time_str);
 time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size);
-int get_time_as_string(time_t time_t_val, char *time_str);
+int get_time_as_string(time_t time_t_val, long nsec, char *time_str, int time_str_len);
 time_t get_time_now();
+int get_timespec_as_str(const struct timespec *times, char *time_str, int time_str_len);
 
 char *str2md5(const char *str, int length);
 void debug_print_descriptor(struct fuse_file_info *info);
 int get_safe_cache_file_path(const char *file_path, char *file_path_safe, char *temp_dir);
 
 dir_entry *init_dir_entry();
+void copy_dir_entry(dir_entry *src, dir_entry *dst);
 dir_cache *new_cache(const char *path);
 void dir_for(const char *path, char *dir);
 void debug_list_cache_content();
@@ -89,7 +101,7 @@ int caching_list_directory(const char *path, dir_entry **list);
 
 char *get_home_dir();
 void cloudfs_debug(int dbg);
-void debugf(char *fmt, ...);
+void debugf(int level, char *fmt, ...);
 
 
 #endif

@@ -28,6 +28,12 @@ dir_cache *dcache;
 char *temp_dir;
 int cache_timeout;
 int debug = 0;
+int verify_ssl = 2;
+bool option_get_extended_metadata = false;
+bool option_curl_verbose = false;
+int option_cache_statfs_timeout = 0;
+int option_debug_level = 0;
+
 long fuse_active_opp_count = 0;
 
 // needed to get correct GMT / local time, as it does not work
@@ -61,24 +67,42 @@ time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size){
   struct tm loc_time_tm;
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL) {
-    //debugf("Local len=%d size=%d pass=%d", strlen(time_str), sizeof(time_str), char_buf_size);
+    //debugf(DBG_LEVEL_NORM, 0,"Local len=%d size=%d pass=%d", strlen(time_str), sizeof(time_str), char_buf_size);
     strftime(time_str, char_buf_size, "%c", &loc_time_tm);
-    //debugf("Local timestr=[%s] size=%d", time_str, strlen(time_str));
+    //debugf(DBG_LEVEL_NORM, 0,"Local timestr=[%s] size=%d", time_str, strlen(time_str));
   }
-  //debugf("Local time_t %li", mktime(&loc_time_tm));
+  //debugf(DBG_LEVEL_NORM, 0,"Local time_t %li", mktime(&loc_time_tm));
   return mktime(&loc_time_tm);
 }
 
-int get_time_as_string(time_t time_t_val, char *time_str){
+int get_time_as_string(time_t time_t_val, long nsec, char *time_str, int time_str_len){
   struct tm time_val_tm;
   time_val_tm = *gmtime(&time_t_val);
-  return strftime(time_str, strlen(time_str), "%c", &time_val_tm);
+	int str_len = strftime(time_str, time_str_len, HUBIC_DATE_FORMAT, &time_val_tm);
+	char nsec_str[TIME_CHARS];
+	sprintf(nsec_str, "%d", nsec);
+	strcat(time_str, nsec_str);
+  return str_len + strlen(nsec_str);
 }
 
 time_t get_time_now() {
 	struct timespec now;
 	clock_gettime(CLOCK_REALTIME, &now);
 	return now.tv_sec;
+}
+
+size_t get_time_now_as_str(char *time_str, int time_str_len) {
+	time_t     now = time(0);
+	struct tm  tstruct;
+	tstruct = *localtime(&now);
+	// Visit http://en.cppreference.com/w/cpp/chrono/c/strftime
+	// for more information about date/time format
+	size_t result = strftime(time_str, time_str_len, HUBIC_DATE_FORMAT, &tstruct);
+	return result;
+}
+
+int get_timespec_as_str(const struct timespec *times, char *time_str, int time_str_len) {
+	return get_time_as_string(times->tv_sec, times->tv_nsec, time_str, time_str_len);
 }
 
 char *str2md5(const char *str, int length) {
@@ -120,7 +144,8 @@ int get_safe_cache_file_path(const char *path, char *file_path_safe, char *temp_
 	char file_path[PATH_MAX] = "";
 	//snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
 	snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, tmp_path);
-	int file_path_len = strlen(file_path);
+	//fixme check if sizeof or strlen is suitable
+	int file_path_len = sizeof(file_path);
 
 	//the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
 	//solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
@@ -132,7 +157,7 @@ int get_safe_cache_file_path(const char *path, char *file_path_safe, char *temp_
 	//strcat(file_path_safe, md5_path);
 	//sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
 	file_path_safe[safe_len_prefix + md5len - 1] = '\0';
-	//debugf("f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
+	//debugf(DBG_LEVEL_NORM, 0,"f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
 	//	file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
 	free(md5_path);
 	return strlen(file_path_safe);
@@ -149,15 +174,15 @@ void get_file_path_from_fd(int fd, char *path, int size_path) {
 void debug_print_flags(int flags) {
 	int accmode, val;
 	accmode = flags & O_ACCMODE;
-	if (accmode == O_RDONLY)				debugf(KRED "read only");
-	else if (accmode == O_WRONLY)   debugf(KRED "write only");
-	else if (accmode == O_RDWR)     debugf(KRED "read write");
-	else debugf(KRED "unknown access mode");
+	if (accmode == O_RDONLY)				debugf(DBG_LEVEL_EXT, KRED "read only");
+	else if (accmode == O_WRONLY)   debugf(DBG_LEVEL_EXT, KRED "write only");
+	else if (accmode == O_RDWR)     debugf(DBG_LEVEL_EXT, KRED "read write");
+	else debugf(DBG_LEVEL_EXT, KRED "unknown access mode");
 
-	if (val & O_APPEND)         debugf(KRED ", append");
-	if (val & O_NONBLOCK)       debugf(KRED ", nonblocking");
+	if (val & O_APPEND)         debugf(DBG_LEVEL_EXT, KRED ", append");
+	if (val & O_NONBLOCK)       debugf(DBG_LEVEL_EXT, KRED ", nonblocking");
 #if !defined(_POSIX_SOURCE) && defined(O_SYNC)
-	if (val & O_SYNC)           debugf(KRED ", synchronous writes");
+	if (val & O_SYNC)           debugf(DBG_LEVEL_EXT, 0,KRED ", synchronous writes");
 #endif
 
 }
@@ -165,7 +190,7 @@ void debug_print_flags(int flags) {
 void debug_print_descriptor(struct fuse_file_info *info) {
 	char file_path[MAX_PATH_SIZE];
 	get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
-	debugf(KCYN "descriptor localfile=[%s] fd=%d", file_path, info->fh);
+	debugf(DBG_LEVEL_EXT, KCYN "descriptor localfile=[%s] fd=%d", file_path, info->fh);
 	debug_print_flags(info->flags);
 }
 
@@ -185,26 +210,26 @@ void debug_list_cache_content() {
 	dir_cache *cw;
 	dir_entry *de;
 	for (cw = dcache; cw; cw = cw->next) {
-		debugf("LIST-CACHE: DIR[%s]", cw->path);
+		debugf(DBG_LEVEL_NORM, "LIST-CACHE: DIR[%s]", cw->path);
 		for (de = cw->entries; de; de = de->next) {
-			debugf("LIST-CACHE:   FOLDER[%s]", de->full_name);
+			debugf(DBG_LEVEL_NORM, "LIST-CACHE:   FOLDER[%s]", de->full_name);
 		}
 	}
 }
 
 int delete_file(char *path) {
-	debugf(KRED"delete_file(%s)", path);
+	debugf(DBG_LEVEL_NORM, KRED"delete_file(%s)", path);
 	char file_path_safe[NAME_MAX] = "";
 	get_safe_cache_file_path(path, file_path_safe, temp_dir);
 	int result = unlink(file_path_safe);
-	debugf(KRED"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
+	debugf(DBG_LEVEL_NORM, KRED"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
 	return result;
 }
 
 //adding a directory in cache
 dir_cache *new_cache(const char *path)
 {
-  debugf(KMAG "new_cache(%s)", path);
+  debugf(DBG_LEVEL_NORM, KMAG "new_cache(%s)", path);
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
   cw->path = strdup(path);
   cw->prev = NULL;
@@ -218,7 +243,7 @@ dir_cache *new_cache(const char *path)
   cw->next = dcache;
 	dir_cache *result;
 	result = (dcache = cw);
-	debugf("exit: new_cache(%s)", path);
+	debugf(DBG_LEVEL_NORM, "exit: new_cache(%s)", path);
   return result;
 }
 
@@ -228,7 +253,7 @@ dir_cache *new_cache(const char *path)
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
 	//check for NULL as dir might be already removed from cache by other thread
-	debugf(KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
+	debugf(DBG_LEVEL_NORM, KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
 	while (dir_list) {
 		dir_entry *de = dir_list;
 		dir_list = dir_list->next;
@@ -247,13 +272,13 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
 void dir_decache(const char *path)
 {
   dir_cache *cw;
-	debugf(KCYN "dir_decache(%s)", path);
+	debugf(DBG_LEVEL_NORM, KCYN "dir_decache(%s)", path);
   pthread_mutex_lock(&dcachemut);
   dir_entry *de, *tmpde;
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   for (cw = dcache; cw; cw = cw->next) {
-		debugf("dir_decache: parse(%s)", cw->path);
+		debugf(DBG_LEVEL_NORM, "dir_decache: parse(%s)", cw->path);
     if (!strcmp(cw->path, path)) {
       if (cw == dcache)
         dcache = cw->next;
@@ -261,7 +286,7 @@ void dir_decache(const char *path)
         cw->prev->next = cw->next;
       if (cw->next)
         cw->next->prev = cw->prev;
-			debugf("dir_decache: free_dir1(%s)", cw->path);
+			debugf(DBG_LEVEL_NORM, "dir_decache: free_dir1(%s)", cw->path);
 			//fixme: this sometimes is NULL, why?
 			if (cw->entries != NULL)
 				cloudfs_free_dir_list(cw->entries);
@@ -274,7 +299,7 @@ void dir_decache(const char *path)
         de = cw->entries;
         cw->entries = de->next;
         de->next = NULL;
-				debugf("dir_decache: free_dir2()");
+				debugf(DBG_LEVEL_NORM, "dir_decache: free_dir2()");
         cloudfs_free_dir_list(de);
       }
       else for (de = cw->entries; de->next; de = de->next)
@@ -284,7 +309,7 @@ void dir_decache(const char *path)
           tmpde = de->next;
           de->next = de->next->next;
           tmpde->next = NULL;
-					debugf("dir_decache: free_dir3()", cw->path);
+					debugf(DBG_LEVEL_NORM, "dir_decache: free_dir3()", cw->path);
 					cloudfs_free_dir_list(tmpde);
           break;
         }
@@ -309,11 +334,23 @@ dir_entry* init_dir_entry() {
 	de->ctime.tv_nsec = 0;
 	return de;
 }
+
+void copy_dir_entry(dir_entry *src, dir_entry *dst) {
+	dst->atime.tv_sec = src->atime.tv_sec;
+	dst->atime.tv_nsec = src->atime.tv_nsec;
+	dst->mtime.tv_sec = src->mtime.tv_sec;
+	dst->mtime.tv_nsec = src->mtime.tv_nsec;
+	dst->ctime.tv_sec = src->ctime.tv_sec;
+	dst->ctime.tv_nsec = src->ctime.tv_nsec;
+	dst->chmod = src->chmod;
+	//dst->md5sum = src->md5sum;
+}
+	
 //check for file in cache, if found size will be updated, if not found 
 //and this is a dir, a new dir cache entry is created
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-  debugf(KCYN "update_dir_cache(%s)", path);
+  debugf(DBG_LEVEL_NORM, KCYN "update_dir_cache(%s)", path);
   pthread_mutex_lock(&dcachemut);
   dir_cache *cw;
   dir_entry *de;
@@ -329,7 +366,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
         {
           de->size = size;
           pthread_mutex_unlock(&dcachemut);
-					debugf("exit 0: update_dir_cache(%s)", path);
+					debugf(DBG_LEVEL_NORM, "exit 0: update_dir_cache(%s)", path);
           return;
         }
       }
@@ -341,10 +378,10 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       de->name = strdup(&path[strlen(cw->path) + 1]);
       de->full_name = strdup(path);
 			//todo: check if the conditions below are mixed up dir -> link?
-      if (isdir) {
+      if (islink) {
         de->content_type = strdup("application/link");
       }
-      if (islink) {
+      if (isdir) {
         de->content_type = strdup("application/directory");
       }
       else {
@@ -357,16 +394,16 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       break;
     }
   }
-	debugf("exit 1: update_dir_cache(%s)", path);
+	debugf(DBG_LEVEL_NORM, "exit 1: update_dir_cache(%s)", path);
   pthread_mutex_unlock(&dcachemut);
 }
 
 //returns first file entry in linked list. if not in cache will be downloaded.
 int caching_list_directory(const char *path, dir_entry **list)
 {
-	debugf("caching_list_directory(%s)", path);
+	debugf(DBG_LEVEL_EXT, "caching_list_directory(%s)", path);
 	//int lock = pthread_mutex_trylock(&dcachemut);
-	//debugf("Mutex lock on caching_list_directory=%d", lock);
+	//debugf(DBG_LEVEL_NORM, DBG_LEVEL_NORM, "Mutex lock on caching_list_directory=%d", lock);
   pthread_mutex_lock(&dcachemut);
 	bool new_entry = false;
 	if (!strcmp(path, "/"))
@@ -375,12 +412,12 @@ int caching_list_directory(const char *path, dir_entry **list)
 	dir_cache *cw;
 	for (cw = dcache; cw; cw = cw->next) {
 		if (cw->was_deleted == true) {
-			debugf(KMAG"caching_list_directory status: dir(%s) is empty as cached expired, reload from cloud", cw->path);
+			debugf(DBG_LEVEL_EXT, KMAG"caching_list_directory status: dir(%s) is empty as cached expired, reload from cloud", cw->path);
 			if (!cloudfs_list_directory(cw->path, list)) {
-				debugf(KMAG"caching_list_directory status: cannot reload dir(%s)", cw->path);
+				debugf(DBG_LEVEL_EXT, KMAG"caching_list_directory status: cannot reload dir(%s)", cw->path);
 			}
 			else {
-				debugf(KMAG"caching_list_directory status: reloaded dir(%s)", cw->path);
+				debugf(DBG_LEVEL_EXT, KMAG"caching_list_directory status: reloaded dir(%s)", cw->path);
 				//cw->entries = *list;
 				cw->was_deleted = false;
 				cw->cached = time(NULL);
@@ -388,7 +425,7 @@ int caching_list_directory(const char *path, dir_entry **list)
 		}
 		if (cw->was_deleted == false) {
 			if (!strcmp(cw->path, path)) {
-				//debugf("Found in list directory %s", cw->path);
+				//debugf(DBG_LEVEL_NORM, DBG_LEVEL_NORM, "Found in list directory %s", cw->path);
 				break;
 			}
 		}
@@ -398,10 +435,10 @@ int caching_list_directory(const char *path, dir_entry **list)
     if (!cloudfs_list_directory(path, list)){
 			//download was not ok
       pthread_mutex_unlock(&dcachemut);
-			debugf("exit 0: caching_list_directory(%s) "KRED"[CACHE-DIR-MISS]", path);
+			debugf(DBG_LEVEL_EXT, "exit 0: caching_list_directory(%s) "KRED"[CACHE-DIR-MISS]", path);
       return  0;
     }
-		debugf("caching_list_directory: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
+		debugf(DBG_LEVEL_EXT, "caching_list_directory: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
     cw = new_cache(path);
 		new_entry = true;
   }
@@ -410,7 +447,7 @@ int caching_list_directory(const char *path, dir_entry **list)
     if (!cloudfs_list_directory(path, list)){
       //mutex unlock was forgotten?
       pthread_mutex_unlock(&dcachemut);
-			debugf("exit 1: caching_list_directory(%s)", path);
+			debugf(DBG_LEVEL_EXT, "exit 1: caching_list_directory(%s)", path);
       return  0;
     }
 		//fixme: this frees dir subentries but leaves the dir parent entry, this confuses path_info
@@ -419,45 +456,48 @@ int caching_list_directory(const char *path, dir_entry **list)
 			cloudfs_free_dir_list(cw->entries);
 			cw->was_deleted = true;
 			cw->cached = time(NULL);
-			debugf("status: caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+			debugf(DBG_LEVEL_EXT, "status: caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
 		}
 		else {
-			debugf(KRED"status: got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+			debugf(DBG_LEVEL_EXT, KRED"status: got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
 			pthread_mutex_unlock(&dcachemut);
 			return 0;
 		}
   }
 	else {
-		debugf("status: caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
+		debugf(DBG_LEVEL_EXT, "status: caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
 		*list = cw->entries;
 	}
 	//adding new dir file list to global cache, now this dir becomes visible in cache
   cw->entries = *list;
   pthread_mutex_unlock(&dcachemut);
-	debugf("exit 2: caching_list_directory(%s)", path);
+	debugf(DBG_LEVEL_EXT, "exit 2: caching_list_directory(%s)", path);
   return 1;
 }
 
 dir_entry *path_info(const char *path)
 {
-	debugf("path_info(%s)", path);
+	debugf(DBG_LEVEL_EXT, "path_info(%s)", path);
 	char dir[MAX_PATH_SIZE];
 	dir_for(path, dir);
 	dir_entry *tmp;
 	if (!caching_list_directory(dir, &tmp)) {
-		debugf("exit 0: path_info(%s) "KRED"[CACHE-DIR-MISS]", path);
+		debugf(DBG_LEVEL_EXT, "exit 0: path_info(%s) "KRED"[CACHE-DIR-MISS]", dir);
 		return NULL;
+	}
+	else {
+		debugf(DBG_LEVEL_EXT, "exit 0: path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
 	}
 	//iterate in file list obtained from cache or downloaded
 	for (; tmp; tmp = tmp->next) {
 		if (!strcmp(tmp->full_name, path)) {
-			//debugf("FOUND in cache %s", tmp->full_name);
-			debugf("exit 1: path_info(%s) %s[CACHE-FILE-HIT]", path, KGRN);
+			//debugf(DBG_LEVEL_NORM, DBG_LEVEL_NORM, "FOUND in cache %s", tmp->full_name);
+			debugf(DBG_LEVEL_EXT, "exit 1: path_info(%s) %s[CACHE-FILE-HIT]", path, KGRN);
 			return tmp;
 		}
 	}
 	//miss in case the file is not found on a cached folder
-	debugf("exit 2: path_info(%s) "KRED"!rarely happens! [CACHE-MISS]", path);
+	debugf(DBG_LEVEL_EXT, "exit 2: path_info(%s) "KRED"!rarely happens! [CACHE-MISS]", path);
 	return NULL;
 }
 
@@ -465,23 +505,23 @@ dir_entry *path_info(const char *path)
 //retrieve folder from local cache if exists, return null if does not exist
 int check_caching_list_directory(const char *path, dir_entry **list)
 {
-	debugf("check_caching_list_directory(%s)", path);
+	debugf(DBG_LEVEL_EXT, "check_caching_list_directory(%s)", path);
 	//int lock = pthread_mutex_trylock(&dcachemut);
-	//debugf("Mutex lock on caching_list_directory=%d", lock);
+	//debugf(DBG_LEVEL_NORM, "Mutex lock on caching_list_directory=%d", lock);
 	pthread_mutex_lock(&dcachemut);
 	if (!strcmp(path, "/"))
 		path = "";
 	dir_cache *cw;
 	for (cw = dcache; cw; cw = cw->next)
 		if (!strcmp(cw->path, path)) {
-			//debugf("Found in list directory %s", cw->path);
+			//debugf(DBG_LEVEL_NORM, "Found in list directory %s", cw->path);
 			*list = cw->entries;
 			pthread_mutex_unlock(&dcachemut);
-			debugf("exit 0: check_caching_list_directory(%s) %s[CACHE-DIR-HIT]", path, KGRN);
+			debugf(DBG_LEVEL_EXT, "exit 0: check_caching_list_directory(%s) %s[CACHE-DIR-HIT]", path, KGRN);
 			return 1;
 		}
 	pthread_mutex_unlock(&dcachemut);
-	debugf("exit 1: check_caching_list_directory(%s) %s[CACHE-DIR-MISS]", path, KRED);
+	debugf(DBG_LEVEL_EXT, "exit 1: check_caching_list_directory(%s) %s[CACHE-DIR-MISS]", path, KRED);
 	return 0;
 }
 
@@ -498,29 +538,29 @@ dir_entry * check_parent_folder_for_file(const char *path) {
 //used to check if local path is in cache, without downloading from cloud if not in cache
 dir_entry *check_path_info(const char *path)
 {
-	debugf("check_path_info(%s)", path);
+	debugf(DBG_LEVEL_NORM, "check_path_info(%s)", path);
 	char dir[MAX_PATH_SIZE];
 	dir_for(path, dir);
 	dir_entry *tmp;
 
 	//get parent folder cache entry
 	if (!check_caching_list_directory(dir, &tmp)) {
-		debugf("exit 0: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+		debugf(DBG_LEVEL_NORM, "exit 0: check_path_info(%s) "KRED"[CACHE-MISS]", path);
 		return NULL;
 	}
 	for (; tmp; tmp = tmp->next)
 	{
 		if (!strcmp(tmp->full_name, path)) {
-			//debugf("FOUND in cache %s", tmp->full_name);
-			debugf("exit 1: check_path_info(%s) %s[CACHE-HIT]", path, KGRN);
+			//debugf(DBG_LEVEL_NORM, "FOUND in cache %s", tmp->full_name);
+			debugf(DBG_LEVEL_NORM, "exit 1: check_path_info(%s) %s[CACHE-HIT]", path, KGRN);
 			return tmp;
 		}
 	}
 	if (!strcmp(path, "/")) {
-		debugf("exit 2: check_path_info(%s) "KYEL "ignoring root [CACHE-MISS]", path);
+		debugf(DBG_LEVEL_NORM, "exit 2: check_path_info(%s) "KYEL "ignoring root [CACHE-MISS]", path);
 	}
 	else {
-		debugf("exit 3: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+		debugf(DBG_LEVEL_NORM, "exit 3: check_path_info(%s) "KRED"[CACHE-MISS]", path);
 	}
 	return NULL;
 }
@@ -542,41 +582,31 @@ void cloudfs_debug(int dbg)
 	debug = dbg;
 }
 
-void debugf(char *fmt, ...)
+void debugf(int level, char *fmt, ...)
 {
   if (debug) {
-		#ifdef SYS_gettid
-		pid_t thread_id = syscall(SYS_gettid);
-		#else
-		#error "SYS_gettid unavailable on this system"
-		#endif
-    //char thread_name[THREAD_NAMELEN];
-    //pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
-    va_list args;
-    char prefix[] = "==DEBUG %s:%d==";
-    char line [1024];
-    sprintf(line, prefix, "", thread_id);
-    fputs(line, stderr);
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
-		fputs(KNRM, stderr);
-		putc('\n', stderr);
-		putc('\r', stderr);
-		/*
-		Program received signal SIGSEGV, Segmentation fault.
-		0x00007ffff65c1e2c in _IO_vfprintf_internal (s=<optimized out>, format=<optimized out>, ap=<optimized out>) at vfprintf.c:1642
-		1642    vfprintf.c: No such file or directory.
-		(gdb) back
-		#0  0x00007ffff65c1e2c in _IO_vfprintf_internal (s=<optimized out>, format=<optimized out>, ap=<optimized out>) at vfprintf.c:1642
-		#1  0x00007ffff65c2b61 in buffered_vfprintf (s=s@entry=0x7ffff691b060 <_IO_2_1_stderr_>, format=format@entry=0x4096d8 "Received http code=%d %s %s[HTTP ERR]",
-		args=args@entry=0x7fffffff6718) at vfprintf.c:2348
-		#2  0x00007ffff65bd3de in _IO_vfprintf_internal (s=0x7ffff691b060 <_IO_2_1_stderr_>, format=format@entry=0x4096d8 "Received http code=%d %s %s[HTTP ERR]",
-		ap=ap@entry=0x7fffffff6718) at vfprintf.c:1296
-		#3  0x000000000040827c in debugf (fmt=0x4096d8 "Received http code=%d %s %s[HTTP ERR]") at commonfs.c:447
-		#4  0x0000000000404c4e in send_request_size (method=0x408ebd "PUT",
-		path=0x7aad41 "backup/movies/Action%20War/Tropa.de.Elite.Elite.Squad.2007.blu-ray.x264.720P.DTS-CHD/Tropa.de.Elite.Elite.Squad.2007.blu-ray.x264.720P.DTS-CHD.mkv", fp=0x20, fp@entry=0x0, xmlctx=0xffffffffffffffff, xmlctx@entry=0x0, extra_headers=0x191, file_size=140737326623226, file_size@entry=0, is_segment=0,
-		de_cached_entry=0x0) at cloudfsapi.c:463
-		*/
+		if (level <= option_debug_level) {
+#ifdef SYS_gettid
+			pid_t thread_id = syscall(SYS_gettid);
+#else
+			int thread_id = 0;
+#error "SYS_gettid unavailable on this system"
+#endif
+			//char thread_name[THREAD_NAMELEN];
+			//pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
+			va_list args;
+			char prefix[] = "==DBG%d [%s]:%d==";
+			char line[1024];
+			char time_str[TIME_CHARS];
+			get_time_now_as_str(time_str, sizeof(time_str));
+			sprintf(line, prefix, level, time_str, thread_id);
+			fputs(line, stderr);
+			va_start(args, fmt);
+			vfprintf(stderr, fmt, args);
+			va_end(args);
+			fputs(KNRM, stderr);
+			putc('\n', stderr);
+			putc('\r', stderr);
+		}
   }
 }
