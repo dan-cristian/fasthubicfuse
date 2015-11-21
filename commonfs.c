@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/syscall.h>
 #include <openssl/md5.h>
 #include <pwd.h>
 #include <fuse.h>
@@ -251,27 +252,29 @@ void dir_decache(const char *path)
   dir_entry *de, *tmpde;
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
-  for (cw = dcache; cw; cw = cw->next)
-  {
-    if (!strcmp(cw->path, path))
-    {
+  for (cw = dcache; cw; cw = cw->next) {
+		debugf("dir_decache: parse(%s)", cw->path);
+    if (!strcmp(cw->path, path)) {
       if (cw == dcache)
         dcache = cw->next;
       if (cw->prev)
         cw->prev->next = cw->next;
       if (cw->next)
         cw->next->prev = cw->prev;
-      cloudfs_free_dir_list(cw->entries);
+			debugf("dir_decache: free_dir1(%s)", cw->path);
+			//fixme: this sometimes is NULL, why?
+			if (cw->entries != NULL)
+				cloudfs_free_dir_list(cw->entries);
       free(cw->path);
       free(cw);
     }
     else if (cw->entries && !strcmp(dir, cw->path))
     {
-      if (!strcmp(cw->entries->full_name, path))
-      {
+      if (!strcmp(cw->entries->full_name, path)) {
         de = cw->entries;
         cw->entries = de->next;
         de->next = NULL;
+				debugf("dir_decache: free_dir2()");
         cloudfs_free_dir_list(de);
       }
       else for (de = cw->entries; de->next; de = de->next)
@@ -281,7 +284,8 @@ void dir_decache(const char *path)
           tmpde = de->next;
           de->next = de->next->next;
           tmpde->next = NULL;
-          cloudfs_free_dir_list(tmpde);
+					debugf("dir_decache: free_dir3()", cw->path);
+					cloudfs_free_dir_list(tmpde);
           break;
         }
       }
@@ -411,10 +415,17 @@ int caching_list_directory(const char *path, dir_entry **list)
     }
 		//fixme: this frees dir subentries but leaves the dir parent entry, this confuses path_info
 		//which believes this dir has no entries
-    cloudfs_free_dir_list(cw->entries);
-		cw->was_deleted = true;
-		cw->cached = time(NULL);
-		debugf("status: caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+		if (cw->entries != NULL) {
+			cloudfs_free_dir_list(cw->entries);
+			cw->was_deleted = true;
+			cw->cached = time(NULL);
+			debugf("status: caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+		}
+		else {
+			debugf(KRED"status: got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+			pthread_mutex_unlock(&dcachemut);
+			return 0;
+		}
   }
 	else {
 		debugf("status: caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
@@ -445,7 +456,8 @@ dir_entry *path_info(const char *path)
 			return tmp;
 		}
 	}
-	debugf("exit 2: path_info(%s) %s[CACHE-MISS]", path, KRED);
+	//miss in case the file is not found on a cached folder
+	debugf("exit 2: path_info(%s) "KRED"!rarely happens! [CACHE-MISS]", path);
 	return NULL;
 }
 
@@ -532,15 +544,18 @@ void cloudfs_debug(int dbg)
 
 void debugf(char *fmt, ...)
 {
-  if (debug)
-  {
-    pthread_t thread_id = (unsigned int)pthread_self();
+  if (debug) {
+		#ifdef SYS_gettid
+		pid_t thread_id = syscall(SYS_gettid);
+		#else
+		#error "SYS_gettid unavailable on this system"
+		#endif
     //char thread_name[THREAD_NAMELEN];
     //pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
     va_list args;
     char prefix[] = "==DEBUG %s:%d==";
     char line [1024];
-    sprintf(line, prefix, "T", thread_id);
+    sprintf(line, prefix, "", thread_id);
     fputs(line, stderr);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);

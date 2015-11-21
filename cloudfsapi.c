@@ -1158,7 +1158,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         }
         de->next = *dir_list;
         *dir_list = de;
-        debugf("Added new dir_entry name=%s path=%s size=%d content=%s dir=%d link=%d", 
+        debugf(KCYN"Added new dir_entry name=%s path=%s size=%d content=%s dir=%d link=%d", 
 					de->name, de->full_name, de->size, de->content_type, de->isdir, de->islink);
         //attempt to read extended attributes on each dir entry
         get_file_metadata(de);

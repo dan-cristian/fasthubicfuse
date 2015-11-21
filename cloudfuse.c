@@ -121,6 +121,9 @@ static int cfs_readdir(const char *path, void *buf, fuse_fill_dir_t filldir, off
 	fuse_active_opp_count++;
   debugf(KBLU "cfs_readdir(%s)", path);
   dir_entry *de;
+	//change to use path_info, avoid internal call
+	//de = path_info(path);
+	//if (!de) {
 	if (!caching_list_directory(path, &de)) {
 		debug_list_cache_content();
 		debugf(KRED "exit 0: cfs_readdir(%s)", path);
