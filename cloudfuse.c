@@ -299,10 +299,10 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s)", path);
+  debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s)", path);
 	debug_print_descriptor(info);
 	int result = pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
-	debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
+	debugf(DBG_LEVEL_EXT, KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
 	return result;
 }
 
@@ -376,13 +376,13 @@ static int cfs_ftruncate(const char *path, off_t size, struct fuse_file_info *in
 
 static int cfs_write(const char *path, const char *buf, size_t length, off_t offset, struct fuse_file_info *info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_write(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, KBLU "cfs_write(%s)", path);
   // FIXME: Potential inconsistent cache update if pwrite fails?
   update_dir_cache(path, offset + length, 0, 0);
 	//int result = pwrite(info->fh, buf, length, offset);
 	int result = pwrite(((openfile *)(uintptr_t)info->fh)->fd, buf, length, offset);
 	int errsv = errno;
-	debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_write(%s) result=%d:%s", path, errsv, strerror(errsv));
+	debugf(DBG_LEVEL_EXTALL, KBLU "exit: cfs_write(%s) result=%d:%s", path, errsv, strerror(errsv));
 	return result;
 }
 
@@ -446,7 +446,7 @@ static int cfs_chmod(const char *path, mode_t mode)
 
 static int cfs_rename(const char *src, const char *dst)
 {
-  debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s,%s)", src, dst);
+  debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s, %s)", src, dst);
   dir_entry *src_de = path_info(src);
 	if (!src_de) {
 		debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_rename(%s,%s) not-found", src, dst);
@@ -467,6 +467,7 @@ static int cfs_rename(const char *src, const char *dst)
 			debugf(DBG_LEVEL_NORM, KRED"cfs_rename(%s,%s) dest-not-found-in-cache", src, dst);
 		}
 		else {
+      debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s,%s) upload ok", src, dst);
 			//copy attributes, shortcut, rather than forcing a download from cloud
 			copy_dir_entry(src_de, dst_de);
 		}

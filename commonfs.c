@@ -342,7 +342,7 @@ void copy_dir_entry(dir_entry *src, dir_entry *dst) {
 //and this is a dir, a new dir cache entry is created
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-  debugf(DBG_LEVEL_EXT, KCYN "update_dir_cache(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, KCYN "update_dir_cache(%s)", path);
   pthread_mutex_lock(&dcachemut);
   dir_cache *cw;
   dir_entry *de;
@@ -358,7 +358,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
         {
           de->size = size;
           pthread_mutex_unlock(&dcachemut);
-					debugf(DBG_LEVEL_EXT, "exit 0: update_dir_cache(%s)", path);
+					debugf(DBG_LEVEL_EXTALL, "exit 0: update_dir_cache(%s)", path);
           return;
         }
       }
@@ -385,7 +385,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       break;
     }
   }
-	debugf(DBG_LEVEL_EXT, "exit 1: update_dir_cache(%s)", path);
+	debugf(DBG_LEVEL_EXTALL, "exit 1: update_dir_cache(%s)", path);
   pthread_mutex_unlock(&dcachemut);
 }
 

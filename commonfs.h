@@ -9,7 +9,7 @@ typedef enum { false, true } bool;
 #define TIME_CHARS 32
 #define DBG_LEVEL_NORM 0
 #define DBG_LEVEL_EXT 1
-
+#define DBG_LEVEL_EXTALL 2
 
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"

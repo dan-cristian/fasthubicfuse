@@ -28,7 +28,7 @@
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
 
-#define REQUEST_RETRIES 4
+#define REQUEST_RETRIES 3
 
 #define MAX_FILES 10000
 
@@ -62,6 +62,11 @@ static struct statvfs statcache = {
 };
 static time_t last_stat_read_time = 0;//used to compute cache interval
 extern FuseOptions options;
+
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+};
 
 #ifdef HAVE_OPENSSL
 #include <openssl/crypto.h>
@@ -111,9 +116,28 @@ static void add_header(curl_slist **headers, const char *name,
                        const char *value)
 {
   char x_header[MAX_HEADER_SIZE];
-  snprintf(x_header, sizeof(x_header), "%s: %s", name, value);
-	debugf(DBG_LEVEL_EXT, "add_header(%s)", x_header);
-	*headers = curl_slist_append(*headers, x_header);
+  char safe_value[256];
+  const char *value_ptr;
+
+  debugf(DBG_LEVEL_EXT, "add_header(%s:%s)", name, value);
+  if (strlen(value) > 256) {
+    debugf(DBG_LEVEL_NORM, KRED"add_header: warning, value size > 256 (%s:%s) ", name, value);
+    //hubic will throw an HTTP 400 error on X-Copy-To operation if X-Object-Meta-FilePath header value is larger than 256 chars
+    if (!strcasecmp(name, "X-Object-Meta-FilePath")) {
+      debugf(DBG_LEVEL_NORM, KRED"add_header: trimming header (%s) value to max allowed", name);
+      //trim header size to max allowed
+      strncpy(safe_value, value, 256 - 1);
+      safe_value[255] = '\0';
+      value_ptr = safe_value;
+    }
+    else
+      value_ptr = value;
+  }
+  else
+    value_ptr = value;
+
+  snprintf(x_header, sizeof(x_header), "%s: %s", name, value_ptr);
+  *headers = curl_slist_append(*headers, x_header);
 }
 
 static size_t header_dispatch(void *ptr, size_t size, size_t nmemb, void *dir_entry)
@@ -265,6 +289,29 @@ int progress_callback(void *clientp, double dltotal, double dlnow, double ultota
   return progress_callback_xfer(clientp, (curl_off_t)dltotal, (curl_off_t)dlnow, (curl_off_t)ultotal, (curl_off_t)ulnow);
 }
 
+
+//get the response from HTTP requests, mostly for debug purposes
+// http://stackoverflow.com/questions/2329571/c-libcurl-get-output-into-a-string
+// http://curl.haxx.se/libcurl/c/getinmemory.html
+size_t writefunc_callback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+  size_t realsize = size * nmemb;
+  struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+  mem->memory = realloc(mem->memory, mem->size + realsize + 1);
+  if (mem->memory == NULL) {
+    /* out of memory! */
+    debugf(DBG_LEVEL_NORM, KRED"writefunc_callback: realloc() failed");
+    return 0;
+  }
+
+  memcpy(&(mem->memory[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->memory[mem->size] = 0;
+
+  return realsize;
+}
+
 // de_cached_entry must be NULL when the file is already in global cache
 // otherwise point to a new dir_entry that will be added to the cache (usually happens on first dir load)
 static int send_request_size(const char *method, const char *path, void *fp,
@@ -280,6 +327,10 @@ static int send_request_size(const char *method, const char *path, void *fp,
   char *slash;
   long response = -1;
   int tries = 0;
+  
+  //needed to keep the response data, for debug purposes
+  struct MemoryStruct chunk;
+  
 
   if (!storage_url[0])
   {
@@ -300,6 +351,8 @@ static int send_request_size(const char *method, const char *path, void *fp,
   // retry on failures
   for (tries = 0; tries < REQUEST_RETRIES; tries++)
   {
+    chunk.memory = malloc(1);  /* will be grown as needed by the realloc above */
+    chunk.size = 0;    /* no data at this point */
     CURL *curl = get_connection(path);
     if (rhel5_mode)
       curl_easy_setopt(curl, CURLOPT_CAINFO, RHEL5_CERTIFICATE_FILE);
@@ -307,7 +360,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HEADER, 0);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);//0=to enable progress
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);//0=to enable progress
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
@@ -375,11 +428,20 @@ static int send_request_size(const char *method, const char *path, void *fp,
       curl_easy_setopt(curl, CURLOPT_READDATA, fp);
       add_header(&headers, "Content-Type", "application/link");
     }
-    else if (!strcasecmp(method, "PUT") && fp)
+    //this condition does not include copy-to PUT action as it does not have a FP
+    //else if (!strcasecmp(method, "PUT") && fp)
+    else if (!strcasecmp(method, "PUT"))
     {
+      //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
+      debugf(DBG_LEVEL_EXT, KYEL"send_request_size: PUT w/o FP(%s)", orig_path);
       curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
-      curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
-      curl_easy_setopt(curl, CURLOPT_READDATA, fp);
+      if (fp) {
+        curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
+        curl_easy_setopt(curl, CURLOPT_READDATA, fp);
+      }
+      else {
+        curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
+      }
       if (is_segment)
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
       //enable progress reporting
@@ -390,6 +452,11 @@ static int send_request_size(const char *method, const char *path, void *fp,
       curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
       /* pass the struct pointer into the progress function */
       curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
+      //get the response for debug purposes
+      /* send all data to this function  */
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc_callback);
+      /* we pass our 'chunk' struct to the callback function */
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
     }
     else if (!strcasecmp(method, "GET"))
     {
@@ -401,7 +468,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
       }
       else if (fp)
       {
-        debugf(DBG_LEVEL_EXT, KYEL"GET FP (%s)", orig_path);
+        debugf(DBG_LEVEL_EXT, KYEL"send_request_size: GET FP (%s)", orig_path);
         rewind(fp); // make sure the file is ready for a-writin'
         fflush(fp);
         if (ftruncate(fileno(fp), 0) < 0)
@@ -423,13 +490,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
       }
       else if (xmlctx)
       {
-        debugf(DBG_LEVEL_EXT, KYEL"GET XML (%s)", orig_path);
+        debugf(DBG_LEVEL_EXT, KYEL"send_request_size: GET XML (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
       else {
         //asumming retrieval of headers only
-        debugf(DBG_LEVEL_EXT, KYEL"GET HEADERS only(%s)");
+        debugf(DBG_LEVEL_EXT, KYEL"send_request_size: GET HEADERS only(%s)");
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
@@ -437,6 +504,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     }
     else
     {
+      debugf(DBG_LEVEL_EXT, KYEL"send_request_size: catch_all (%s)");
 			// this posts an HEAD request (e.g. for statfs)
       curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
       curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
@@ -449,29 +517,47 @@ static int send_request_size(const char *method, const char *path, void *fp,
       headers = curl_slist_append(headers, extra->data);
     }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-		debugf(DBG_LEVEL_EXT, "status: send_request_size(%s) " KYEL "started HTTP REQ:%s", orig_path, url);
+		debugf(DBG_LEVEL_EXT, "status: send_request_size(%s) started HTTP REQ:%s", orig_path, url);
     curl_easy_perform(curl);
 		double total_time;
 		char *effective_url;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
 		curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effective_url);
 		curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &total_time);
-		debugf(DBG_LEVEL_EXT, "status: send_request_size(%s) " KYEL "completed HTTP REQ:%s total_time=%.1f seconds", 
+		debugf(DBG_LEVEL_EXT, "status: send_request_size(%s) completed HTTP REQ:%s total_time=%.1f seconds", 
 			orig_path, effective_url, total_time);
 		curl_slist_free_all(headers);
     curl_easy_reset(curl);
     return_connection(curl);
+
+    if (response >= 400 || response < 200) {
+      /*
+      * Now, our chunk.memory points to a memory block that is chunk.size
+      * bytes big and contains the remote file.
+      */
+
+      //printf("%lu bytes retrieved\n", (long)chunk.size);
+      debugf(DBG_LEVEL_NORM, KRED"send_request_size: error message, size=%lu, [HTTP %d] (%s)(%s)", 
+        (long)chunk.size, response, method, path);
+      debugf(DBG_LEVEL_NORM, KRED"send_request_size: error message=[%s]", chunk.memory);
+    }
+
+    free(chunk.memory);
+
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409)) {
         debugf(DBG_LEVEL_NORM, "exit 0: send_request_size(%s) speed=%.1f sec "KCYN"(%s) "KGRN"[HTTP OK]", 
              orig_path, total_time, method);
         return response;
     }
-    //handle cases when segment is not found
+    //handle cases when file is not found, no point in retrying, should exit
     if (response == 404){
-      debugf(DBG_LEVEL_NORM, "send_request_size: "KYEL"404 error"KNRM" for (%s)(%s), ignored.", method, effective_url);
+      debugf(DBG_LEVEL_NORM, "send_request_size: not found error for (%s)(%s), ignored "KYEL"[HTTP 404].", method, path);
+      return response;
     }
     else {
-			debugf(DBG_LEVEL_NORM, KRED"Received http code=%d %s [HTTP ERR] url=%s", response, method, effective_url);
+			debugf(DBG_LEVEL_NORM, "send_request_size: httpcode=%d (%s)(%s), retrying "KRED"[HTTP ERR]", response, method, path);
+      //todo: try to list response content for debug purposes
+
       sleep(8 << tries); // backoff
     }
 		if (response == 401 && !cloudfs_connect()) { // re-authenticate on 401s 
@@ -481,7 +567,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     if (xmlctx)
       xmlCtxtResetPush(xmlctx, NULL, 0, NULL, NULL);
   }
-	debugf(DBG_LEVEL_NORM, "exit 2: send_request_size(%s) "KCYN"(%s)", path, method);
+	debugf(DBG_LEVEL_NORM, "exit 2: send_request_size(%s)"KCYN"(%s) response=%d", path, method, response);
   return response;
 }
 
@@ -1215,21 +1301,39 @@ int cloudfs_delete_object(const char *path)
 }
 
 //fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
+// https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/
 int cloudfs_copy_object(const char *src, const char *dst)
 {
-	debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s,%s)", src, dst);
-  char *dst_encoded = curl_escape(dst, 0);
+	debugf(DBG_LEVEL_NORM, "cloudfs_copy_object(%s, %s) lensrc=%d, lendst=%d", src, dst, strlen(src), strlen(dst));
+  //this seems to generate problems with certain file names
+  //for example, this file:
+  // /backup/music/Armin%20Van%20Buuren/Armin%20Van%20Buuren%20-%20A%20State%20Of%20Trance%20586%20%282012-11-08%29%20%28Inspiron%29/06%20Above%20%26%20Beyond%20-%20Sun%20In%20Your%20Eyes%20%28Mark%20Sherry%E2%80%99s%20%E2%80%98Argentinian%20Sun%E2%80%99%20Remix%29.mp3
+  //char src_orig_path[MAX_URL_SIZE];
+  char *dst_encoded = curl_escape(dst, strlen(dst));
+  char *src_encoded = curl_escape(src, strlen(src));
+  
+  //convert encoded string (slashes are encoded as well) to encoded string with slashes
+  char *slash;
+  while ((slash = strstr(src_encoded, "%2F")) || (slash = strstr(src_encoded, "%2f"))) {
+    *slash = '/';
+    memmove(slash + 1, slash + 3, strlen(slash + 3) + 1);
+  }
+
   curl_slist *headers = NULL;
-  add_header(&headers, "X-Copy-From", src);
+  add_header(&headers, "X-Copy-From", src_encoded);
   add_header(&headers, "Content-Length", "0");
 	//get source file entry
 	dir_entry *de_src = check_path_info(src);
 	if (de_src) {
-		debugf(DBG_LEVEL_EXT, "status cloudfs_copy_object(%s,%s): src file found", src, dst);
+		debugf(DBG_LEVEL_EXT, "status cloudfs_copy_object(%s, %s): src file found", src, dst);
 	}
+  else {
+    debugf(DBG_LEVEL_NORM, KRED"status cloudfs_copy_object(%s, %s): src file NOT found", src, dst);
+  }
 	//pass src metadata so that PUT will set time attributes of the src file
   int response = send_request("PUT", dst_encoded, NULL, NULL, headers, de_src);
   curl_free(dst_encoded);
+  curl_free(src_encoded);
   curl_slist_free_all(headers);
 	debugf(DBG_LEVEL_EXT, "exit: cloudfs_copy_object(%s,%s) response=%d", src, dst, response);
 	return (response >= 200 && response < 300);
