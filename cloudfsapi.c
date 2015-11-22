@@ -463,7 +463,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_reset(curl);
     return_connection(curl);
 		if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409)) {
-			debugf(DBG_LEVEL_NORM, "exit 0: send_request_size(%s) (%s) "KGRN"[HTTP OK]", orig_path, method);
+			debugf(DBG_LEVEL_NORM, "exit 0: send_request_size(%s) "KCYN"(%s) "KGRN"[HTTP OK]", orig_path, method);
 			return response;
 		}
     //handle cases when segment is not found
@@ -471,17 +471,17 @@ static int send_request_size(const char *method, const char *path, void *fp,
       debugf(DBG_LEVEL_NORM, "Received 404 for %s, most likely segment not found, ignore "KYEL"[HTTP OK]", method);
     }
     else {
-			debugf(DBG_LEVEL_NORM, KRED"Received http code=%d %s [HTTP ERR]", method);
+			debugf(DBG_LEVEL_NORM, KRED"Received http code=%d %s [HTTP ERR]", response, method);
       sleep(8 << tries); // backoff
     }
 		if (response == 401 && !cloudfs_connect()) { // re-authenticate on 401s 
-			debugf(DBG_LEVEL_NORM, KYEL"exit 1: send_request_size(%s) (%s) %s[HTTP REAUTH]", path, method);
+			debugf(DBG_LEVEL_NORM, KYEL"exit 1: send_request_size(%s) (%s) [HTTP REAUTH]", path, method);
 			return response;
 		}
     if (xmlctx)
       xmlCtxtResetPush(xmlctx, NULL, 0, NULL, NULL);
   }
-	debugf(DBG_LEVEL_NORM, "exit 2: send_request_size(%s) (%s)", path, method);
+	debugf(DBG_LEVEL_NORM, "exit 2: send_request_size(%s) "KCYN"(%s)", path, method);
   return response;
 }
 
