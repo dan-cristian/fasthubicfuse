@@ -32,7 +32,6 @@
 
 #define MAX_FILES 10000
 
-
 // size of buffer for writing to disk look at ioblksize.h in coreutils
 // and try some values on your own system if you want the best performance
 #define DISK_BUFF_SIZE 32768
@@ -462,10 +461,11 @@ static int send_request_size(const char *method, const char *path, void *fp,
 		curl_slist_free_all(headers);
     curl_easy_reset(curl);
     return_connection(curl);
-		if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409)) {
-			debugf(DBG_LEVEL_NORM, "exit 0: send_request_size(%s) "KCYN"(%s) "KGRN"[HTTP OK]", orig_path, method);
-			return response;
-		}
+    if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE") && response == 409)) {
+        debugf(DBG_LEVEL_NORM, "exit 0: send_request_size(%s) "KCYN"(%s) "KGRN"[HTTP OK] total_time=%.1f seconds", 
+             orig_path, method, total_time);
+        return response;
+    }
     //handle cases when segment is not found
     if (response == 404){
       debugf(DBG_LEVEL_NORM, "Received 404 for %s, most likely segment not found, ignore "KYEL"[HTTP OK]", method);

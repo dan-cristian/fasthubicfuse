@@ -140,11 +140,10 @@ int get_safe_cache_file_path(const char *path, char *file_path_safe, char *temp_
 		*pch = '.';
 	}
 	char file_path[PATH_MAX] = "";
-	//snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, (long)getpid(), tmp_path);
+  //temp file name had process pid in it, removed as on restart files are left in cache (pid changes)
 	snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, tmp_path);
 	//fixme check if sizeof or strlen is suitable
 	int file_path_len = sizeof(file_path);
-
 	//the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
 	//solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
 	char *md5_path = str2md5(file_path, file_path_len);
@@ -152,11 +151,8 @@ int get_safe_cache_file_path(const char *path, char *file_path_safe, char *temp_
 	size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
 	strncpy(file_path_safe, file_path, safe_len_prefix);
 	strncpy(file_path_safe + safe_len_prefix, md5_path, md5len);
-	//strcat(file_path_safe, md5_path);
 	//sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
 	file_path_safe[safe_len_prefix + md5len - 1] = '\0';
-	//debugf(DBG_LEVEL_NORM, 0,"f_p=[%s] f_p_l=%d f_p_s=[%s] s_l_p=%d md5l=%d md5p=[%s] cut=%d NMmmd=%d",
-	//	file_path, file_path_len, file_path_safe, safe_len_prefix, md5len, md5_path, safe_len_prefix + md5len - 1, NAME_MAX - md5len);
 	free(md5_path);
 	return strlen(file_path_safe);
 }
@@ -206,9 +202,9 @@ void debug_list_cache_content() {
 	dir_cache *cw;
 	dir_entry *de;
 	for (cw = dcache; cw; cw = cw->next) {
-		debugf(DBG_LEVEL_NORM, "LIST-CACHE: DIR[%s]", cw->path);
+		debugf(DBG_LEVEL_EXT, "LIST-CACHE: DIR[%s]", cw->path);
 		for (de = cw->entries; de; de = de->next) {
-			debugf(DBG_LEVEL_NORM, "LIST-CACHE:   FOLDER[%s]", de->full_name);
+			debugf(DBG_LEVEL_EXT, "LIST-CACHE:   FOLDER[%s]", de->full_name);
 		}
 	}
 }
@@ -239,7 +235,7 @@ dir_cache *new_cache(const char *path)
   cw->next = dcache;
 	dir_cache *result;
 	result = (dcache = cw);
-	debugf(DBG_LEVEL_NORM, "exit: new_cache(%s)", path);
+	debugf(DBG_LEVEL_EXT, "exit: new_cache(%s)", path);
   return result;
 }
 
@@ -268,13 +264,13 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
 void dir_decache(const char *path)
 {
   dir_cache *cw;
-	debugf(DBG_LEVEL_NORM, KCYN "dir_decache(%s)", path);
+	debugf(DBG_LEVEL_EXT, KCYN "dir_decache(%s)", path);
   pthread_mutex_lock(&dcachemut);
   dir_entry *de, *tmpde;
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   for (cw = dcache; cw; cw = cw->next) {
-		debugf(DBG_LEVEL_NORM, "dir_decache: parse(%s)", cw->path);
+		debugf(DBG_LEVEL_EXT, "dir_decache: parse(%s)", cw->path);
     if (!strcmp(cw->path, path)) {
       if (cw == dcache)
         dcache = cw->next;
@@ -282,8 +278,8 @@ void dir_decache(const char *path)
         cw->prev->next = cw->next;
       if (cw->next)
         cw->next->prev = cw->prev;
-			debugf(DBG_LEVEL_NORM, "dir_decache: free_dir1(%s)", cw->path);
-			//fixme: this sometimes is NULL, why?
+			debugf(DBG_LEVEL_EXT, "dir_decache: free_dir1(%s)", cw->path);
+			//fixme: this sometimes is NULL and generates segfaults, checking first
 			if (cw->entries != NULL)
 				cloudfs_free_dir_list(cw->entries);
       free(cw->path);
@@ -295,7 +291,7 @@ void dir_decache(const char *path)
         de = cw->entries;
         cw->entries = de->next;
         de->next = NULL;
-				debugf(DBG_LEVEL_NORM, "dir_decache: free_dir2()");
+				debugf(DBG_LEVEL_EXT, "dir_decache: free_dir2()");
         cloudfs_free_dir_list(de);
       }
       else for (de = cw->entries; de->next; de = de->next)
@@ -305,7 +301,7 @@ void dir_decache(const char *path)
           tmpde = de->next;
           de->next = de->next->next;
           tmpde->next = NULL;
-					debugf(DBG_LEVEL_NORM, "dir_decache: free_dir3()", cw->path);
+					debugf(DBG_LEVEL_EXT, "dir_decache: free_dir3()", cw->path);
 					cloudfs_free_dir_list(tmpde);
           break;
         }
@@ -346,7 +342,7 @@ void copy_dir_entry(dir_entry *src, dir_entry *dst) {
 //and this is a dir, a new dir cache entry is created
 void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 {
-  debugf(DBG_LEVEL_NORM, KCYN "update_dir_cache(%s)", path);
+  debugf(DBG_LEVEL_EXT, KCYN "update_dir_cache(%s)", path);
   pthread_mutex_lock(&dcachemut);
   dir_cache *cw;
   dir_entry *de;
@@ -362,7 +358,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
         {
           de->size = size;
           pthread_mutex_unlock(&dcachemut);
-					debugf(DBG_LEVEL_NORM, "exit 0: update_dir_cache(%s)", path);
+					debugf(DBG_LEVEL_EXT, "exit 0: update_dir_cache(%s)", path);
           return;
         }
       }
@@ -389,7 +385,7 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       break;
     }
   }
-	debugf(DBG_LEVEL_NORM, "exit 1: update_dir_cache(%s)", path);
+	debugf(DBG_LEVEL_EXT, "exit 1: update_dir_cache(%s)", path);
   pthread_mutex_unlock(&dcachemut);
 }
 
@@ -526,28 +522,28 @@ dir_entry * check_parent_folder_for_file(const char *path) {
 //check if local path is in cache, without downloading from cloud if not in cache
 dir_entry *check_path_info(const char *path)
 {
-	debugf(DBG_LEVEL_NORM, "check_path_info(%s)", path);
+	debugf(DBG_LEVEL_EXT, "check_path_info(%s)", path);
 	char dir[MAX_PATH_SIZE];
 	dir_for(path, dir);
 	dir_entry *tmp;
 
 	//get parent folder cache entry
 	if (!check_caching_list_directory(dir, &tmp)) {
-		debugf(DBG_LEVEL_NORM, "exit 0: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+		debugf(DBG_LEVEL_EXT, "exit 0: check_path_info(%s) "KRED"[CACHE-MISS]", path);
 		return NULL;
 	}
 	for (; tmp; tmp = tmp->next)
 	{
 		if (!strcmp(tmp->full_name, path)) {
-			debugf(DBG_LEVEL_NORM, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]", path);
+			debugf(DBG_LEVEL_EXT, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]", path);
 			return tmp;
 		}
 	}
 	if (!strcmp(path, "/")) {
-		debugf(DBG_LEVEL_NORM, "exit 2: check_path_info(%s) "KYEL "ignoring root [CACHE-MISS]", path);
+		debugf(DBG_LEVEL_EXT, "exit 2: check_path_info(%s) "KYEL "ignoring root [CACHE-MISS]", path);
 	}
 	else {
-		debugf(DBG_LEVEL_NORM, "exit 3: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+		debugf(DBG_LEVEL_EXT, "exit 3: check_path_info(%s) "KRED"[CACHE-MISS]", path);
 	}
 	return NULL;
 }
@@ -580,8 +576,8 @@ void debugf(int level, char *fmt, ...)
 #error "SYS_gettid unavailable on this system"
 #endif
 			va_list args;
-			char prefix[] = "==DBG%d [%s]:%d==";
-			char line[1024];
+			char prefix[] = "==DBG %d [%s]:%d==";
+			char line[4096];
 			char time_str[TIME_CHARS];
 			get_time_now_as_str(time_str, sizeof(time_str));
 			sprintf(line, prefix, level, time_str, thread_id);
