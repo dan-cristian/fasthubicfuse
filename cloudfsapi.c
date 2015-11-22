@@ -48,6 +48,8 @@ extern bool option_curl_verbose;
 extern int option_curl_progress_state;
 extern int option_cache_statfs_timeout;
 extern bool option_extensive_debug;
+extern bool option_enable_chown;
+extern bool option_enable_chmod;
 
 static int rhel5_mode = 0;
 static struct statvfs statcache = {
@@ -408,6 +410,14 @@ static int send_request_size(const char *method, const char *path, void *fp,
 				add_header(&headers, HEADER_TEXT_MTIME_DISPLAY, mtime_str_nice);
 				add_header(&headers, HEADER_TEXT_ATIME_DISPLAY, atime_str_nice);
 				add_header(&headers, HEADER_TEXT_CTIME_DISPLAY, ctime_str_nice);
+
+        char gid_str[INT_CHAR_LEN], uid_str[INT_CHAR_LEN], chmod_str[INT_CHAR_LEN];
+        snprintf(gid_str, INT_CHAR_LEN, "%d", de->gid);
+        snprintf(uid_str, INT_CHAR_LEN, "%d", de->uid);
+        snprintf(chmod_str, INT_CHAR_LEN, "%d", de->chmod);
+        add_header(&headers, HEADER_TEXT_GID, gid_str);
+        add_header(&headers, HEADER_TEXT_UID, uid_str);
+        add_header(&headers, HEADER_TEXT_CHMOD, chmod_str);
       }
 			else {
 				debugf(DBG_LEVEL_EXTALL, "send_request_size: not setting utimes (%s)", orig_path);
@@ -531,7 +541,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_reset(curl);
     return_connection(curl);
 
-    if (response >= 400 || response < 200) {
+    if (response != 404 && (response >= 400 || response < 200)) {
       /*
       * Now, our chunk.memory points to a memory block that is chunk.size
       * bytes big and contains the remote file.

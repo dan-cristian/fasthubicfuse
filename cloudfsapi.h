@@ -40,6 +40,8 @@ typedef struct extra_options {
 	char cache_statfs_timeout[OPTION_SIZE];
 	char debug_level[OPTION_SIZE];
   char curl_progress_state[OPTION_SIZE];
+  char enable_chmod[OPTION_SIZE];
+  char enable_chown[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);

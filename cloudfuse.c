@@ -26,6 +26,8 @@ extern int option_cache_statfs_timeout;
 extern int option_debug_level;
 extern bool option_get_extended_metadata;
 extern int option_curl_progress_state;
+extern bool option_enable_chown;
+extern bool option_enable_chmod;
 
 typedef struct
 {
@@ -38,6 +40,8 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   debugf(DBG_LEVEL_NORM, KBLU "cfs_getattr(%s)", path);
   stbuf->st_uid = geteuid();
   stbuf->st_gid = getegid();
+
+  //return standard values for root folder
   if (!strcmp(path, "/"))
   {
     stbuf->st_mode = S_IFDIR | 0755;
@@ -50,7 +54,7 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   dir_entry *de = path_info(path);
   if (!de) {
 		debug_list_cache_content();
-		debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_getattr(%s) not-in-cache", path);
+		debugf(DBG_LEVEL_NORM, KBLU"exit 1: cfs_getattr(%s) "KYEL"not-in-cache/cloud", path);
 		return -ENOENT;
   }
   
@@ -442,12 +446,27 @@ static int cfs_statfs(const char *path, struct statvfs *stat)
 static int cfs_chown(const char *path, uid_t uid, gid_t gid)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
+  dir_entry *de = check_path_info(path);
+  if (de) {
+    if (de->uid != uid || de->gid != gid) {
+      debugf(DBG_LEVEL_NORM, "cfs_chown(%s): change from uid:gid %d:%d to %d:%d", path, de->uid, de->gid, uid, gid);
+      de->uid = uid;
+      de->gid = gid;
+    }
+  }
   return 0;
 }
 
 static int cfs_chmod(const char *path, mode_t mode)
 {
   debugf(DBG_LEVEL_NORM, KBLU"cfs_chmod(%s,%d)", path, mode);
+  dir_entry *de = check_path_info(path);
+  if (de) {
+    if (de->chmod != mode) {
+      debugf(DBG_LEVEL_NORM, "cfs_chmod(%s): change mode from %d to %d", path, de->chmod, mode);
+      de->chmod = mode;
+    }
+  }
   return 0;
 }
 
@@ -592,7 +611,9 @@ ExtraFuseOptions extra_options = {
 	.curl_verbose = "false",
 	.cache_statfs_timeout = 0,
   .debug_level = 0,
-  .curl_progress_state = 1
+  .curl_progress_state = 1,
+  .enable_chown = "false",
+  .enable_chmod = "false"
 };
 
 int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs)
@@ -612,7 +633,9 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
 		sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose) ||
 		sscanf(arg, " cache_statfs_timeout = %[^\r\n ]", extra_options.cache_statfs_timeout) ||
     sscanf(arg, " debug_level = %[^\r\n ]", extra_options.debug_level) ||
-    sscanf(arg, " curl_progress_state = %[^\r\n ]", extra_options.curl_progress_state)
+    sscanf(arg, " curl_progress_state = %[^\r\n ]", extra_options.curl_progress_state) ||
+    sscanf(arg, " enable_chmod = %[^\r\n ]", extra_options.enable_chmod) ||
+    sscanf(arg, " enable_chown = %[^\r\n ]", extra_options.enable_chown)
 		)
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -643,6 +666,12 @@ void initialise_options() {
 	}
   if (*extra_options.curl_progress_state) {
     option_curl_progress_state = atoi(extra_options.curl_progress_state);
+  }
+  if (*extra_options.enable_chmod) {
+    option_enable_chmod = !strcasecmp(extra_options.enable_chmod, "true");
+  }
+  if (*extra_options.enable_chown) {
+    option_enable_chown = !strcasecmp(extra_options.enable_chown, "true");
   }
 }
 
@@ -696,6 +725,8 @@ int main(int argc, char **argv)
     fprintf(stderr, "  curl_progress_state=[0 or 1, 0 for progress callback enabled, 1 for disabled. Mostly used for debugging]\n");
     fprintf(stderr, "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
 		fprintf(stderr, "  debug_level=[0 to n, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
+    fprintf(stderr, "  enable_chmod=[true to enable chmod support on fuse]\n");
+    fprintf(stderr, "  enable_chown=[true to enable chown support on fuse]\n");
 		
     return 1;
   }
@@ -703,6 +734,10 @@ int main(int argc, char **argv)
   cloudfs_init();
 	initialise_options();
 	fprintf(stderr, "debug_level = %d\n", option_debug_level);
+  fprintf(stderr, "get_extended_metadata = %d\n", option_get_extended_metadata);
+  fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
+  fprintf(stderr, "enable_chmod = %d\n", option_enable_chmod);
+  fprintf(stderr, "enable_chown = %d\n", option_enable_chown);
   cloudfs_set_credentials(options.client_id, options.client_secret, options.refresh_token);
 
   if (!cloudfs_connect())

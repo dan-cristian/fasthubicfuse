@@ -34,6 +34,8 @@ bool option_curl_verbose = false;
 int option_cache_statfs_timeout = 0;
 int option_debug_level = 0;
 int option_curl_progress_state = 1;//1 to disable curl progress
+bool option_enable_chown = false;
+bool option_enable_chmod = false;
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -326,6 +328,9 @@ dir_entry* init_dir_entry() {
 	de->mtime.tv_nsec = 0;
 	de->atime.tv_nsec = 0;
 	de->ctime.tv_nsec = 0;
+  de->chmod = 0;
+  de->gid = 0;
+  de->uid = 0;
 	return de;
 }
 

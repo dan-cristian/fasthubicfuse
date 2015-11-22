@@ -10,6 +10,7 @@ typedef enum { false, true } bool;
 #define DBG_LEVEL_NORM 0
 #define DBG_LEVEL_EXT 1
 #define DBG_LEVEL_EXTALL 2
+#define INT_CHAR_LEN 16
 
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
@@ -18,7 +19,9 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_MTIME_DISPLAY "X-Object-Meta-Mtime-Display"
 #define HEADER_TEXT_ATIME_DISPLAY "X-Object-Meta-Atime-Display"
 #define HEADER_TEXT_CTIME_DISPLAY "X-Object-Meta-Ctime-Display"
-
+#define HEADER_TEXT_CHMOD "X-Object-Meta-Chmod"
+#define HEADER_TEXT_UID "X-Object-Meta-Uid"
+#define HEADER_TEXT_GID "X-Object-Meta-Gid"
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
 #define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse_%s"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
@@ -51,8 +54,10 @@ typedef struct dir_entry
   struct timespec ctime;
   struct timespec atime;
   char *md5sum; //interesting capability for rsync/scrub
-  int chmod;
-	int issegmented;
+  mode_t chmod;
+  uid_t uid;
+  gid_t gid;
+	bool issegmented;
 	time_t accessed_in_cache;//todo: cache support based on access time
   bool metadata_downloaded;
   // end change

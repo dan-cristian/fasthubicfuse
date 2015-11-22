@@ -93,12 +93,12 @@ BUGS/SHORTCOMINGS:
 	  is copied in local cache, then upload operation happens at 100%
 
 Recent additions/fixes (from https://github.com/dan-cristian):
-	* Support for atime and mtime, capability to add in the future support for chmod, chown.
+	* Support for atime, mtime, chmod, chown.
 	* Large files (segmented) have correct size listed (was 0 before).
 	* Multiple speed improvements, minimised the number of HTTP calls and added more caching features.
-	* Fixed several segmentation faults.
+	* Fixed many segmentation faults.
 	* Cached files are deleted on cache expiration when using a custom temp folder.
-	* Files copies have attributes preserved.
+	* Files copied have attributes preserved.
 	* Working well with rsync due to mtime support and proper copy operations.
 	* Support for http progress (track upload / download speed etc.)
 	* Major code refactoring, code documentation, extensive debugging, additional config options
