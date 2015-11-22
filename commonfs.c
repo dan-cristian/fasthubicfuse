@@ -245,7 +245,7 @@ dir_cache *new_cache(const char *path)
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
 	//check for NULL as dir might be already removed from cache by other thread
-	debugf(DBG_LEVEL_EXT, KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
+	debugf(DBG_LEVEL_NORM, "cloudfs_free_dir_list(%s)", dir_list->full_name);
 	while (dir_list) {
 		dir_entry *de = dir_list;
 		dir_list = dir_list->next;
@@ -264,7 +264,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
 void dir_decache(const char *path)
 {
   dir_cache *cw;
-	debugf(DBG_LEVEL_EXT, KCYN "dir_decache(%s)", path);
+	debugf(DBG_LEVEL_NORM, "dir_decache(%s)", path);
   pthread_mutex_lock(&dcachemut);
   dir_entry *de, *tmpde;
   char dir[MAX_PATH_SIZE];
