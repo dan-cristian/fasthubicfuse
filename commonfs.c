@@ -218,7 +218,7 @@ int delete_file(char *path) {
 	char file_path_safe[NAME_MAX] = "";
 	get_safe_cache_file_path(path, file_path_safe, temp_dir);
 	int result = unlink(file_path_safe);
-	debugf(DBG_LEVEL_NORM, KRED"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
+	debugf(DBG_LEVEL_EXT, KRED"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
 	return result;
 }
 
@@ -249,7 +249,7 @@ dir_cache *new_cache(const char *path)
 void cloudfs_free_dir_list(dir_entry *dir_list)
 {
 	//check for NULL as dir might be already removed from cache by other thread
-	debugf(DBG_LEVEL_NORM, KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
+	debugf(DBG_LEVEL_EXT, KRED"cloudfs_free_dir_list(%s)", dir_list->full_name);
 	while (dir_list) {
 		dir_entry *de = dir_list;
 		dir_list = dir_list->next;

@@ -1136,7 +1136,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         *dir_list = de;
 				char time_str[TIME_CHARS] = "";
 				get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-        debugf(DBG_LEVEL_NORM, KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s]", 
+        debugf(DBG_LEVEL_EXT, KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s]", 
 					de->full_name, de->size, de->content_type, de->isdir, de->islink, time_str);
         //attempt to read extended attributes on each dir entry
         get_file_metadata(de);
