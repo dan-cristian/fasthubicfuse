@@ -42,7 +42,6 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
     stbuf->st_nlink = 2;
 		debug_list_cache_content();
 		debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_getattr(%s)", path);
-		fuse_active_opp_count--;
 		return 0;
   }
 	//get file. if not in cache will be downloaded.
@@ -50,7 +49,6 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   if (!de) {
 		debug_list_cache_content();
 		debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_getattr(%s) not-in-cache", path);
-		fuse_active_opp_count--;
 		return -ENOENT;
   }
   
