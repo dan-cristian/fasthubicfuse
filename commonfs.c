@@ -204,9 +204,7 @@ void dir_for(const char *path, char *dir)
 
 //prints cache content for debug purposes
 void debug_list_cache_content() {
-	
-	return;
-
+	return;//disabled
 	dir_cache *cw;
 	dir_entry *de;
 	for (cw = dcache; cw; cw = cw->next) {
@@ -257,7 +255,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
 	while (dir_list) {
 		dir_entry *de = dir_list;
 		dir_list = dir_list->next;
-		//todo: remove file from disk cache
+		//remove file from disk cache
 		delete_file(de->full_name);
 		free(de->name);
 		free(de->full_name);
@@ -370,14 +368,13 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
           return;
         }
       }
-      //de = (dir_entry *)malloc(sizeof(dir_entry));
 			de = init_dir_entry();
       de->size = size;
       de->isdir = isdir;
       de->islink = islink;
       de->name = strdup(&path[strlen(cw->path) + 1]);
       de->full_name = strdup(path);
-			//todo: check if the conditions below are mixed up dir -> link?
+			//fix: the conditions below were mixed up dir -> link?
       if (islink) {
         de->content_type = strdup("application/link");
       }
@@ -402,8 +399,6 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
 int caching_list_directory(const char *path, dir_entry **list)
 {
 	debugf(DBG_LEVEL_EXT, "caching_list_directory(%s)", path);
-	//int lock = pthread_mutex_trylock(&dcachemut);
-	//debugf(DBG_LEVEL_NORM, DBG_LEVEL_NORM, "Mutex lock on caching_list_directory=%d", lock);
   pthread_mutex_lock(&dcachemut);
 	bool new_entry = false;
 	if (!strcmp(path, "/"))
@@ -425,7 +420,6 @@ int caching_list_directory(const char *path, dir_entry **list)
 		}
 		if (cw->was_deleted == false) {
 			if (!strcmp(cw->path, path)) {
-				//debugf(DBG_LEVEL_NORM, DBG_LEVEL_NORM, "Found in list directory %s", cw->path);
 				break;
 			}
 		}
@@ -445,7 +439,7 @@ int caching_list_directory(const char *path, dir_entry **list)
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
     if (!cloudfs_list_directory(path, list)){
-      //mutex unlock was forgotten?
+      //mutex unlock was forgotten
       pthread_mutex_unlock(&dcachemut);
 			debugf(DBG_LEVEL_EXT, "exit 1: caching_list_directory(%s)", path);
       return  0;
@@ -456,16 +450,16 @@ int caching_list_directory(const char *path, dir_entry **list)
 			cloudfs_free_dir_list(cw->entries);
 			cw->was_deleted = true;
 			cw->cached = time(NULL);
-			debugf(DBG_LEVEL_EXT, "status: caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+			debugf(DBG_LEVEL_EXT, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
 		}
 		else {
-			debugf(DBG_LEVEL_EXT, KRED"status: got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+			debugf(DBG_LEVEL_EXT, KRED"got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
 			pthread_mutex_unlock(&dcachemut);
 			return 0;
 		}
   }
 	else {
-		debugf(DBG_LEVEL_EXT, "status: caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
+		debugf(DBG_LEVEL_EXT, "caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
 		*list = cw->entries;
 	}
 	//adding new dir file list to global cache, now this dir becomes visible in cache
@@ -486,12 +480,11 @@ dir_entry *path_info(const char *path)
 		return NULL;
 	}
 	else {
-		debugf(DBG_LEVEL_EXT, "exit 0: path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
+		debugf(DBG_LEVEL_EXT, "path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
 	}
 	//iterate in file list obtained from cache or downloaded
 	for (; tmp; tmp = tmp->next) {
 		if (!strcmp(tmp->full_name, path)) {
-			//debugf(DBG_LEVEL_NORM, DBG_LEVEL_NORM, "FOUND in cache %s", tmp->full_name);
 			debugf(DBG_LEVEL_EXT, "exit 1: path_info(%s) %s[CACHE-FILE-HIT]", path, KGRN);
 			return tmp;
 		}
@@ -502,26 +495,23 @@ dir_entry *path_info(const char *path)
 }
 
 
-//retrieve folder from local cache if exists, return null if does not exist
+//retrieve folder from local cache if exists, return null if does not exist (rather than download)
 int check_caching_list_directory(const char *path, dir_entry **list)
 {
 	debugf(DBG_LEVEL_EXT, "check_caching_list_directory(%s)", path);
-	//int lock = pthread_mutex_trylock(&dcachemut);
-	//debugf(DBG_LEVEL_NORM, "Mutex lock on caching_list_directory=%d", lock);
 	pthread_mutex_lock(&dcachemut);
 	if (!strcmp(path, "/"))
 		path = "";
 	dir_cache *cw;
 	for (cw = dcache; cw; cw = cw->next)
 		if (!strcmp(cw->path, path)) {
-			//debugf(DBG_LEVEL_NORM, "Found in list directory %s", cw->path);
 			*list = cw->entries;
 			pthread_mutex_unlock(&dcachemut);
-			debugf(DBG_LEVEL_EXT, "exit 0: check_caching_list_directory(%s) %s[CACHE-DIR-HIT]", path, KGRN);
+			debugf(DBG_LEVEL_EXT, "exit 0: check_caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
 			return 1;
 		}
 	pthread_mutex_unlock(&dcachemut);
-	debugf(DBG_LEVEL_EXT, "exit 1: check_caching_list_directory(%s) %s[CACHE-DIR-MISS]", path, KRED);
+	debugf(DBG_LEVEL_EXT, "exit 1: check_caching_list_directory(%s) "KRED"[CACHE-DIR-MISS]", path);
 	return 0;
 }
 
@@ -535,7 +525,7 @@ dir_entry * check_parent_folder_for_file(const char *path) {
 		return tmp;
 }
 
-//used to check if local path is in cache, without downloading from cloud if not in cache
+//check if local path is in cache, without downloading from cloud if not in cache
 dir_entry *check_path_info(const char *path)
 {
 	debugf(DBG_LEVEL_NORM, "check_path_info(%s)", path);
@@ -551,8 +541,7 @@ dir_entry *check_path_info(const char *path)
 	for (; tmp; tmp = tmp->next)
 	{
 		if (!strcmp(tmp->full_name, path)) {
-			//debugf(DBG_LEVEL_NORM, "FOUND in cache %s", tmp->full_name);
-			debugf(DBG_LEVEL_NORM, "exit 1: check_path_info(%s) %s[CACHE-HIT]", path, KGRN);
+			debugf(DBG_LEVEL_NORM, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]", path);
 			return tmp;
 		}
 	}
@@ -592,8 +581,6 @@ void debugf(int level, char *fmt, ...)
 			int thread_id = 0;
 #error "SYS_gettid unavailable on this system"
 #endif
-			//char thread_name[THREAD_NAMELEN];
-			//pthread_getname_np(thread_id, thread_name, THREAD_NAMELEN);
 			va_list args;
 			char prefix[] = "==DBG%d [%s]:%d==";
 			char line[1024];
