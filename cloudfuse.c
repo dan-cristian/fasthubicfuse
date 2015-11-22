@@ -600,7 +600,8 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
 
 		sscanf(arg, " get_extended_metadata = %[^\r\n ]", extra_options.get_extended_metadata) ||
 		sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose) ||
-		sscanf(arg, " cache_statfs_timeout = %[^\r\n ]", extra_options.cache_statfs_timeout)
+		sscanf(arg, " cache_statfs_timeout = %[^\r\n ]", extra_options.cache_statfs_timeout) ||
+    sscanf(arg, " debug_level = %[^\r\n ]", extra_options.debug_level)
 		)
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
