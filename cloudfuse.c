@@ -33,7 +33,7 @@ typedef struct
 
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_getattr(%s):%d", path, fuse_active_opp_count);
+  debugf(DBG_LEVEL_NORM, KBLU "cfs_getattr(%s)", path);
   stbuf->st_uid = geteuid();
   stbuf->st_gid = getegid();
   if (!strcmp(path, "/"))

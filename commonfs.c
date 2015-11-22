@@ -34,8 +34,6 @@ bool option_curl_verbose = false;
 int option_cache_statfs_timeout = 0;
 int option_debug_level = 0;
 
-long fuse_active_opp_count = 0;
-
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
 time_t my_timegm(struct tm *tm) {
