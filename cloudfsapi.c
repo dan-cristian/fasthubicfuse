@@ -468,7 +468,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     }
     //handle cases when segment is not found
     if (response == 404){
-      debugf(DBG_LEVEL_NORM, "Received 404 for %s, most likely segment not found, ignore "KYEL"[HTTP OK]", method);
+      debugf(DBG_LEVEL_NORM, "send_request_size: "KYEL"404 error"KNRM" for (%s)(%s), ignored.", method, effective_url);
     }
     else {
 			debugf(DBG_LEVEL_NORM, KRED"Received http code=%d %s [HTTP ERR] url=%s", response, method, effective_url);
