@@ -1364,6 +1364,7 @@ int cloudfs_statfs(const char *path, struct statvfs *stat)
 	}
 	else {
 		debugf(DBG_LEVEL_EXT, "exit: cloudfs_statfs (old values, cached since %d seconds)", lapsed);
+    return 1;
 	}
 }
 

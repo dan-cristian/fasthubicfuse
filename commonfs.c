@@ -213,11 +213,11 @@ void debug_list_cache_content() {
 }
 
 int delete_file(char *path) {
-	debugf(DBG_LEVEL_NORM, KRED"delete_file(%s)", path);
+	debugf(DBG_LEVEL_NORM, KYEL"delete_file(%s)", path);
 	char file_path_safe[NAME_MAX] = "";
 	get_safe_cache_file_path(path, file_path_safe, temp_dir);
 	int result = unlink(file_path_safe);
-	debugf(DBG_LEVEL_EXT, KRED"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
+	debugf(DBG_LEVEL_EXT, KYEL"delete_file(%s) (%s) result=%s", path, file_path_safe, strerror(result));
 	return result;
 }
 

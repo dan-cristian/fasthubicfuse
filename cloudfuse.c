@@ -38,12 +38,13 @@ typedef struct
 static int cfs_getattr(const char *path, struct stat *stbuf)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_getattr(%s)", path);
-  stbuf->st_uid = geteuid();
-  stbuf->st_gid = getegid();
+  
 
   //return standard values for root folder
   if (!strcmp(path, "/"))
   {
+    stbuf->st_uid = geteuid();
+    stbuf->st_gid = getegid();
     stbuf->st_mode = S_IFDIR | 0755;
     stbuf->st_nlink = 2;
 		debug_list_cache_content();
@@ -62,7 +63,14 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
   if (option_get_extended_metadata && !de->metadata_downloaded) {
     get_file_metadata(de);
   }
-
+  if (option_enable_chown) {
+    stbuf->st_uid = de->uid;
+    stbuf->st_gid = de->gid;
+  }
+  else {
+    stbuf->st_uid = geteuid();
+    stbuf->st_gid = getegid();
+  }
   // change needed due to utimens
   stbuf->st_atime = de->atime.tv_sec;
 	stbuf->st_atim.tv_nsec = de->atime.tv_nsec;
@@ -78,14 +86,25 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
 	get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
 	debugf(DBG_LEVEL_EXT, KCYN"cfs_getattr: ctime=[%s]", time_str);
 
+  int default_mode_dir, default_mode_file;
+
+  if (option_enable_chmod) {
+    default_mode_dir = de->chmod;
+    default_mode_file = de->chmod;
+  }
+  else {
+    default_mode_dir = 0755;
+    default_mode_file = 0666;
+  }
+
   if (de->isdir) {
     stbuf->st_size = 0;
-    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_mode = S_IFDIR | default_mode_dir;
     stbuf->st_nlink = 2;
   }
   else if (de->islink) {
     stbuf->st_size = 1;
-    stbuf->st_mode = S_IFLNK | 0755;
+    stbuf->st_mode = S_IFLNK | default_mode_dir;
     stbuf->st_nlink = 1;
     stbuf->st_size = de->size;
     /* calc. blocks as if 4K blocksize filesystem; stat uses units of 512B */
@@ -95,7 +114,7 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
     stbuf->st_size = de->size;
     /* calc. blocks as if 4K blocksize filesystem; stat uses units of 512B */
     stbuf->st_blocks = ((4095 + de->size) / 4096) * 8;
-    stbuf->st_mode = S_IFREG | 0666;
+    stbuf->st_mode = S_IFREG | default_mode_file;
     stbuf->st_nlink = 1;
   }
 	debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_getattr(%s)", path);
@@ -108,8 +127,23 @@ static int cfs_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_i
   openfile *of = (openfile *)(uintptr_t)info->fh;
   if (of)
   {
+    //get file. if not in cache will be downloaded.
+    dir_entry *de = path_info(path);
+    if (!de) {
+      debug_list_cache_content();
+      debugf(DBG_LEVEL_NORM, KBLU"exit 1: cfs_fgetattr(%s) "KYEL"not-in-cache/cloud", path);
+      return -ENOENT;
+    }
+    int default_mode_file;
+    if (option_enable_chmod) {
+      default_mode_file = de->chmod;
+    }
+    else {
+      default_mode_file = 0666;
+    }
+
     stbuf->st_size = cloudfs_file_size(of->fd);
-    stbuf->st_mode = S_IFREG | 0666;
+    stbuf->st_mode = S_IFREG | default_mode_file;
     stbuf->st_nlink = 1;
 		debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_fgetattr(%s)", path);
     return 0;
