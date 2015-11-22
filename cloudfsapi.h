@@ -39,6 +39,7 @@ typedef struct extra_options {
 	char curl_verbose[OPTION_SIZE];
 	char cache_statfs_timeout[OPTION_SIZE];
 	char debug_level[OPTION_SIZE];
+  char curl_progress_state[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);
@@ -78,4 +79,5 @@ int cloudfs_statfs(const char *path, struct statvfs *stat);
 void cloudfs_verify_ssl(int dbg);
 void cloudfs_option_get_extended_metadata(int option);
 void cloudfs_option_curl_verbose(int option);
+void get_file_metadata(dir_entry *de);
 #endif

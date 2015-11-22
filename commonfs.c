@@ -33,6 +33,7 @@ bool option_get_extended_metadata = false;
 bool option_curl_verbose = false;
 int option_cache_statfs_timeout = 0;
 int option_debug_level = 0;
+int option_curl_progress_state = 1;//1 to disable curl progress
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -221,7 +222,7 @@ int delete_file(char *path) {
 //adding a directory in cache
 dir_cache *new_cache(const char *path)
 {
-  debugf(DBG_LEVEL_NORM, KMAG "new_cache(%s)", path);
+  debugf(DBG_LEVEL_NORM, KCYN"new_cache(%s)", path);
   dir_cache *cw = (dir_cache *)calloc(sizeof(dir_cache), 1);
   cw->path = strdup(path);
   cw->prev = NULL;
@@ -313,6 +314,7 @@ void dir_decache(const char *path)
 
 dir_entry* init_dir_entry() {
 	dir_entry *de = (dir_entry *)malloc(sizeof(dir_entry));
+  de->metadata_downloaded = false;
 	de->size = 0;
 	de->next = NULL;
 	de->md5sum = NULL;
@@ -423,7 +425,7 @@ int caching_list_directory(const char *path, dir_entry **list)
     if (!cloudfs_list_directory(path, list)){
 			//download was not ok
       pthread_mutex_unlock(&dcachemut);
-			debugf(DBG_LEVEL_EXT, "exit 0: caching_list_directory(%s) "KRED"[CACHE-DIR-MISS]", path);
+			debugf(DBG_LEVEL_EXT, "exit 0: caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
       return  0;
     }
 		debugf(DBG_LEVEL_EXT, "caching_list_directory: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
@@ -447,7 +449,7 @@ int caching_list_directory(const char *path, dir_entry **list)
 			debugf(DBG_LEVEL_EXT, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
 		}
 		else {
-			debugf(DBG_LEVEL_EXT, KRED"got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]", path);
+			debugf(DBG_LEVEL_EXT, "got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED w NULL]", path);
 			pthread_mutex_unlock(&dcachemut);
 			return 0;
 		}
@@ -470,7 +472,7 @@ dir_entry *path_info(const char *path)
 	dir_for(path, dir);
 	dir_entry *tmp;
 	if (!caching_list_directory(dir, &tmp)) {
-		debugf(DBG_LEVEL_EXT, "exit 0: path_info(%s) "KRED"[CACHE-DIR-MISS]", dir);
+		debugf(DBG_LEVEL_EXT, "exit 0: path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
 		return NULL;
 	}
 	else {
@@ -479,12 +481,12 @@ dir_entry *path_info(const char *path)
 	//iterate in file list obtained from cache or downloaded
 	for (; tmp; tmp = tmp->next) {
 		if (!strcmp(tmp->full_name, path)) {
-			debugf(DBG_LEVEL_EXT, "exit 1: path_info(%s) %s[CACHE-FILE-HIT]", path, KGRN);
+			debugf(DBG_LEVEL_EXT, "exit 1: path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
 			return tmp;
 		}
 	}
 	//miss in case the file is not found on a cached folder
-	debugf(DBG_LEVEL_EXT, "exit 2: path_info(%s) "KRED"!rarely happens! [CACHE-MISS]", path);
+	debugf(DBG_LEVEL_EXT, "exit 2: path_info(%s) "KYEL"[CACHE-MISS]", path);
 	return NULL;
 }
 
@@ -505,7 +507,7 @@ int check_caching_list_directory(const char *path, dir_entry **list)
 			return 1;
 		}
 	pthread_mutex_unlock(&dcachemut);
-	debugf(DBG_LEVEL_EXT, "exit 1: check_caching_list_directory(%s) "KRED"[CACHE-DIR-MISS]", path);
+	debugf(DBG_LEVEL_EXT, "exit 1: check_caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
 	return 0;
 }
 
@@ -529,7 +531,7 @@ dir_entry *check_path_info(const char *path)
 
 	//get parent folder cache entry
 	if (!check_caching_list_directory(dir, &tmp)) {
-		debugf(DBG_LEVEL_EXT, "exit 0: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+		debugf(DBG_LEVEL_EXT, "exit 0: check_path_info(%s) "KYEL"[CACHE-MISS]", path);
 		return NULL;
 	}
 	for (; tmp; tmp = tmp->next)
@@ -543,7 +545,7 @@ dir_entry *check_path_info(const char *path)
 		debugf(DBG_LEVEL_EXT, "exit 2: check_path_info(%s) "KYEL "ignoring root [CACHE-MISS]", path);
 	}
 	else {
-		debugf(DBG_LEVEL_EXT, "exit 3: check_path_info(%s) "KRED"[CACHE-MISS]", path);
+		debugf(DBG_LEVEL_EXT, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]", path);
 	}
 	return NULL;
 }

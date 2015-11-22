@@ -45,6 +45,7 @@ extern int debug;
 extern int verify_ssl;
 extern bool option_get_extended_metadata;
 extern bool option_curl_verbose;
+extern int option_curl_progress_state;
 extern int option_cache_statfs_timeout;
 extern bool option_extensive_debug;
 
@@ -319,7 +320,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
                         off_t file_size, int is_segment,
 												dir_entry *de_cached_entry)
 {
-  debugf(DBG_LEVEL_EXT, KYEL "send_request_size(%s) (%s)", method, path);
+  debugf(DBG_LEVEL_EXT, "send_request_size(%s) (%s)", method, path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -360,7 +361,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HEADER, 0);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);//0=to enable progress
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, option_curl_progress_state);//0=to enable progress
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
@@ -374,10 +375,10 @@ static int send_request_size(const char *method, const char *path, void *fp,
 		else {
 			// updating metadata on a file to be added to cache
 			de = de_cached_entry;
-			debugf(DBG_LEVEL_EXT, KYEL"send_request_size: using param dir_entry(%s)", orig_path);
+			debugf(DBG_LEVEL_EXTALL, "send_request_size: using param dir_entry(%s)", orig_path);
 		}
 		if (!de) {
-			debugf(DBG_LEVEL_EXT, KYEL"send_request_size: file not in cache (%s)", orig_path);
+			debugf(DBG_LEVEL_EXTALL, "send_request_size: file not in cache (%s)", orig_path);
 		}
     else {
       // add headers to save utimens attribs only on upload
@@ -409,7 +410,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
 				add_header(&headers, HEADER_TEXT_CTIME_DISPLAY, ctime_str_nice);
       }
 			else {
-				debugf(DBG_LEVEL_EXT, KYEL"send_request_size: not setting utimes (%s)", orig_path);
+				debugf(DBG_LEVEL_EXTALL, "send_request_size: not setting utimes (%s)", orig_path);
 			}
     }
     /**/
@@ -433,7 +434,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     else if (!strcasecmp(method, "PUT"))
     {
       //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
-      debugf(DBG_LEVEL_EXT, KYEL"send_request_size: PUT w/o FP(%s)", orig_path);
+      debugf(DBG_LEVEL_EXT, "send_request_size: PUT w/o FP(%s)", orig_path);
       curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
       if (fp) {
         curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
@@ -462,13 +463,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
     {
       if (is_segment)
       {
-        debugf(DBG_LEVEL_EXT, KYEL"GET SEGMENT (%s)", orig_path);
+        debugf(DBG_LEVEL_EXT, "GET SEGMENT (%s)", orig_path);
 				curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 				curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
       }
       else if (fp)
       {
-        debugf(DBG_LEVEL_EXT, KYEL"send_request_size: GET FP (%s)", orig_path);
+        debugf(DBG_LEVEL_EXT, "send_request_size: GET FP (%s)", orig_path);
         rewind(fp); // make sure the file is ready for a-writin'
         fflush(fp);
         if (ftruncate(fileno(fp), 0) < 0)
@@ -490,13 +491,13 @@ static int send_request_size(const char *method, const char *path, void *fp,
       }
       else if (xmlctx)
       {
-        debugf(DBG_LEVEL_EXT, KYEL"send_request_size: GET XML (%s)", orig_path);
+        debugf(DBG_LEVEL_EXT, "send_request_size: GET XML (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
       else {
         //asumming retrieval of headers only
-        debugf(DBG_LEVEL_EXT, KYEL"send_request_size: GET HEADERS only(%s)");
+        debugf(DBG_LEVEL_EXT, "send_request_size: GET HEADERS only(%s)");
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_utimens_dispatch);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)de);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
@@ -504,7 +505,7 @@ static int send_request_size(const char *method, const char *path, void *fp,
     }
     else
     {
-      debugf(DBG_LEVEL_EXT, KYEL"send_request_size: catch_all (%s)");
+      debugf(DBG_LEVEL_EXT, "send_request_size: catch_all (%s)");
 			// this posts an HEAD request (e.g. for statfs)
       curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
       curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
@@ -1074,6 +1075,7 @@ void get_file_metadata(dir_entry *de){
 		debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s)", de->full_name);
 		//retrieve additional file metadata with a quick HEAD query
 		char *encoded = curl_escape(de->full_name, 0);
+    de->metadata_downloaded = true;
 		int response = send_request("GET", encoded, NULL, NULL, NULL, de);
 		curl_free(encoded);
 		debugf(DBG_LEVEL_EXT, KCYN "exit: get_file_metadata(%s)", de->full_name);
@@ -1215,7 +1217,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
           {
             //not sure when / why this is called, seems to generate many missed delete ops.
             //cloudfs_free_dir_list(de);
-            debugf(DBG_LEVEL_EXT, KRED"cloudfs_list_directory: ignore cloudfs_free_dir_list(%s) command", de->name);
+            debugf(DBG_LEVEL_EXT, "cloudfs_list_directory: "KYEL"ignore "KNRM"cloudfs_free_dir_list(%s) command", de->name);
             continue;
           }
           strncpy(last_subdir, de->name, sizeof(last_subdir));
@@ -1227,7 +1229,8 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
         debugf(DBG_LEVEL_EXT, KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s]", 
 					de->full_name, de->size, de->content_type, de->isdir, de->islink, time_str);
         //attempt to read extended attributes on each dir entry
-        get_file_metadata(de);
+        //commented out as lazzy metadata read is implemented in cfs_getattr()
+        //get_file_metadata(de);
       }
       else {
         debugf(DBG_LEVEL_EXT, "unknown element: %s", onode->name);
@@ -1302,15 +1305,13 @@ int cloudfs_delete_object(const char *path)
 
 //fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
 // https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/
+// this operation also causes an HTTP 400 error if X-Object-Meta-FilePath value is larger than 256 chars
 int cloudfs_copy_object(const char *src, const char *dst)
 {
-	debugf(DBG_LEVEL_NORM, "cloudfs_copy_object(%s, %s) lensrc=%d, lendst=%d", src, dst, strlen(src), strlen(dst));
-  //this seems to generate problems with certain file names
-  //for example, this file:
-  // /backup/music/Armin%20Van%20Buuren/Armin%20Van%20Buuren%20-%20A%20State%20Of%20Trance%20586%20%282012-11-08%29%20%28Inspiron%29/06%20Above%20%26%20Beyond%20-%20Sun%20In%20Your%20Eyes%20%28Mark%20Sherry%E2%80%99s%20%E2%80%98Argentinian%20Sun%E2%80%99%20Remix%29.mp3
-  //char src_orig_path[MAX_URL_SIZE];
-  char *dst_encoded = curl_escape(dst, strlen(dst));
-  char *src_encoded = curl_escape(src, strlen(src));
+	debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s, %s) lensrc=%d, lendst=%d", src, dst, strlen(src), strlen(dst));
+
+  char *dst_encoded = curl_escape(dst, 0);
+  char *src_encoded = curl_escape(src, 0);
   
   //convert encoded string (slashes are encoded as well) to encoded string with slashes
   char *slash;

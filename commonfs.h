@@ -20,7 +20,6 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_CTIME_DISPLAY "X-Object-Meta-Ctime-Display"
 
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
-//#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse%ld-%s"
 #define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse_%s"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
 
@@ -54,7 +53,8 @@ typedef struct dir_entry
   char *md5sum; //interesting capability for rsync/scrub
   int chmod;
 	int issegmented;
-	time_t accessed_in_cache;//cache support based on access time
+	time_t accessed_in_cache;//todo: cache support based on access time
+  bool metadata_downloaded;
   // end change
   int isdir;
   int islink;

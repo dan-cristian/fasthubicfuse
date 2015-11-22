@@ -24,6 +24,8 @@ extern pthread_mutexattr_t mutex_attr;
 extern int cache_timeout;
 extern int option_cache_statfs_timeout;
 extern int option_debug_level;
+extern bool option_get_extended_metadata;
+extern int option_curl_progress_state;
 
 typedef struct
 {
@@ -52,6 +54,11 @@ static int cfs_getattr(const char *path, struct stat *stbuf)
 		return -ENOENT;
   }
   
+  //lazzy download of file metadata, only when really needed
+  if (option_get_extended_metadata && !de->metadata_downloaded) {
+    get_file_metadata(de);
+  }
+
   // change needed due to utimens
   stbuf->st_atime = de->atime.tv_sec;
 	stbuf->st_atim.tv_nsec = de->atime.tv_nsec;
@@ -299,10 +306,10 @@ static int cfs_open(const char *path, struct fuse_file_info *info)
 
 static int cfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *info)
 {
-  debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, KBLU "cfs_read(%s)", path);
 	debug_print_descriptor(info);
 	int result = pread(((openfile *)(uintptr_t)info->fh)->fd, buf, size, offset);
-	debugf(DBG_LEVEL_EXT, KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
+	debugf(DBG_LEVEL_EXTALL, KBLU "exit: cfs_read(%s) result=%s", path, strerror(errno));
 	return result;
 }
 
@@ -583,7 +590,9 @@ FuseOptions options = {
 ExtraFuseOptions extra_options = {
 	.get_extended_metadata = "false",
 	.curl_verbose = "false",
-	.cache_statfs_timeout = 0
+	.cache_statfs_timeout = 0,
+  .debug_level = 0,
+  .curl_progress_state = 1
 };
 
 int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs)
@@ -602,7 +611,8 @@ int parse_option(void *data, const char *arg, int key, struct fuse_args *outargs
 		sscanf(arg, " get_extended_metadata = %[^\r\n ]", extra_options.get_extended_metadata) ||
 		sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose) ||
 		sscanf(arg, " cache_statfs_timeout = %[^\r\n ]", extra_options.cache_statfs_timeout) ||
-    sscanf(arg, " debug_level = %[^\r\n ]", extra_options.debug_level)
+    sscanf(arg, " debug_level = %[^\r\n ]", extra_options.debug_level) ||
+    sscanf(arg, " curl_progress_state = %[^\r\n ]", extra_options.curl_progress_state)
 		)
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -631,6 +641,9 @@ void initialise_options() {
 	if (*extra_options.cache_statfs_timeout) {
 		option_cache_statfs_timeout = atoi(extra_options.cache_statfs_timeout);
 	}
+  if (*extra_options.curl_progress_state) {
+    option_curl_progress_state = atoi(extra_options.curl_progress_state);
+  }
 }
 
 int main(int argc, char **argv)
@@ -680,7 +693,8 @@ int main(int argc, char **argv)
 
 		fprintf(stderr, "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
 		fprintf(stderr, "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
-		fprintf(stderr, "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
+    fprintf(stderr, "  curl_progress_state=[0 or 1, 0 for progress callback enabled, 1 for disabled. Mostly used for debugging]\n");
+    fprintf(stderr, "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
 		fprintf(stderr, "  debug_level=[0 to n, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
 		
     return 1;
