@@ -1124,10 +1124,12 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             ((strstr(de->content_type, "application/link") != NULL));
         if (de->isdir)
         {
-					//i guess this will remove a file in cache which is not found on the disk
+					//i guess this will remove a dir_entry from cache if is there already
           if (!strncasecmp(de->name, last_subdir, sizeof(last_subdir)))
           {
-            cloudfs_free_dir_list(de);
+            //not sure when / why this is called, seems to generate many missed delete ops.
+            //cloudfs_free_dir_list(de);
+            debugf(DBG_LEVEL_EXT, KRED"cloudfs_list_directory: ignore cloudfs_free_dir_list(%s) command", de->name);
             continue;
           }
           strncpy(last_subdir, de->name, sizeof(last_subdir));
