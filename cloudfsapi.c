@@ -126,6 +126,7 @@ static void add_header(curl_slist **headers, const char *name,
   if (strlen(value) > 256) {
     debugf(DBG_LEVEL_NORM, KRED"add_header: warning, value size > 256 (%s:%s) ", name, value);
     //hubic will throw an HTTP 400 error on X-Copy-To operation if X-Object-Meta-FilePath header value is larger than 256 chars
+    //fix for issue #95 https://github.com/TurboGit/hubicfuse/issues/95
     if (!strcasecmp(name, "X-Object-Meta-FilePath")) {
       debugf(DBG_LEVEL_NORM, KRED"add_header: trimming header (%s) value to max allowed", name);
       //trim header size to max allowed
@@ -687,7 +688,7 @@ void split_path(const char *path, char *seg_base, char *container,
           MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
       _object = remstr;
   }
-	//fixme: when removing root folders this will generate a segfault
+	//fixme: when removing root folders this will generate a segfault, issue #83, https://github.com/TurboGit/hubicfuse/issues/83
 	if (_object == NULL)
 		_object = object;
 	else

@@ -252,7 +252,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
 	while (dir_list) {
 		dir_entry *de = dir_list;
 		dir_list = dir_list->next;
-		//remove file from disk cache
+		//remove file from disk cache, fix for issue #89, https://github.com/TurboGit/hubicfuse/issues/89
 		delete_file(de->full_name);
 		free(de->name);
 		free(de->full_name);
