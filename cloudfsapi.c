@@ -1067,7 +1067,7 @@ int cloudfs_object_truncate(const char *path, off_t size)
 
 //get metadata from cloud, like time attribs. create new entry if not cached yet.
 void get_file_metadata(dir_entry *de){
-	if (de->size == 0 && !de->isdir){
+	if (de->size == 0 && !de->isdir && !de->metadata_downloaded){
 		//this can be a potential segmented file, try to read segments size
 		debugf(DBG_LEVEL_EXT, KMAG"ZERO size file=%s", de->full_name);
 		char seg_base[MAX_URL_SIZE] = "";

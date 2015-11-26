@@ -78,8 +78,16 @@ time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size){
 
 int get_time_as_string(time_t time_t_val, long nsec, char *time_str, int time_str_len){
   struct tm time_val_tm;
-  time_val_tm = *gmtime(&time_t_val);
-	int str_len = strftime(time_str, time_str_len, HUBIC_DATE_FORMAT, &time_val_tm);
+  time_t safe_input_time;
+  //if time is incorrect (too long) you get segfault, need to check length and trim
+  if (time_t_val > INT_MAX) {
+    debugf(DBG_LEVEL_NORM, KRED"get_time_as_string: input time length too long, %lu > max=%lu, trimming!", time_t_val, INT_MAX);
+    safe_input_time = 0;//(int)time_t_val;
+  }
+  else 
+    safe_input_time = time_t_val;
+  time_val_tm = *gmtime(&safe_input_time);
+  int str_len = strftime(time_str, time_str_len, HUBIC_DATE_FORMAT, &time_val_tm);
 	char nsec_str[TIME_CHARS];
 	sprintf(nsec_str, "%d", nsec);
 	strcat(time_str, nsec_str);
