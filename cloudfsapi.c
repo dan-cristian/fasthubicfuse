@@ -1141,7 +1141,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
   if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
     response = 404;
   else{
-    // this generates 404 err on non segmented files (small files)
+    // this was generating 404 err on non segmented files (small files)
     response = send_request("GET", container, NULL, xmlctx, NULL, NULL);
   }
 
@@ -1162,7 +1162,7 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
       {
         entry_count++;
 				dir_entry *de = init_dir_entry();
-        //http://developer.openstack.org/api-ref-objectstorage-v1.html
+        // useful docs on nodes here: http://developer.openstack.org/api-ref-objectstorage-v1.html
         if (is_container || is_subdir)
           de->content_type = strdup("application/directory");
         for (anode = onode->children; anode; anode = anode->next)
@@ -1212,8 +1212,13 @@ int cloudfs_list_directory(const char *path, dir_entry **dir_list)
             time_t local_time_t = get_time_as_local(last_modified_t, local_time_str, sizeof(local_time_str));
             de->last_modified = local_time_t;
             de->ctime.tv_sec = local_time_t;
-            // TODO check if I can retrieve nano seconds?
             de->ctime.tv_nsec = 0;
+            //initialise all fields with hubic last modified date in case the file does not have extended attributes set
+            de->mtime.tv_sec = local_time_t;
+            de->mtime.tv_nsec = 0;
+            de->atime.tv_sec = local_time_t;
+            de->atime.tv_nsec = 0;
+            // TODO check if I can retrieve nano seconds?
           }
         }
         de->isdir = de->content_type &&
