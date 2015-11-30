@@ -1,0 +1,14 @@
+--style=allman
+--convert-tabs
+--indent=spaces=3
+--lineend=linux
+--max-code-length=79
+--pad-oper
+--pad-header
+--align-pointer=type
+--align-reference=name
+--break-closing-brackets
+--min-conditional-indent=0
+--delete-empty-lines
+--remove-brackets
+--remove-comment-prefix
