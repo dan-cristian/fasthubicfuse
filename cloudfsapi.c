@@ -20,10 +20,11 @@
 #include <json.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+#include <errno.h>
+#include <fuse.h>
 #include "commonfs.h"
 #include "cloudfsapi.h"
 #include "config.h"
-#include <fuse.h>
 
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
@@ -331,37 +332,83 @@ size_t writefunc_callback(void *contents, size_t size, size_t nmemb, void *userp
 static size_t progressive_read_callback(void *ptr, size_t size, size_t nmemb, void *userp)
 {
   dir_entry *de = (dir_entry*)userp;
-  debugf(DBG_LEVEL_EXTALL, KMAG"progressive_read_callback: entering for path(%s) size=%lu nmemb=%lu", de->full_name, size, nmemb);
+  debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: entering for path(%s) size=%lu nmemb=%lu", de->full_name, size, nmemb);
   struct progressive_data_buf *upload_buf = &de->upload_buf;
-  
-
   if (size*nmemb < 1) {
-    debugf(DBG_LEVEL_EXT, KYEL"progressive_read_callback: exit as size*nmemb < 1");
+    debugf(DBG_LEVEL_EXT, "progressive_read_callback: "KYEL"exit as size*nmemb < 1");
     return 0;
   }
   if (upload_buf == NULL) {
-    debugf(DBG_LEVEL_NORM, KRED"progressive_read_callback: got NULL data buffer");
+    //just to be extra safe
+    debugf(DBG_LEVEL_NORM, "progressive_read_callback: "KRED"got unexpected NULL data buffer");
     return 0;
   }
-  upload_buf->upload_completed = false;
   size_t max_size_to_upload;
-
-  while (upload_buf->write_completed == false) {
-    max_size_to_upload = min(size*nmemb, de->upload_buf.sizeleft);
-    if (upload_buf->sizeleft) {
-      *(char *) ptr = upload_buf->readptr[0];
-      upload_buf->readptr += max_size_to_upload;
-      upload_buf->sizeleft -= max_size_to_upload;
-      debugf(DBG_LEVEL_EXTALL, KMAG"progressive_read_callback: feed for upload data size=%lu", max_size_to_upload);
-      return max_size_to_upload;
+  int sem_val_empty, sem_val_full;
+  //upload_buf->upload_started = true;//signal fuse cfs_write to start feeding data
+  upload_buf->upload_completed = false;
+  //first time entry in this function for current thread, open semaphore needed?
+  if (upload_buf->offset == 0 && upload_buf->sizeleft != 0) {
+    if ((de->upload_buf.isempty_semaphore = sem_open(de->upload_buf.isempty_semaphore_name, O_CREAT, 0644, 0)) == SEM_FAILED) {
+      int errsv = errno;
+      debugf(DBG_LEVEL_NORM, KRED"progressive_read_callback: cannot open isempty_semaphore, err=%s", strerror(errsv));
     }
-    
-    //debugf(DBG_LEVEL_EXTALL, KMAG "progressive_read_callback: wait for more data from fuse, max_size_upload=%lu", max_size_to_upload);
-    sleep_ms(1);
+    else {
+      debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: isempty_semaphore opened");
+    }
+    if ((de->upload_buf.isfull_semaphore = sem_open(de->upload_buf.isfull_semaphore_name, O_CREAT, 0644, 0)) == SEM_FAILED) {
+      int errsv = errno;
+      debugf(DBG_LEVEL_NORM, KRED"progressive_read_callback: cannot open isfull_semaphore, err=%s", strerror(errsv));
+    }
+    else {
+      debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: isfull_semaphore opened");
+    }
   }
+
+  sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_empty);
+  sem_getvalue(de->upload_buf.isfull_semaphore, &sem_val_full);
+  debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: prep to process, sizeleft=%lu, sem_val_empty=%d, sem_val_full=%d bufaddr=%lu",
+    upload_buf->sizeleft, sem_val_empty, sem_val_full, upload_buf->readptr);
+
+  sem_wait(de->upload_buf.isfull_semaphore);
+
+  max_size_to_upload = min(size*nmemb, de->upload_buf.sizeleft);
+  if (upload_buf->sizeleft) {
+    //todo: check if this copy can be removed: http://sourceforge.net/p/fuse/mailman/message/29119987/
+    memcpy(ptr, upload_buf->readptr, max_size_to_upload);
+    upload_buf->readptr += max_size_to_upload;
+    upload_buf->sizeleft -= max_size_to_upload;
+    debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: "KMAG"feed for upload data size=%lu", max_size_to_upload);
+    if (upload_buf->sizeleft == 0) {
+      sem_post(de->upload_buf.isempty_semaphore);
+    }
+    else {
+      debugf(DBG_LEVEL_NORM, "progressive_read_callback: "KRED"chunked buffer sizeleft=%lu", upload_buf->sizeleft);
+    }
+    //debugf(DBG_LEVEL_EXTALL, KYEL"BUF=[%s]", (char*)ptr);
+    //sleep_ms(2000);
+    return max_size_to_upload;
+  }
+
+  sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_empty);
+  sem_getvalue(de->upload_buf.isfull_semaphore, &sem_val_full);
+  if (!upload_buf->write_completed) {
+    debugf(DBG_LEVEL_NORM, "progressive_read_callback: "KRED"unexpected data upload done on write in progress, sem_val_empty=%d, sem_val_full=%d", 
+      sem_val_empty, sem_val_full);
+  }
+  //all data uploaded and write completed, exit
   debugf(DBG_LEVEL_EXT, KMAG "progressive_read_callback: full file upload completed");
+  sem_post(de->upload_buf.isempty_semaphore);
   upload_buf->upload_completed = true;
-  return 0;                          /* no more data left to deliver */
+  sem_close(de->upload_buf.isempty_semaphore);
+  sem_close(de->upload_buf.isfull_semaphore);
+  sem_unlink(de->upload_buf.isempty_semaphore_name);
+  sem_unlink(de->upload_buf.isfull_semaphore_name);
+  free(de->upload_buf.isempty_semaphore_name);
+  free(de->upload_buf.isfull_semaphore_name);
+  de->upload_buf.isempty_semaphore_name = NULL;
+  de->upload_buf.isfull_semaphore_name = NULL;
+  return 0; //no more data left to deliver
 }
 
 // de_cached_entry must be NULL when the file is already in global cache
@@ -968,7 +1015,7 @@ const char * get_file_mimetype ( const char *path )
 }
 
 //progressive upload to cloud, works only for not segmented files
-void cloudfs_object_read_progressive(const char *path) {
+void cloudfs_object_upload_progressive(const char *path) {
   debugf(DBG_LEVEL_EXT, "cloudfs_object_read_progressive(%s)", path);
   char *encoded = curl_escape(path, 0);
   //mark file size = 1 to signal we have some data coming in

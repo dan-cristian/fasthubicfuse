@@ -119,6 +119,7 @@ int get_timespec_as_str(const struct timespec *times, char *time_str, int time_s
 	return get_time_as_string(times->tv_sec, times->tv_nsec, time_str, time_str_len);
 }
 
+//solution from http://stackoverflow.com/questions/7627723/how-to-create-a-md5-hash-of-a-string-in-c
 char *str2md5(const char *str, int length) {
   int n;
   MD5_CTX c;
@@ -147,7 +148,7 @@ char *str2md5(const char *str, int length) {
   return out;
 }
 
-// http://stackoverflow.com/questions/10324611/how-to-calculate-the-md5-hash-of-a-large-file-in-c
+//solution from http://stackoverflow.com/questions/10324611/how-to-calculate-the-md5-hash-of-a-large-file-in-c
 int file_md5(FILE *file_handle, char *md5_file_str) {
   if (file_handle == NULL) {
     debugf(DBG_LEVEL_NORM, KRED"file_md5: NULL file handle");
@@ -300,6 +301,7 @@ void cloudfs_free_dir_list(dir_entry *dir_list)
 		free(de->content_type);
 		//TODO free all added fields
 		free(de->md5sum);
+    free(de->full_name_hash);
     //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
 		free(de);
 	}
@@ -375,6 +377,7 @@ dir_entry* init_dir_entry() {
   de->uid = 0;
   de->upload_buf.upload_completed = false;
   de->upload_buf.write_completed = false;
+  de->full_name_hash = NULL;
 	return de;
 }
 
@@ -422,6 +425,8 @@ void update_dir_cache(const char *path, off_t size, int isdir, int islink)
       de->islink = islink;
       de->name = strdup(&path[strlen(cw->path) + 1]);
       de->full_name = strdup(path);
+      //need a unique file id for semaphores
+      de->full_name_hash = strdup(str2md5(de->full_name, strlen(de->full_name)));
 			//fix: the conditions below were mixed up dir -> link?
       if (islink) {
         de->content_type = strdup("application/link");

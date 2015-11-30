@@ -85,5 +85,5 @@ void cloudfs_option_get_extended_metadata(int option);
 void cloudfs_option_curl_verbose(int option);
 void get_file_metadata(dir_entry *de);
 int cloudfs_update_meta(dir_entry *de);
-void cloudfs_object_read_progressive(const char *path);
+void cloudfs_object_upload_progressive(const char *path);
 #endif

@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <pwd.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -386,6 +387,9 @@ static int cfs_flush(const char *path, struct fuse_file_info *info)
           debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu", path, file_size);
           //signal completion of read/write operation
           de->upload_buf.write_completed = true;
+          //signal last data available in buffer for upload
+          sem_post(de->upload_buf.isfull_semaphore);
+          sem_wait(de->upload_buf.isempty_semaphore);
           fclose(fp);
           errsv = 0;
         }
@@ -469,26 +473,62 @@ static int cfs_write(const char *path, const char *buf, size_t length, off_t off
 	int result = pwrite(((openfile *)(uintptr_t)info->fh)->fd, buf, length, offset);
 	int errsv = errno;
   //todo: send data also to progressive upload buffer and wait until this data chunck is uploaded, to show real upload progress
-  // fixme: prior check of md5sum not done here, upload optimisation not functional
+  //fixme: prior check of md5sum file content not done here, upload optimisation not functional
   if (option_enable_progressive_upload) {
+    int sem_val_full, sem_val_empty;
     dir_entry *de = check_path_info(path);
     if (de) {
-      //wait until buffer is uploaded from previous write call
-      while (offset != 0 && de->upload_buf.sizeleft > 0) {
-        //debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): wait for curl to upload, size_left=%lu", path, de->upload_buf.sizeleft);
-        sleep_ms(1);
-      }
-      de->upload_buf.write_completed = false;
+      de->upload_buf.offset = offset;
       de->upload_buf.readptr = buf;
       de->upload_buf.sizeleft = length;
+      //debugf(DBG_LEVEL_EXTALL, KCYN"BUF=[%s]", de->upload_buf.readptr);
       if (offset == 0) {
+        de->upload_buf.write_completed = false;
         //start upload op with a new thread
+        debugf(DBG_LEVEL_NORM, KBLU"cfs_write(%s) start upload thread buf_len=%lu", path, length);
+        //using semaphores for buffer upload: http://pages.cs.wisc.edu/~remzi/Classes/537/Fall2008/Notes/threads-semaphores.txt
+        char semaphore_name[MD5_DIGEST_LENGTH + 20] = "\0";//semaphore prefix len < 10
+        snprintf(semaphore_name, sizeof(semaphore_name), "/isempty_%s", de->full_name_hash);
+        de->upload_buf.isempty_semaphore_name = strdup(semaphore_name);//don't forget to free this
+        //ensure semaphore does not exist (might be in the system from a previous unclean finished operation)
+        sem_unlink(de->upload_buf.isempty_semaphore_name);
+        if ((de->upload_buf.isempty_semaphore = sem_open(de->upload_buf.isempty_semaphore_name, O_CREAT|O_EXCL, 0644, 0)) == SEM_FAILED) {
+          errsv = errno;
+          debugf(DBG_LEVEL_NORM, KRED"cfs_write(%s): cannot init isempty semaphore for progressive upload, err=%s", path, strerror(errsv));
+          exit(1);
+        }
+        else {
+          sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_empty);
+          debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): isempty_semaphore created, size_left=%lu, sem_val_empty=%d",
+            path, de->upload_buf.sizeleft, sem_val_empty);
+        }
+        snprintf(semaphore_name, sizeof(semaphore_name), "/isfull_%s", de->full_name_hash);
+        de->upload_buf.isfull_semaphore_name = strdup(semaphore_name);
+        sem_unlink(de->upload_buf.isfull_semaphore_name);
+        if ((de->upload_buf.isfull_semaphore = sem_open(de->upload_buf.isfull_semaphore_name, O_CREAT | O_EXCL, 0644, 0)) == SEM_FAILED) {
+          errsv = errno;
+          debugf(DBG_LEVEL_NORM, KRED"cfs_write(%s): cannot init isfull semaphore for progressive upload, err=%s", path, strerror(errsv));
+          exit(1);
+        }
+        else {
+          sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_full);
+          debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): isfull_semaphore created, size_left=%lu, sem_val_full=%d",
+            path, de->upload_buf.sizeleft, sem_val_full);
+        }
         char path_copy[MAX_PATH_SIZE] = "";
         strcpy(path_copy, path);
-        debugf(DBG_LEVEL_EXT, KMAG "cfs_write(%s) start upload thread buflen=%lu", path_copy, length);
-        pthread_create(&de->upload_buf.thread, NULL, (void*)cloudfs_object_read_progressive, path_copy);
+        pthread_create(&de->upload_buf.thread, NULL, (void*)cloudfs_object_upload_progressive, path_copy);
+        debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): curl upload initialised", path);
       }
-      debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): upload buf done", path);
+
+      //signal there is data available in buffer for upload
+      sem_post(de->upload_buf.isfull_semaphore);
+      
+      //wait until previous buffer data is uploaded
+      sem_wait(de->upload_buf.isempty_semaphore);
+      
+      sem_getvalue(de->upload_buf.isfull_semaphore, &sem_val_full);
+      debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): new buffer ready for upload, sem_val_full=%d", path, sem_val_full);
     }
     else {
       debugf(DBG_LEVEL_EXT, "cfs_write(%s):"KRED" unexpected missing path from cache on progressive write", path);
@@ -699,7 +739,7 @@ static int cfs_utimens(const char *path, const struct timespec times[2]){
   return 0;
 }
 
-
+//todo: would be great if someone implements these 4 extended attributes methods
 int cfs_setxattr(const char *path, const char *name, const char *value, size_t size, int flags){
   return 0;
 }
@@ -858,7 +898,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
     fprintf(stderr, "  curl_progress_state=[true to enable progress callback enabled. Mostly used for debugging]\n");
     fprintf(stderr, "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
-		fprintf(stderr, "  debug_level=[0 to 3, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
+		fprintf(stderr, "  debug_level=[0 to 2, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
     fprintf(stderr, "  enable_chmod=[true to enable chmod support on fuse]\n");
     fprintf(stderr, "  enable_chown=[true to enable chown support on fuse]\n");
     fprintf(stderr, "  enable_progressive_download=[true to enable progressive operation support]\n");

@@ -2,6 +2,7 @@
 #define _COMMONFS_H
 #include <fuse.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 typedef enum { false, true } bool;
 #define MAX_PATH_SIZE (1024 + 256 + 3)
@@ -45,9 +46,14 @@ typedef enum { false, true } bool;
 typedef struct progressive_data_buf {
   const char *readptr;
   size_t sizeleft;
+  off_t offset;
   bool upload_completed;
   bool write_completed;
   pthread_t thread;
+  sem_t * isempty_semaphore;
+  char *isempty_semaphore_name;
+  sem_t * isfull_semaphore;
+  char *isfull_semaphore_name;
 }progressive_data_buf;
 
 //linked list with files in a directory
@@ -55,6 +61,7 @@ typedef struct dir_entry
 {
   char *name;
   char *full_name;
+  char *full_name_hash;//md5 hash for uniqueness purposes (e.g. semaphore unique id)
   char *content_type;
   off_t size;
   time_t last_modified;
@@ -82,7 +89,7 @@ typedef struct dir_cache
   char *path;
   dir_entry *entries;
   time_t cached;
-	//added cache support based on access time
+	//todo: added cache support based on access time
 	time_t accessed_in_cache;
 	bool was_deleted;
 	//end change
