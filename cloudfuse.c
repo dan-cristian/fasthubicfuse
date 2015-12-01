@@ -266,9 +266,11 @@ static int cfs_create(const char* path, mode_t mode,
    return 0;
 }
 
-
-// open (download) file from cloud
-// todo: implement etag optimisation, download only if content changed, http://www.17od.com/2012/12/19/ten-useful-openstack-swift-features/
+/*
+   open (download) file from cloud
+   todo: implement etag optimisation, download only
+   if content changed, http://www.17od.com/2012/12/19/ten-useful-openstack-swift-features/
+*/
 static int cfs_open(const char* path, struct fuse_file_info* info)
 {
    debugf(DBG_LEVEL_NORM, KBLU "cfs_open(%s)", path);
@@ -282,7 +284,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       debugf(DBG_LEVEL_EXT, "cfs_open: try open custom temp (%s)", file_path_safe);
       if (access(file_path_safe, F_OK) != -1)
       {
-         // file exists
+         // file exists in local cache
          temp_file = fopen(file_path_safe, "r");
          errsv = errno;
          if (temp_file == NULL)
@@ -438,6 +440,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                }
                else
                {
+                  //upload file from cache to cloud
                   rewind(fp);
                   debugf(DBG_LEVEL_NORM, KBLU
                          "cfs_flush(%s): perform full upload as content changed (or no file found in cache)",
@@ -517,7 +520,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
    //writes to local cache file
    int result = pwrite(((openfile*)(uintptr_t)info->fh)->fd, buf, length, offset);
    int errsv = errno;
-   //todo: send data also to progressive upload buffer and wait until this data chunck is uploaded, to show real upload progress
+   //todo: send data also to progressive upload buffer and wait
+   //until this data chunck is uploaded, to show real upload progress
    //fixme: prior check of md5sum file content not done here, upload optimisation not functional
    if (option_enable_progressive_upload)
    {
@@ -535,13 +539,17 @@ static int cfs_write(const char* path, const char* buf, size_t length,
             //start upload op with a new thread
             debugf(DBG_LEVEL_NORM, KBLU"cfs_write(%s) start upload thread buf_len=%lu",
                    path, length);
-            //using semaphores for buffer upload: http://pages.cs.wisc.edu/~remzi/Classes/537/Fall2008/Notes/threads-semaphores.txt
-            char semaphore_name[MD5_DIGEST_LENGTH + 20] = "\0";//semaphore prefix len < 10
+            //using semaphores for buffer upload
+            //http://pages.cs.wisc.edu/~remzi/Classes/537/Fall2008/Notes/threads-semaphores.txt
+            //semaphore prefix len must be < 20
+            char semaphore_name[MD5_DIGEST_LENGTH + 20] = "\0";
             snprintf(semaphore_name, sizeof(semaphore_name), "/isempty_%s",
                      de->full_name_hash);
+            //don't forget to free this
             de->upload_buf.isempty_semaphore_name = strdup(
-                  semaphore_name);//don't forget to free this
-            //ensure semaphore does not exist (might be in the system from a previous unclean finished operation)
+                  semaphore_name);
+            //ensure semaphore does not exist
+            //(might be in the system from a previous unclean finished operation)
             sem_unlink(de->upload_buf.isempty_semaphore_name);
             if ((de->upload_buf.isempty_semaphore = sem_open(
                   de->upload_buf.isempty_semaphore_name, O_CREAT | O_EXCL, 0644,

@@ -1,6 +1,5 @@
 #ifndef _CLOUDFSAPI_H
 #define _CLOUDFSAPI_H
-
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <fuse.h>
@@ -8,14 +7,13 @@
 
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
-
 #define MAX_URL_SIZE (MAX_PATH_SIZE * 3)
 #define USER_AGENT "CloudFuse"
 #define OPTION_SIZE 1024
+#define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL 5
 
 typedef struct curl_slist curl_slist;
 
-#define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL 5
 struct curl_progress
 {
    double lastruntime;
@@ -65,8 +63,8 @@ struct segment_info
    const char* method;
 };
 
-long segment_size;
-long segment_above;
+long segment_size;//segment file size
+long segment_above;//max size of a file before being segmented
 
 char* override_storage_url;
 char* public_container;

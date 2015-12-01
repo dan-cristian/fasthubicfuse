@@ -28,11 +28,8 @@
 
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
-
 #define REQUEST_RETRIES 3
-
 #define MAX_FILES 10000
-
 // size of buffer for writing to disk look at ioblksize.h in coreutils
 // and try some values on your own system if you want the best performance
 #define DISK_BUFF_SIZE 32768
@@ -53,7 +50,6 @@ extern bool option_enable_chown;
 extern bool option_enable_chmod;
 extern bool option_enable_progressive_upload;
 extern bool option_enable_progressive_download;
-
 static int rhel5_mode = 0;
 static struct statvfs statcache =
 {
@@ -93,7 +89,6 @@ static unsigned long thread_id()
 }
 #endif
 
-
 static size_t xml_dispatch(void* ptr, size_t size, size_t nmemb, void* stream)
 {
    xmlParseChunk((xmlParserCtxtPtr)stream, (char*)ptr, size * nmemb, 0);
@@ -131,7 +126,8 @@ static void add_header(curl_slist** headers, const char* name,
    {
       debugf(DBG_LEVEL_NORM, KRED"add_header: warning, value size > 256 (%s:%s) ",
              name, value);
-      //hubic will throw an HTTP 400 error on X-Copy-To operation if X-Object-Meta-FilePath header value is larger than 256 chars
+      //hubic will throw an HTTP 400 error on X-Copy-To operation
+      //if X-Object-Meta-FilePath header value is larger than 256 chars
       //fix for issue #95 https://github.com/TurboGit/hubicfuse/issues/95
       if (!strcasecmp(name, "X-Object-Meta-FilePath"))
       {
@@ -210,6 +206,9 @@ static void header_set_time_from_str(char* time_str,
    }
 }
 
+/*
+   get file metadata from HTTP response headers
+*/
 static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
                                        void* userdata)
 {
@@ -250,6 +249,17 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
    return size * nmemb;
 }
 
+/*
+   write data to file from segmented download
+*/
+size_t fwrite2(void* ptr, size_t size, size_t nmemb, FILE* filep)
+{
+   return fwrite((const void*)ptr, size, nmemb, filep);
+}
+
+/*
+   pass data from a file for uploading multiple segments
+*/
 static size_t rw_callback(size_t (*rw)(void*, size_t, size_t, FILE*),
                           void* ptr,
                           size_t size, size_t nmemb, void* userp)
@@ -263,22 +273,26 @@ static size_t rw_callback(size_t (*rw)(void*, size_t, size_t, FILE*),
    return amt_read;
 }
 
-size_t fwrite2(void* ptr, size_t size, size_t nmemb, FILE* filep)
-{
-   return fwrite((const void*)ptr, size, nmemb, filep);
-}
-
+/*
+   pass data for uploading multiple segments
+*/
 static size_t read_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
    return rw_callback(fread, ptr, size, nmemb, userp);
 }
 
+/*
+   write data to file from segmented download
+*/
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
    return rw_callback(fwrite2, ptr, size, nmemb, userp);
 }
 
-//http://curl.haxx.se/libcurl/c/CURLOPT_XFERINFOFUNCTION.html
+/*
+   called during http operations, currently used only for debug purposes
+   http://curl.haxx.se/libcurl/c/CURLOPT_XFERINFOFUNCTION.html
+*/
 int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
                            curl_off_t ultotal, curl_off_t ulnow)
 {
@@ -311,7 +325,10 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
    return 0;
 }
 
-//http://curl.haxx.se/libcurl/c/CURLOPT_PROGRESSFUNCTION.html
+/*
+   for compatibility purposes, will be deprecated
+   http://curl.haxx.se/libcurl/c/CURLOPT_PROGRESSFUNCTION.html
+*/
 int progress_callback(void* clientp, double dltotal, double dlnow,
                       double ultotal, double ulnow)
 {
@@ -319,10 +336,11 @@ int progress_callback(void* clientp, double dltotal, double dlnow,
                                  (curl_off_t)ultotal, (curl_off_t)ulnow);
 }
 
-
-//get the response from HTTP requests, mostly for debug purposes
-// http://stackoverflow.com/questions/2329571/c-libcurl-get-output-into-a-string
-// http://curl.haxx.se/libcurl/c/getinmemory.html
+/*
+   get the response from HTTP requests, mostly for debug purposes
+   http://stackoverflow.com/questions/2329571/c-libcurl-get-output-into-a-string
+   http://curl.haxx.se/libcurl/c/getinmemory.html
+*/
 size_t writefunc_callback(void* contents, size_t size, size_t nmemb,
                           void* userp)
 {
@@ -365,9 +383,7 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
    }
    size_t max_size_to_upload;
    int sem_val_empty, sem_val_full;
-   //upload_buf->upload_started = true;//signal fuse cfs_write to start feeding data
    upload_buf->upload_completed = false;
-   //first time entry in this function for current thread, open semaphore needed?
    if (upload_buf->offset == 0 && upload_buf->sizeleft != 0)
    {
       if ((de->upload_buf.isempty_semaphore = sem_open(
@@ -401,7 +417,8 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
    max_size_to_upload = min(size * nmemb, de->upload_buf.sizeleft);
    if (upload_buf->sizeleft)
    {
-      //todo: check if this copy can be removed: http://sourceforge.net/p/fuse/mailman/message/29119987/
+      //todo: check if this mem copy can be removed
+      //http://sourceforge.net/p/fuse/mailman/message/29119987/
       memcpy(ptr, upload_buf->readptr, max_size_to_upload);
       upload_buf->readptr += max_size_to_upload;
       upload_buf->sizeleft -= max_size_to_upload;
@@ -423,7 +440,8 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
    if (!upload_buf->write_completed)
    {
       debugf(DBG_LEVEL_NORM,
-             "progressive_read_callback: "KRED"unexpected data upload done on write in progress, sem_val_empty=%d, sem_val_full=%d",
+             "progressive_read_callback: " KRED
+             "unexpected data upload done on write in progress, sem_val_empty=%d, sem_val_full=%d",
              sem_val_empty, sem_val_full);
    }
    //all data uploaded and write completed, exit
@@ -442,8 +460,11 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
    return 0; //no more data left to deliver
 }
 
-// de_cached_entry must be NULL when the file is already in global cache
-// otherwise point to a new dir_entry that will be added to the cache (usually happens on first dir load)
+/*
+   de_cached_entry must be NULL when the file is already in global cache
+   otherwise point to a new dir_entry that will be added
+   to the cache (usually happens on first dir load)
+*/
 static int send_request_size(const char* method, const char* path, void* fp,
                              xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
                              off_t file_size, int is_segment,
@@ -463,7 +484,6 @@ static int send_request_size(const char* method, const char* path, void* fp,
       debugf(DBG_LEVEL_NORM, KRED"send_request with no storage_url?");
       abort();
    }
-   //char *encoded_path = curl_escape(path, 0);
    while ((slash = strstr(path, "%2F")) || (slash = strstr(path, "%2f")))
    {
       *slash = '/';
@@ -473,7 +493,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
       path++;
    snprintf(url, sizeof(url), "%s/%s", storage_url, path);
    snprintf(orig_path, sizeof(orig_path), "/%s", path);
-   // retry on failures
+   // retry on HTTP failures
    for (tries = 0; tries < REQUEST_RETRIES; tries++)
    {
       chunk.memory = malloc(1);  /* will be grown as needed by the realloc above */
@@ -485,8 +505,9 @@ static int send_request_size(const char* method, const char* path, void* fp,
       curl_easy_setopt(curl, CURLOPT_URL, url);
       curl_easy_setopt(curl, CURLOPT_HEADER, 0);
       curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
+      //reversed logic, 0 to enable progress
       curl_easy_setopt(curl, CURLOPT_NOPROGRESS,
-                       option_curl_progress_state ? 0 : 1);//reversed logic, 0=to enable progress
+                       option_curl_progress_state ? 0 : 1);
       curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
       curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
       curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
@@ -555,7 +576,6 @@ static int send_request_size(const char* method, const char* path, void* fp,
             debugf(DBG_LEVEL_EXTALL, "send_request_size: not setting utimes (%s)",
                    orig_path);
       }
-      /**/
       if (!strcasecmp(method, "MKDIR"))
       {
          curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -566,7 +586,6 @@ static int send_request_size(const char* method, const char* path, void* fp,
       {
          rewind(fp);
          curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
-         //curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
          curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
          curl_easy_setopt(curl, CURLOPT_READDATA, fp);
          add_header(&headers, "Content-Type", "application/link");
@@ -581,13 +600,11 @@ static int send_request_size(const char* method, const char* path, void* fp,
          //http://curl.haxx.se/libcurl/c/post-callback.html
          if (option_enable_progressive_upload && file_size > 0)
          {
-            //curl_easy_setopt(curl, CURLOPT_POST, 1L);
             curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
             debugf(DBG_LEVEL_EXT, "send_request_size: progressive PUT (%s)", orig_path);
             //todo: placeholder to init progressing upload of a local file
             curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_read_callback);
             curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de);
-            //add_header(&headers, "Transfer-Encoding", "chunked");
          }
          else
          {
@@ -608,23 +625,15 @@ static int send_request_size(const char* method, const char* path, void* fp,
          }
          if (is_segment)
          {
-            //fixme: progressive upload not working if file is segmented
+            //fixme: progressive upload not working if file is segmented. conflict on read_callback.
             debugf(DBG_LEVEL_EXT,
                    "send_request_size(%s): PUT is segmented, "KYEL"readcallback used", orig_path);
             curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
          }
-         //enable progress reporting
-         //http://curl.haxx.se/libcurl/c/progressfunc.html
-         struct curl_progress prog;
-         prog.lastruntime = 0;
-         prog.curl = curl;
-         curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
-         /* pass the struct pointer into the progress function */
-         curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
-         //get the response for debug purposes
-         /* send all data to this function  */
+         //get the response for debug purposes.
+         //fixme: carefull as conflicts with progressive download (GET)
+         //send all data to this function
          curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc_callback);
-         /* we pass our 'chunk' struct to the callback function */
          curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
       }
       else if (!strcasecmp(method, "GET"))
@@ -648,14 +657,9 @@ static int send_request_size(const char* method, const char* path, void* fp,
             }
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
             curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
-            // sample by UThreadCurl.cpp, https://bitbucket.org/pamungkas5/bcbcurl/src
+            // header sample by UThreadCurl.cpp, https://bitbucket.org/pamungkas5/bcbcurl/src
             // and http://www.codeproject.com/Articles/838366/BCBCurl-a-LibCurl-based-download-manager
             curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)de);
-            struct curl_progress prog;
-            prog.lastruntime = 0;
-            prog.curl = curl;
-            curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
-            curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
          }
          else if (xmlctx)
          {
@@ -679,6 +683,18 @@ static int send_request_size(const char* method, const char* path, void* fp,
          curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
          curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
       }
+      //common code for all operations
+      if (option_curl_progress_state)
+      {
+         //enable progress reporting
+         //http://curl.haxx.se/libcurl/c/progressfunc.html
+         struct curl_progress prog;
+         prog.lastruntime = 0;
+         prog.curl = curl;
+         curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
+         /* pass the struct pointer into the progress function */
+         curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
+      }
       /* add the headers from extra_headers if any */
       curl_slist* extra;
       for (extra = extra_headers; extra; extra = extra->next)
@@ -687,7 +703,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
          headers = curl_slist_append(headers, extra->data);
       }
       curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-      debugf(DBG_LEVEL_EXT, "status: send_request_size(%s) started HTTP REQ:%s",
+      debugf(DBG_LEVEL_EXT, "status: send_request_size(%s) started HTTP(%s)",
              orig_path, url);
       curl_easy_perform(curl);
       double total_time;
@@ -727,7 +743,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
       if (response == 404)
       {
          debugf(DBG_LEVEL_NORM,
-                "send_request_size: not found error for (%s)(%s), ignored "KYEL"[HTTP 404].",
+                "send_request_size: not found error for (%s)(%s), ignored "KYEL"[HTTP 404]",
                 method, path);
          return response;
       }
@@ -772,15 +788,17 @@ int send_request(char* method, const char* path, FILE* fp,
 void* upload_segment(void* seginfo)
 {
    struct segment_info* info = (struct segment_info*)seginfo;
+   debugf(DBG_LEVEL_EXT, "upload_segment: started thread for segment part=%d",
+          info->part);
    char seg_path[MAX_URL_SIZE] = { 0 };
-   //set pointer to the segment start index in the complete large file (several threads will write to same large file)
+   //set pointer to the segment start index in the complete
+   //large file (several threads will write/read to/from same large file)
    fseek(info->fp, info->part * info->segment_size, SEEK_SET);
    setvbuf(info->fp, NULL, _IOFBF, DISK_BUFF_SIZE);
    snprintf(seg_path, MAX_URL_SIZE, "%s%08i", info->seg_base, info->part);
    char* encoded = curl_escape(seg_path, 0);
-   debugf(DBG_LEVEL_EXT, KCYN"upload_segment(%s) part=%d size=%d seg_size=%d %s",
+   debugf(DBG_LEVEL_EXT, KCYN "upload_segment(%s) part=%d size=%d seg_size=%d %s",
           info->method, info->part, info->size, info->segment_size, seg_path);
-   //
    int response = send_request_size(info->method, encoded, info, NULL, NULL,
                                     info->size, 1, NULL, seg_path);
    if (!(response >= 200 && response < 300))
@@ -880,7 +898,6 @@ int internal_is_segmented(const char* seg_path, const char* object,
    }
    debugf(DBG_LEVEL_EXT, "internal_is_segmented: potentially segmented=%d",
           potentially_segmented);
-   //end change
    dir_entry* seg_dir;
    if (potentially_segmented && cloudfs_list_directory(seg_path, &seg_dir))
    {
@@ -912,7 +929,7 @@ int is_segmented(const char* path)
    split_path(path, seg_base, container, object);
    char seg_path[MAX_URL_SIZE];
    snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
-   return  internal_is_segmented(seg_path, object, path);
+   return internal_is_segmented(seg_path, object, path);
 }
 
 //returns segmented file properties by parsing and retrieving the folder structure on the cloud
@@ -929,6 +946,8 @@ int format_segments(const char* path, char* seg_base,  long* segments,
    snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
    if (internal_is_segmented(seg_path, object, path))
    {
+      //read this to understand operations with segments
+      //http://docs.openstack.org/developer/swift/overview_large_objects.html
       char manifest[MAX_URL_SIZE];
       dir_entry* seg_dir;
       snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, object);
@@ -1100,8 +1119,10 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
          debugf(DBG_LEVEL_EXT, KYEL"cloudfs_object_read_fp: deleted existing file");
    }
    struct timespec now;
+   //check if file is qualified to be segmented
    if (flen >= segment_above)
    {
+      //segmenting file for upload
       int i;
       long remaining = flen % segment_size;
       int full_segments = flen / segment_size;
@@ -1128,6 +1149,7 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
       char tmp[MAX_URL_SIZE];
       strncpy(tmp, seg_base, MAX_URL_SIZE);
       snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
+      //uploading all segments in separate threads
       run_segment_threads("PUT", segments, full_segments, remaining, fp,
                           seg_base, segment_size);
       char* encoded = curl_escape(path, 0);
@@ -1138,6 +1160,7 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
       add_header(&headers, "Content-Length", "0");
       add_header(&headers, "Content-Type", filemimetype);
       //if path is encoded cache entry will not be found
+      //complete upload (write parent file, 0 size?)
       int response = send_request_size("PUT", encoded, NULL, NULL, headers, 0, 0,
                                        NULL, path);
       curl_slist_free_all(headers);
@@ -1188,11 +1211,13 @@ int cloudfs_object_write_fp(const char* path, FILE* fp)
                 KRED"ftruncate failed.  I don't know what to do about that.");
          abort();
       }
+      //download all segments from cloud to local file
       run_segment_threads("GET", segments, full_segments, remaining, fp,
                           seg_base, size_of_segments);
       debugf(DBG_LEVEL_EXT, "exit 0: cloudfs_object_write_fp(%s)", path);
       return 1;
    }
+   //get parent file?
    int response = send_request("GET", encoded, fp, NULL, NULL, NULL, path);
    curl_free(encoded);
    fflush(fp);
