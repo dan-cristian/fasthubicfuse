@@ -13,6 +13,7 @@ typedef enum { false, true } bool;
 #define DBG_LEVEL_EXT 1
 #define DBG_LEVEL_EXTALL 2
 #define INT_CHAR_LEN 16
+#define MD5_DIGEST_HEXA_STRING_LEN  (2 * MD5_DIGEST_LENGTH + 1)
 
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
@@ -25,6 +26,8 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_UID "X-Object-Meta-Uid"
 #define HEADER_TEXT_GID "X-Object-Meta-Gid"
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
+#define HEADER_TEXT_MD5HASH "Etag"
+#define HEADER_TEXT_IS_SEGMENTED "X-Object-Meta-Is-Segmented"
 #define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse_%s"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
 
@@ -43,58 +46,66 @@ typedef enum { false, true } bool;
   (void)(&_min1 == &_min2);      \
   _min1 < _min2 ? _min1 : _min2; })
 
+#define SEM_EMPTY 0
+#define SEM_FULL 1
+
 typedef struct progressive_data_buf
 {
-   const char* readptr;
-   size_t sizeleft;
-   off_t offset;
-   bool upload_completed;
-   bool write_completed;
-   pthread_t thread;
-   sem_t* isempty_semaphore;
-   char* isempty_semaphore_name;
-   sem_t* isfull_semaphore;
-   char* isfull_semaphore_name;
+  const char* readptr;
+  size_t sizeleft;
+  off_t offset;
+  bool upload_completed;
+  bool write_completed;
+  pthread_t thread;
+  sem_t* isempty_semaphore;
+  char* isempty_semaphore_name;
+  sem_t* isfull_semaphore;
+  char* isfull_semaphore_name;
+  sem_t* sem_list[2];
+  char* sem_name_list[2];
+  char* local_cache_file;
 } progressive_data_buf;
 
 //linked list with files in a directory
 typedef struct dir_entry
 {
-   char* name;
-   char* full_name;
-   char* full_name_hash;//md5 hash for uniqueness purposes (e.g. semaphore unique id)
-   char* content_type;
-   off_t size;
-   time_t last_modified;
-   // additional attributes
-   struct timespec mtime;
-   struct timespec ctime;
-   struct timespec atime;
-   char* md5sum;
-   mode_t chmod;
-   uid_t uid;
-   gid_t gid;
-   bool issegmented;
-   time_t accessed_in_cache;//todo: cache support based on access time
-   bool metadata_downloaded;
-   struct progressive_data_buf upload_buf;
-   // end change
-   int isdir;
-   int islink;
-   struct dir_entry* next;
+  char* name;
+  char* full_name;
+  char* full_name_hash;//md5 hash for uniqueness purposes (e.g. semaphore unique id)
+  char* content_type;
+  off_t size;//size of the file, might not match the size in cloud if is segmented
+  off_t size_on_cloud;//size of the file in cloud, should be 0 for segmented files
+  time_t last_modified;
+  // additional attributes
+  struct timespec mtime;
+  struct timespec ctime;
+  struct timespec atime;
+  char* md5sum;
+  mode_t chmod;
+  uid_t uid;
+  gid_t gid;
+  bool is_segmented;//-1 for undefined
+  time_t accessed_in_cache;//todo: cache support based on access time
+  bool metadata_downloaded;
+  struct progressive_data_buf upload_buf;
+  struct progressive_data_buf downld_buf;
+  // end change
+  int isdir;
+  int islink;
+  struct dir_entry* next;
 } dir_entry;
 
 // linked list with cached folder names
 typedef struct dir_cache
 {
-   char* path;
-   dir_entry* entries;
-   time_t cached;
-   //todo: added cache support based on access time
-   time_t accessed_in_cache;
-   bool was_deleted;
-   //end change
-   struct dir_cache* next, *prev;
+  char* path;
+  dir_entry* entries;
+  time_t cached;
+  //todo: added cache support based on access time
+  time_t accessed_in_cache;
+  bool was_deleted;
+  //end change
+  struct dir_cache* next, *prev;
 } dir_cache;
 
 time_t my_timegm(struct tm* tm);
@@ -108,9 +119,12 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
                         int time_str_len);
 char* str2md5(const char* str, int length);
 int file_md5(FILE* file_handle, char* md5_file_str);
+void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
 int get_safe_cache_file_path(const char* file_path, char* file_path_safe,
                              char* temp_dir);
+int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
+                    char* prefix);
 dir_entry* init_dir_entry();
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);

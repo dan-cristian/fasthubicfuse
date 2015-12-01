@@ -16,35 +16,35 @@ typedef struct curl_slist curl_slist;
 
 struct curl_progress
 {
-   double lastruntime;
-   CURL* curl;
+  double lastruntime;
+  CURL* curl;
 };
 
 typedef struct options
 {
-   char cache_timeout[OPTION_SIZE];
-   char verify_ssl[OPTION_SIZE];
-   char segment_size[OPTION_SIZE];
-   char segment_above[OPTION_SIZE];
-   char storage_url[OPTION_SIZE];
-   char container[OPTION_SIZE];
-   char temp_dir[OPTION_SIZE];
-   char client_id[OPTION_SIZE];
-   char client_secret[OPTION_SIZE];
-   char refresh_token[OPTION_SIZE];
+  char cache_timeout[OPTION_SIZE];
+  char verify_ssl[OPTION_SIZE];
+  char segment_size[OPTION_SIZE];
+  char segment_above[OPTION_SIZE];
+  char storage_url[OPTION_SIZE];
+  char container[OPTION_SIZE];
+  char temp_dir[OPTION_SIZE];
+  char client_id[OPTION_SIZE];
+  char client_secret[OPTION_SIZE];
+  char refresh_token[OPTION_SIZE];
 } FuseOptions;
 
 typedef struct extra_options
 {
-   char get_extended_metadata[OPTION_SIZE];
-   char curl_verbose[OPTION_SIZE];
-   char cache_statfs_timeout[OPTION_SIZE];
-   char debug_level[OPTION_SIZE];
-   char curl_progress_state[OPTION_SIZE];
-   char enable_chmod[OPTION_SIZE];
-   char enable_chown[OPTION_SIZE];
-   char enable_progressive_upload[OPTION_SIZE];
-   char enable_progressive_download[OPTION_SIZE];
+  char get_extended_metadata[OPTION_SIZE];
+  char curl_verbose[OPTION_SIZE];
+  char cache_statfs_timeout[OPTION_SIZE];
+  char debug_level[OPTION_SIZE];
+  char curl_progress_state[OPTION_SIZE];
+  char enable_chmod[OPTION_SIZE];
+  char enable_chown[OPTION_SIZE];
+  char enable_progressive_upload[OPTION_SIZE];
+  char enable_progressive_download[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);
@@ -55,12 +55,13 @@ int cloudfs_connect(void);
 
 struct segment_info
 {
-   FILE* fp;
-   int part;
-   long size;
-   long segment_size;
-   char* seg_base;
-   const char* method;
+  FILE* fp;
+  int part;
+  long size;
+  long segment_size;
+  char* seg_base;
+  const char* method;
+  bool is_progressive;
 };
 
 long segment_size;//segment file size
@@ -88,4 +89,5 @@ void cloudfs_option_curl_verbose(int option);
 void get_file_metadata(dir_entry* de);
 int cloudfs_update_meta(dir_entry* de);
 void cloudfs_object_upload_progressive(const char* path);
+void cloudfs_object_downld_progressive(const char* path);
 #endif
