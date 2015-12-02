@@ -39,7 +39,7 @@ mostlyclean: clean
 
 maintainer-clean: clean
 
-debug: CFLAGS += -g
+debug: CFLAGS += -g -O0
 debug: hubicfuse
 
 config.h.in: stamp-h.in

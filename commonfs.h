@@ -49,6 +49,12 @@ typedef enum { false, true } bool;
 #define SEM_EMPTY 0
 #define SEM_FULL 1
 
+typedef struct
+{
+  int fd;
+  int flags;
+} openfile;
+
 typedef struct progressive_data_buf
 {
   const char* readptr;
@@ -63,7 +69,8 @@ typedef struct progressive_data_buf
   char* isfull_semaphore_name;
   sem_t* sem_list[2];
   char* sem_name_list[2];
-  char* local_cache_file;
+  FILE* local_cache_file;
+  struct fuse_file_info* dwnld_info;
 } progressive_data_buf;
 
 //linked list with files in a directory
@@ -129,6 +136,7 @@ dir_entry* init_dir_entry();
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);
+void debug_print_file_name(FILE* fp);
 void debug_list_cache_content();
 void update_dir_cache(const char* path, off_t size, int isdir, int islink);
 dir_entry* path_info(const char* path);

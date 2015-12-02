@@ -256,6 +256,30 @@ void debug_print_flags(int flags)
 #endif
 }
 
+void debug_print_file_name(FILE* fp)
+{
+  int MAXSIZE = 0xFFF;
+  char proclnk[0xFFF];
+  char filename[0xFFF];
+  int fno;
+  ssize_t r;
+
+  if (fp != NULL)
+  {
+    fno = fileno(fp);
+    sprintf(proclnk, "/proc/self/fd/%d", fno);
+    r = readlink(proclnk, filename, MAXSIZE);
+    if (r < 0)
+      debugf(DBG_LEVEL_EXT, KRED"debug_print_file_name: "KYEL"failed to readlink");
+    else
+    {
+      filename[r] = '\0';
+      debugf(DBG_LEVEL_EXT, KMAG"fp -> fno -> filename: %p -> %d -> %s\n",
+             fp, fno, filename);
+    }
+  }
+
+}
 void debug_print_descriptor(struct fuse_file_info* info)
 {
   return;

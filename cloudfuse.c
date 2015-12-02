@@ -35,11 +35,7 @@ extern size_t file_buffer_size;
 extern bool option_enable_progressive_upload;
 extern bool option_enable_progressive_download;
 
-typedef struct
-{
-  int fd;
-  int flags;
-} openfile;
+
 
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
@@ -363,24 +359,18 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
                errsv, strerror(errsv));
         return -ENOENT;
       }
-      //launch download as thread if progressive is enabled
-      if (option_enable_progressive_download)
-      {
-        init_semaphores(&de->downld_buf, de, "dwnld");
-        de->downld_buf.local_cache_file = strdup(file_path_safe);
-        fclose(temp_file);
-        pthread_create(&de->downld_buf.thread, NULL,
-                       (void*)cloudfs_object_downld_progressive, de->full_name);
-        debugf(DBG_LEVEL_EXT, "cfs_open(%s) started download thread", path);
-      }
-      else if (!cloudfs_object_write_fp(path, temp_file))
-      {
-        fclose(temp_file);
-        debugf(DBG_LEVEL_NORM, KRED
-               "exit 2: cfs_open(%s) cannot download/write custom temp",
-               path);
-        return -ENOENT;
-      }
+
+      debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) temp fp=%p", path, temp_file);
+      //standard download (not progressive)
+      if (!option_enable_progressive_download)
+        if (!cloudfs_object_write_fp(path, temp_file))
+        {
+          fclose(temp_file);
+          debugf(DBG_LEVEL_NORM, KRED
+                 "exit 2: cfs_open(%s) cannot download/write custom temp",
+                 path);
+          return -ENOENT;
+        }
     }
   }
   else
@@ -395,7 +385,8 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
     if (!(info->flags & O_TRUNC))
     {
       //todo: why is this check on flags needed?
-      if (!cloudfs_object_write_fp(path, temp_file) && !(info->flags & O_CREAT))
+      if (!option_enable_progressive_download &&
+          !cloudfs_object_write_fp(path, temp_file) && !(info->flags & O_CREAT))
       {
         fclose(temp_file);
         debugf(DBG_LEVEL_NORM,
@@ -414,11 +405,24 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
     debugf(DBG_LEVEL_NORM, KRED "exit 5: cfs_open(%s) of->fd", path);
     return -ENOENT;
   }
-  fclose(temp_file);
+  debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) fp=%p", path, temp_file);
+
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   info->direct_io = 1;
   info->nonseekable = 1;
+
+  //launch download as thread if progressive is enabled
+  if (option_enable_progressive_download)
+  {
+    init_semaphores(&de->downld_buf, de, "dwnld");
+    de->downld_buf.local_cache_file = fdopen(dup(fileno(temp_file)), "w+b");
+    pthread_create(&de->downld_buf.thread, NULL,
+                   (void*)cloudfs_object_downld_progressive, de->full_name);
+    debugf(DBG_LEVEL_EXT, "cfs_open(%s) started download thread", path);
+  }
+  fclose(temp_file);
+  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_open(%s)", path);
   return 0;
 }
 
@@ -426,7 +430,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* info)
 {
   if (offset == 0)//avoid clutter, list only once
-    debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s) buffsize=%lu offset=%lu", path,
+    debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s) buffsize=%lu offset=%lu", path,
            size, offset);
   else
     debugf(DBG_LEVEL_EXTALL, KBLU "cfs_read(%s) buffsize=%lu offset=%lu", path,
@@ -440,10 +444,10 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     if (de)
     {
       sleep_ms(15000);
-      debugf(DBG_LEVEL_EXTALL, KBLU "cfs_read(%s): signal need for data", path);
+      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): signal need for data", path);
       //signal we need data, buffer is empty
       sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
-      debugf(DBG_LEVEL_EXTALL, KBLU "cfs_read(%s): waiting for data", path);
+      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): waiting for data", path);
       //wait until data buffer is full
       sem_wait(de->downld_buf.sem_list[SEM_FULL]);
     }
@@ -456,7 +460,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   {
     int result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
     if (offset == 0)
-      debugf(DBG_LEVEL_EXT, KBLU "exit: cfs_read(%s) result=%s", path,
+      debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
              strerror(errno));
     else
       debugf(DBG_LEVEL_EXTALL, KBLU "exit: cfs_read(%s) result=%s", path,
