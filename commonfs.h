@@ -58,7 +58,7 @@ typedef struct
 typedef struct progressive_data_buf
 {
   const char* readptr;
-  size_t sizeleft;
+  size_t work_buf_size;
   off_t offset;
   bool upload_completed;
   bool write_completed;
@@ -69,8 +69,8 @@ typedef struct progressive_data_buf
   char* isfull_semaphore_name;
   sem_t* sem_list[2];
   char* sem_name_list[2];
+  size_t fuse_read_size;
   FILE* local_cache_file;
-  struct fuse_file_info* dwnld_info;
 } progressive_data_buf;
 
 //linked list with files in a directory
@@ -96,6 +96,7 @@ typedef struct dir_entry
   bool metadata_downloaded;
   struct progressive_data_buf upload_buf;
   struct progressive_data_buf downld_buf;
+  bool is_progressive;
   // end change
   int isdir;
   int islink;

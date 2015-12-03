@@ -468,11 +468,15 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
       sem_getvalue(data_buf->sem_list[i], &sem_val);
       debugf(DBG_LEVEL_EXTALL,
              "init_semaphores(%s): semaphore[%s] created, size_left=%lu, sem_val=%d",
-             de->full_name, data_buf->sem_name_list[i], data_buf->sizeleft, sem_val);
+             de->full_name, data_buf->sem_name_list[i], data_buf->work_buf_size, sem_val);
     }
   }
-
   return true;
+}
+
+int open_semaphores()
+{
+
 }
 
 dir_entry* init_dir_entry()

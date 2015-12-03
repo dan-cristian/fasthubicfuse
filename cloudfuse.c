@@ -417,6 +417,9 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   {
     init_semaphores(&de->downld_buf, de, "dwnld");
     de->downld_buf.local_cache_file = fdopen(dup(fileno(temp_file)), "w+b");
+    de->downld_buf.work_buf_size = 0;
+    //put something different that work_buf_size to avoid wait by http
+    de->downld_buf.fuse_read_size = 1;
     pthread_create(&de->downld_buf.thread, NULL,
                    (void*)cloudfs_object_downld_progressive, de->full_name);
     debugf(DBG_LEVEL_EXT, "cfs_open(%s) started download thread", path);
@@ -429,6 +432,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* info)
 {
+  int sem_val;
   if (offset == 0)//avoid clutter, list only once
     debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s) buffsize=%lu offset=%lu", path,
            size, offset);
@@ -443,13 +447,34 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     dir_entry* de = check_path_info(path);
     if (de)
     {
-      sleep_ms(15000);
-      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): signal need for data", path);
-      //signal we need data, buffer is empty
-      sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
-      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): waiting for data", path);
+      //sleep_ms(10000);
+      //reset data size provided by http
+      de->downld_buf.work_buf_size = 0;
+      //inform the expected fuse buffer size to be filled in by http
+      de->downld_buf.fuse_read_size = size;
+      de->downld_buf.readptr = buf;
+
+
+      if (offset != 0)
+      {
+        sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
+        //signal we need data, buffer is empty, triggers http data copy to buf
+        debugf(DBG_LEVEL_NORM, KBLU
+               "cfs_read(%s): post empty data, buf_size=%lu sem=%d",
+               path, size, sem_val);
+        sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
+      }
+      sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
+      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): wait full data sem=%d", path,
+             sem_val);
       //wait until data buffer is full
-      sem_wait(de->downld_buf.sem_list[SEM_FULL]);
+      sem_wait(de->downld_buf.sem_list[SEM_FULL]);///???????
+      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): got full data size=%lu", path,
+             de->downld_buf.work_buf_size);
+      debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s): exit ret_code=%lu", path,
+             de->downld_buf.work_buf_size);
+      //sleep_ms(500);
+      return de->downld_buf.work_buf_size;
     }
     else
       debugf(DBG_LEVEL_EXT, "cfs_read(%s):" KRED
@@ -613,7 +638,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     {
       de->upload_buf.offset = offset;
       de->upload_buf.readptr = buf;
-      de->upload_buf.sizeleft = length;
+      de->upload_buf.work_buf_size = length;
       //debugf(DBG_LEVEL_EXTALL, KCYN"BUF=[%s]", de->upload_buf.readptr);
       if (offset == 0)
       {
@@ -648,7 +673,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_empty);
           debugf(DBG_LEVEL_EXTALL,
                  KMAG "cfs_write(%s): isempty_semaphore created, size_left=%lu, sem_val_empty=%d",
-                 path, de->upload_buf.sizeleft, sem_val_empty);
+                 path, de->upload_buf.work_buf_size, sem_val_empty);
         }
         snprintf(semaphore_name, sizeof(semaphore_name), "/isfull_%s",
                  de->full_name_hash);
@@ -669,7 +694,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_full);
           debugf(DBG_LEVEL_EXTALL,
                  KMAG "cfs_write(%s): isfull_semaphore created, size_left=%lu, sem_val_full=%d",
-                 path, de->upload_buf.sizeleft, sem_val_full);
+                 path, de->upload_buf.work_buf_size, sem_val_full);
         }
         pthread_create(&de->upload_buf.thread, NULL,
                        (void*)cloudfs_object_upload_progressive, de->full_name);

@@ -4,6 +4,7 @@
 #include <curl/easy.h>
 #include <fuse.h>
 #include <time.h>
+#include "commonfs.h"
 
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
@@ -61,7 +62,7 @@ struct segment_info
   long segment_size;
   char* seg_base;
   const char* method;
-  bool is_progressive;
+  struct dir_entry* de;
 };
 
 long segment_size;//segment file size
