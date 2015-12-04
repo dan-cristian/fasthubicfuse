@@ -368,35 +368,35 @@ static size_t read_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   size_t http_size = size * nmemb;
-  debugf(DBG_LEVEL_NORM, KMAG"write_callback: enter http_size=%lu", http_size);
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: enter http_size=%lu", http_size);
   //sleep_ms(500);
   size_t result = rw_callback(fwrite2, ptr, size, nmemb, userp);
-  debugf(DBG_LEVEL_NORM, KMAG"write_callback: file write result=%lu", result);
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: file write result=%lu", result);
   struct segment_info* info = (struct segment_info*)userp;
   //todo: in case of progressive ops signal we have data to cfs_read
   if (info->de->is_progressive)
   {
     size_t fuse_size = info->de->downld_buf.fuse_read_size;
-    debugf(DBG_LEVEL_NORM,
+    debugf(DBG_LEVEL_EXT,
            KMAG"write_callback: fuse buffer is empty fuse_size=%lu", fuse_size);
     size_t data_copy_size;
     size_t http_ptr_index = 0;
     const void* src;
     const void* dest;
     int sem_val;
-    //copy data to fuse buffer until is full
-    while (info->de->downld_buf.work_buf_size < fuse_size)
+    //copy data to fuse buffer until is full OR until no data left to copy in http buf
+    while (info->de->downld_buf.work_buf_size < fuse_size && (http_size - http_ptr_index > 0))
     {
       //sleep_ms(100);
       //data left needed
       data_copy_size = min(fuse_size - info->de->downld_buf.work_buf_size,
-                           http_size);
+        http_size - http_ptr_index);
       src = ptr + http_ptr_index;
       dest = info->de->downld_buf.readptr + info->de->downld_buf.work_buf_size;
       memcpy((void*)dest, src, data_copy_size);
       info->de->downld_buf.work_buf_size += data_copy_size;
       http_ptr_index += data_copy_size;
-      debugf(DBG_LEVEL_NORM, KCYN
+      debugf(DBG_LEVEL_EXT, KCYN
              "write_callback: data_copy_size=%lu ptr=%lu src=%lu dest=%lu wrksize=%lu lefthttp=%lu",
              data_copy_size, ptr, src, dest, info->de->downld_buf.work_buf_size,
              http_size - http_ptr_index);
@@ -406,16 +406,16 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
       {
         sem_getvalue(info->de->downld_buf.sem_list[SEM_FULL], &sem_val);
         //fuse buffer full, http data remains
-        debugf(DBG_LEVEL_NORM, KMAG
+        debugf(DBG_LEVEL_EXT, KMAG
                "write_callback: data copied, post buffer full, some http data left=%lu sem=%d",
                http_size - http_ptr_index, sem_val);
         sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
         sem_getvalue(info->de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
-        debugf(DBG_LEVEL_NORM, KMAG
+        debugf(DBG_LEVEL_EXT, KMAG
                "write_callback: wait [1] for fuse buffer to get empty, sem=%d", sem_val);
         sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
         //after this work_buf_size will be set to 0 by cfs_read
-        debugf(DBG_LEVEL_NORM, KMAG
+        debugf(DBG_LEVEL_EXT, KMAG
                "write_callback: done wait [1] work_buf=%lu",
                info->de->downld_buf.work_buf_size);
       }
@@ -423,7 +423,7 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
       if (data_copy_size == http_size)
       {
         //http buffer fully copied, more http data needed
-        debugf(DBG_LEVEL_NORM, KMAG
+        debugf(DBG_LEVEL_EXT, KMAG
                "write_callback: http buffer fully copied");
         break;
       }
@@ -433,22 +433,26 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
     {
       sem_getvalue(info->de->downld_buf.sem_list[SEM_FULL], &sem_val);
       //fuse buffer is full, http fully copied, signal cfs_read to return it in user space
-      debugf(DBG_LEVEL_NORM, KMAG"write_callback: post buffer signal full sem=%d",
+      debugf(DBG_LEVEL_EXT, KMAG"write_callback: post buffer signal full sem=%d",
              sem_val);
       sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
       sem_getvalue(info->de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
-      debugf(DBG_LEVEL_NORM, KMAG
+      debugf(DBG_LEVEL_EXT, KMAG
              "write_callback: wait [2] for fuse buffer to get empty sem=%d", sem_val);
       sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
-      debugf(DBG_LEVEL_NORM, KMAG
+      debugf(DBG_LEVEL_EXT, KMAG
              "write_callback: done wait [2] work_buf=%lu",
              info->de->downld_buf.work_buf_size);
     }
+    else
+      debugf(DBG_LEVEL_EXT, KMAG
+      "write_callback: incomplete fuse_buf, need more http data work_buf=%lu",
+      info->de->downld_buf.work_buf_size);
   }
   else
-    debugf(DBG_LEVEL_NORM, KMAG"write_callback not progressive");
+    debugf(DBG_LEVEL_EXT, KMAG"write_callback not progressive");
 
-  debugf(DBG_LEVEL_NORM, KMAG"exit: write_callback result=%lu", result);
+  debugf(DBG_LEVEL_EXT, KMAG"exit: write_callback result=%lu", result);
   return result;
 }
 
@@ -1007,7 +1011,7 @@ void run_segment_threads(const char* method, int segments, int full_segments,
     info[i].size = i < full_segments ? size_of_segments : remaining;
     info[i].seg_base = seg_base;
     info[i].de = de;
-    if (option_enable_progressive_download && !strcasecmp(method, "GET"))
+    if (option_enable_progressive_download && !strcasecmp(method, "GET") || full_segments > MAX_SEGMENT_THREADS)
     {
       info[i].de->is_progressive = true;
       debugf(DBG_LEVEL_NORM, KMAG
@@ -1473,6 +1477,8 @@ void cloudfs_object_downld_progressive(const char* path)
     sem_post(de->downld_buf.sem_list[SEM_FULL]);
     //post with 0 data to ensure a force read exit
     sem_post(de->downld_buf.sem_list[SEM_FULL]);
+    //todo: check what close/clean ops with download_buf needs done
+    rewind(fp);
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)", path);
     //return 1;
   }
