@@ -164,6 +164,7 @@ char* str2md5(const char* str, int length)
 */
 int file_md5(FILE* file_handle, char* md5_file_str)
 {
+  debugf(DBG_LEVEL_EXT, "file_md5: start compute sum");
   if (file_handle == NULL)
   {
     debugf(DBG_LEVEL_NORM, KRED"file_md5: NULL file handle");
@@ -191,6 +192,7 @@ int file_md5(FILE* file_handle, char* md5_file_str)
     //fprintf(stderr, "%02x", c[i]);
   }
   free(data_buf);
+  debugf(DBG_LEVEL_EXT, "file_md5: end compute sum=%s", md5_file_str);
   return 0;
 }
 
@@ -474,6 +476,27 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
   return true;
 }
 
+long random_at_most(long max)
+{
+  unsigned long
+  // max <= RAND_MAX < ULONG_MAX, so this is okay.
+  num_bins = (unsigned long)max + 1,
+  num_rand = (unsigned long)RAND_MAX + 1,
+  bin_size = num_rand / num_bins,
+  defect = num_rand % num_bins;
+
+  long x;
+  do
+  {
+    x = random();
+  }
+  // This is carefully written not to overflow
+  while (num_rand - defect <= (unsigned long)x);
+
+  // Truncated division is intentional
+  return x / bin_size;
+}
+
 int open_semaphores()
 {
 
@@ -499,6 +522,7 @@ dir_entry* init_dir_entry()
   de->uid = 0;
   de->upload_buf.upload_completed = false;
   de->upload_buf.write_completed = false;
+  de->downld_buf.download_started = false;
   de->full_name_hash = NULL;
   de->is_segmented = -1;//undefined
   return de;

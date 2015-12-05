@@ -63,6 +63,8 @@ typedef struct progressive_data_buf
   off_t offset;
   bool upload_completed;
   bool write_completed;
+  bool file_is_in_cache;
+  bool download_started;
   pthread_t thread;
   sem_t* isempty_semaphore;
   char* isempty_semaphore_name;
@@ -98,6 +100,7 @@ typedef struct dir_entry
   struct progressive_data_buf upload_buf;
   struct progressive_data_buf downld_buf;
   bool is_progressive;
+  bool is_single_thread;
   // end change
   int isdir;
   int islink;
@@ -134,6 +137,7 @@ int get_safe_cache_file_path(const char* file_path, char* file_path_safe,
                              char* temp_dir);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
+long random_at_most(long max);
 dir_entry* init_dir_entry();
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);

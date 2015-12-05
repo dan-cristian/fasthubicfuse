@@ -226,7 +226,8 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
     if (quote_lptr || quote_rptr)
     {
       debugf(DBG_LEVEL_NORM, "header_get_meta_dispatch: " KRED
-             "header value incorrectly formated on cloud, value=[%s]", value);
+             "header value incorrectly formated on cloud, head=[%s], value=[%s]", head,
+             value);
 
       if (quote_lptr && quote_rptr)
       {
@@ -268,7 +269,10 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
         {
           //todo: hash is different, usually on large segmented files
           debugf(DBG_LEVEL_NORM, "header_get_meta_dispatch: " KYEL
-                 "hash difference, cache=%s cloud=%s", de->md5sum, value);
+                 "hash difference, unreliable data, cache=%s cloud=%s", de->md5sum, value);
+          //fixme: sometimes etag on hubic is incorrect, noticed on segmented files
+          //free(de->md5sum);
+          //de->md5sum = NULL;
         }
       }
       if (!strncasecmp(head, HEADER_TEXT_IS_SEGMENTED, size * nmemb))
@@ -368,31 +372,36 @@ static size_t read_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   size_t http_size = size * nmemb;
-  debugf(DBG_LEVEL_EXT, KMAG"write_callback: enter http_size=%lu", http_size);
-  //sleep_ms(500);
+  int rnd = random_at_most(50);
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: enter http_size=%lu rnd=%d",
+         http_size, rnd);
+  //sleep_ms(rnd);
+  //write data to local cache file
   size_t result = rw_callback(fwrite2, ptr, size, nmemb, userp);
   debugf(DBG_LEVEL_EXT, KMAG"write_callback: file write result=%lu", result);
   struct segment_info* info = (struct segment_info*)userp;
   //todo: in case of progressive ops signal we have data to cfs_read
   if (info->de->is_progressive)
   {
-    size_t fuse_size = info->de->downld_buf.fuse_read_size;
     debugf(DBG_LEVEL_EXT,
-           KMAG"write_callback: fuse buffer is empty fuse_size=%lu", fuse_size);
+           KMAG"write_callback: fuse buffer empty?, fuse_size=%lu",
+           info->de->downld_buf.fuse_read_size);
     size_t data_copy_size;
     size_t http_ptr_index = 0;
     const void* src;
     const void* dest;
     int sem_val;
     //copy data to fuse buffer until is full OR until no data left to copy in http buf
-    while (info->de->downld_buf.work_buf_size < fuse_size && (http_size - http_ptr_index > 0))
+    while (info->de->downld_buf.work_buf_size < info->de->downld_buf.fuse_read_size
+           && (http_size - http_ptr_index > 0))
     {
-      //sleep_ms(100);
       //data left needed
-      data_copy_size = min(fuse_size - info->de->downld_buf.work_buf_size,
-        http_size - http_ptr_index);
+      data_copy_size = min(info->de->downld_buf.fuse_read_size -
+                           info->de->downld_buf.work_buf_size,
+                           http_size - http_ptr_index);
       src = ptr + http_ptr_index;
       dest = info->de->downld_buf.readptr + info->de->downld_buf.work_buf_size;
+
       memcpy((void*)dest, src, data_copy_size);
       info->de->downld_buf.work_buf_size += data_copy_size;
       http_ptr_index += data_copy_size;
@@ -401,7 +410,7 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
              data_copy_size, ptr, src, dest, info->de->downld_buf.work_buf_size,
              http_size - http_ptr_index);
 
-      if ((info->de->downld_buf.work_buf_size == fuse_size)
+      if ((info->de->downld_buf.work_buf_size == info->de->downld_buf.fuse_read_size)
           && (http_size != http_ptr_index))
       {
         sem_getvalue(info->de->downld_buf.sem_list[SEM_FULL], &sem_val);
@@ -414,7 +423,8 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
         debugf(DBG_LEVEL_EXT, KMAG
                "write_callback: wait [1] for fuse buffer to get empty, sem=%d", sem_val);
         sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
-        //after this work_buf_size will be set to 0 by cfs_read
+
+        //after this work_buf_size = 0, set by cfs_read
         debugf(DBG_LEVEL_EXT, KMAG
                "write_callback: done wait [1] work_buf=%lu",
                info->de->downld_buf.work_buf_size);
@@ -427,9 +437,10 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
                "write_callback: http buffer fully copied");
         break;
       }
+      //fuse size can change from time to time in cfs_read (why?)
     }
 
-    if (info->de->downld_buf.work_buf_size == fuse_size)
+    if (info->de->downld_buf.work_buf_size == info->de->downld_buf.fuse_read_size)
     {
       sem_getvalue(info->de->downld_buf.sem_list[SEM_FULL], &sem_val);
       //fuse buffer is full, http fully copied, signal cfs_read to return it in user space
@@ -440,14 +451,17 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
       debugf(DBG_LEVEL_EXT, KMAG
              "write_callback: wait [2] for fuse buffer to get empty sem=%d", sem_val);
       sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
+
+
       debugf(DBG_LEVEL_EXT, KMAG
              "write_callback: done wait [2] work_buf=%lu",
              info->de->downld_buf.work_buf_size);
     }
     else
       debugf(DBG_LEVEL_EXT, KMAG
-      "write_callback: incomplete fuse_buf, need more http data work_buf=%lu",
-      info->de->downld_buf.work_buf_size);
+             "write_callback: incomplete fuse_buf, need more http data work_buf=%lu",
+             info->de->downld_buf.work_buf_size);
+
   }
   else
     debugf(DBG_LEVEL_EXT, KMAG"write_callback not progressive");
@@ -638,7 +652,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
                              off_t file_size, int is_segment,
                              dir_entry* de_cached_entry, const char* unencoded_path)
 {
-  debugf(DBG_LEVEL_EXT, "send_request_size(%s) (%s)", method, path);
+  debugf(DBG_LEVEL_NORM, "send_request_size(%s) (%s)", method, path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -963,7 +977,7 @@ void* upload_segment(void* seginfo)
          info->part, response, info->de->is_progressive);
   fclose(info->fp);
   // exit only when this is a child thread started on a segmented file
-  if (!info->de->is_progressive)
+  if (!info->de->is_single_thread)
   {
     debugf(DBG_LEVEL_NORM,
            KMAG"upload_segment: closing thread part=%d, http response=%d, progressive=%d",
@@ -1000,6 +1014,7 @@ void run_segment_threads(const char* method, int segments, int full_segments,
   debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads: ALT filepath=%s", file_path);
 #endif
   int i, ret;
+  bool multi_thread = false;
   for (i = 0; i < segments; i++)
   {
     info[i].method = method;
@@ -1011,24 +1026,36 @@ void run_segment_threads(const char* method, int segments, int full_segments,
     info[i].size = i < full_segments ? size_of_segments : remaining;
     info[i].seg_base = seg_base;
     info[i].de = de;
-    if (option_enable_progressive_download && !strcasecmp(method, "GET") || full_segments > MAX_SEGMENT_THREADS)
+    if (option_enable_progressive_download)// && !strcasecmp(method, "GET"))
     {
       info[i].de->is_progressive = true;
+      info[i].de->is_single_thread = true;
       debugf(DBG_LEVEL_NORM, KMAG
-             "run_segment_threads: download progressive, single thread part=%d/%d, info=%p",
+             "run_segment_threads: progressive, single thread part=%d/%d, info=%p",
+             i, segments, info);
+      upload_segment((void*) & (info[i]));
+    }
+    else if (full_segments > MAX_SEGMENT_THREADS)
+    {
+      info[i].de->is_single_thread = true;
+      info[i].de->is_progressive = false;
+      debugf(DBG_LEVEL_NORM, KMAG
+             "run_segment_threads: single thread part=%d/%d, info=%p",
              i, segments, info);
       upload_segment((void*) & (info[i]));
     }
     else
     {
       debugf(DBG_LEVEL_NORM, KMAG
-             "run_segment_threads: process segmented file, going multi-threaded part=%d",
+             "run_segment_threads: going multi-threaded part=%d",
              i);
       info[i].de->is_progressive = false;
+      info[i].de->is_single_thread = false;
       pthread_create(&threads[i], NULL, upload_segment, (void*) & (info[i]));
+      multi_thread = true;
     }
   }
-  if (!option_enable_progressive_download && !option_enable_progressive_upload)
+  if (multi_thread)
     for (i = 0; i < segments; i++)
     {
       if ((ret = pthread_join(threads[i], NULL)) != 0)
@@ -1415,9 +1442,10 @@ int cloudfs_object_write_fp(const char* path, FILE* fp)
              "cloudfs_object_write_fp: ftruncate failed, aborting!");
       abort();
     }
+    dir_entry* de = check_path_info(path);
     //download all segments from cloud to local file, wait until completed
     run_segment_threads("GET", segments, full_segments, remaining, fp,
-                        seg_base, size_of_segments, NULL);
+                        seg_base, size_of_segments, de);
     debugf(DBG_LEVEL_EXT, "exit 0: cloudfs_object_write_fp(%s)", path);
     return 1;
   }
@@ -1478,7 +1506,9 @@ void cloudfs_object_downld_progressive(const char* path)
     //post with 0 data to ensure a force read exit
     sem_post(de->downld_buf.sem_list[SEM_FULL]);
     //todo: check what close/clean ops with download_buf needs done
-    rewind(fp);
+    //fflush(fp);
+    //rewind(fp);
+    de->downld_buf.download_started = false;
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)", path);
     //return 1;
   }
@@ -1629,6 +1659,7 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
           de->content_type = strdup("application/directory");
         for (anode = onode->children; anode; anode = anode->next)
         {
+
           char* content = "<?!?>";
           for (text_node = anode->children; text_node; text_node = text_node->next)
           {
@@ -1642,6 +1673,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
               //debugf(DBG_LEVEL_NORM, "List dir anode=%s", (const char *)anode->name);
             }
           }
+          debugf(DBG_LEVEL_EXT, KCYN"cloudfs_list_directory(%s): anode [%s]=[%s]", path,
+                 (const char*)anode->name, content);
           if (!strcasecmp((const char*)anode->name, "name"))
           {
             de->name = strdup(content + prefix_length);
@@ -1710,8 +1743,10 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
         *dir_list = de;
         char time_str[TIME_CHARS] = "";
         get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-        debugf(DBG_LEVEL_EXT, KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s]",
-               de->full_name, de->size, de->content_type, de->isdir, de->islink, time_str);
+        debugf(DBG_LEVEL_EXT,
+               KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s] md5=%s",
+               de->full_name, de->size, de->content_type, de->isdir, de->islink, time_str,
+               de->md5sum);
         //attempt to read extended attributes on each dir entry
         //commented out as lazzy metadata read is implemented in cfs_getattr()
         //get_file_metadata(de);
