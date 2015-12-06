@@ -164,25 +164,21 @@ char* str2md5(const char* str, int length)
 */
 int file_md5(FILE* file_handle, char* md5_file_str)
 {
-  debugf(DBG_LEVEL_EXT, "file_md5: start compute sum");
+  debugf(DBG_LEVEL_EXT, "file_md5: start compute sum fp=%p", file_handle);
   if (file_handle == NULL)
   {
     debugf(DBG_LEVEL_NORM, KRED"file_md5: NULL file handle");
     return 0;
   }
-  if (file_buffer_size == 0)
-  {
-    debugf(DBG_LEVEL_NORM, KYEL"file_md5: 0 file buffer size, using default");
-    file_buffer_size = 1024;
-  }
+
   unsigned char c[MD5_DIGEST_LENGTH];
   int i;
   MD5_CTX mdContext;
   int bytes;
   char mdchar[3];//2 chars for md5 + null string terminator
-  unsigned char* data_buf = malloc(file_buffer_size * sizeof(unsigned char));
+  unsigned char* data_buf = malloc(1024 * sizeof(unsigned char));
   MD5_Init(&mdContext);
-  while ((bytes = fread(data_buf, 1, file_buffer_size, file_handle)) != 0)
+  while ((bytes = fread(data_buf, 1, 1024, file_handle)) != 0)
     MD5_Update(&mdContext, data_buf, bytes);
   MD5_Final(c, &mdContext);
   for (i = 0; i < MD5_DIGEST_LENGTH; i++)
@@ -192,7 +188,8 @@ int file_md5(FILE* file_handle, char* md5_file_str)
     //fprintf(stderr, "%02x", c[i]);
   }
   free(data_buf);
-  debugf(DBG_LEVEL_EXT, "file_md5: end compute sum=%s", md5_file_str);
+  debugf(DBG_LEVEL_EXT, "file_md5: end compute sum=%s fp=%p",
+         md5_file_str, file_handle);
   return 0;
 }
 
@@ -207,8 +204,13 @@ void removeSubstr(char* string, char* sub)
   }
 }
 
+/*compose a unique cache file path within max name bounds
+  temp_dir = file folder prefix
+  segment_part >=0 for segmented files, otherwise use -1
+*/
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
-                             char* temp_dir)
+                             char* parent_dir_path_safe, char* temp_dir,
+                             int segment_part)
 {
   char tmp_path[PATH_MAX];
   strncpy(tmp_path, path, PATH_MAX);
@@ -219,16 +221,33 @@ int get_safe_cache_file_path(const char* path, char* file_path_safe,
   //temp file name had process pid in it, removed as on restart files are left in cache (pid changes)
   snprintf(file_path, PATH_MAX, TEMP_FILE_NAME_FORMAT, temp_dir, tmp_path);
   //fixme check if sizeof or strlen is suitable
-  int file_path_len = sizeof(file_path);
+  int file_path_len = strlen(file_path);
   //the file path name using this format can go beyond NAME_MAX size and will generate error on fopen
   //solution: cap file length to NAME_MAX, use a prefix from original path for debug purposes and add md5 id
   char* md5_path = str2md5(file_path, file_path_len);
   int md5len = strlen(md5_path);
-  size_t safe_len_prefix = min(NAME_MAX - md5len, file_path_len);
+  int suffix_len = 0;
+  char suffix_str[PATH_MAX] = "";
+  if (segment_part >= 0)
+  {
+    snprintf(suffix_str, PATH_MAX, TEMP_SEGMENT_FORMAT, segment_part);
+    suffix_len = strlen(suffix_str);
+  }
+  size_t safe_len_prefix = min(NAME_MAX - md5len - suffix_len,
+                               file_path_len);
   strncpy(file_path_safe, file_path, safe_len_prefix);
   strncpy(file_path_safe + safe_len_prefix, md5_path, md5len);
-  //sometimes above copy process produces longer strings that NAME_MAX, force a null terminated string
-  file_path_safe[safe_len_prefix + md5len - 1] = '\0';
+  strncpy(file_path_safe + safe_len_prefix + md5len, suffix_str,
+          suffix_len);
+  if (parent_dir_path_safe != NULL)
+  {
+    strncpy(parent_dir_path_safe, file_path, safe_len_prefix);
+    strncpy(parent_dir_path_safe + safe_len_prefix, md5_path, md5len);
+    parent_dir_path_safe[safe_len_prefix + md5len] = '\0';
+    strcat(parent_dir_path_safe, TEMP_SEGMENT_DIR_SUFFIX);
+  }
+  //properly terminate the string as strncpy does not append {0}
+  file_path_safe[safe_len_prefix + md5len + suffix_len] = '\0';
   free(md5_path);
   return strlen(file_path_safe);
 }
@@ -318,7 +337,7 @@ int delete_file(char* path)
 {
   debugf(DBG_LEVEL_NORM, KYEL"delete_file(%s)", path);
   char file_path_safe[NAME_MAX] = "";
-  get_safe_cache_file_path(path, file_path_safe, temp_dir);
+  get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
   int result = unlink(file_path_safe);
   debugf(DBG_LEVEL_EXT, KYEL"delete_file(%s) (%s) result=%s", path,
          file_path_safe, strerror(result));
@@ -598,7 +617,7 @@ void update_dir_cache(const char* path, off_t size, int isdir, int islink)
 //returns first file entry in linked list. if not in cache will be downloaded.
 int caching_list_directory(const char* path, dir_entry** list)
 {
-  debugf(DBG_LEVEL_EXT, "caching_list_directory(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, "caching_list_directory(%s)", path);
   pthread_mutex_lock(&dcachemut);
   bool new_entry = false;
   if (!strcmp(path, "/"))
@@ -608,15 +627,15 @@ int caching_list_directory(const char* path, dir_entry** list)
   {
     if (cw->was_deleted == true)
     {
-      debugf(DBG_LEVEL_EXT,
+      debugf(DBG_LEVEL_EXTALL,
              KMAG"caching_list_directory status: dir(%s) is empty as cached expired, reload from cloud",
              cw->path);
       if (!cloudfs_list_directory(cw->path, list))
-        debugf(DBG_LEVEL_EXT,
+        debugf(DBG_LEVEL_EXTALL,
                KMAG"caching_list_directory status: cannot reload dir(%s)", cw->path);
       else
       {
-        debugf(DBG_LEVEL_EXT, KMAG"caching_list_directory status: reloaded dir(%s)",
+        debugf(DBG_LEVEL_EXTALL, KMAG"caching_list_directory status: reloaded dir(%s)",
                cw->path);
         //cw->entries = *list;
         cw->was_deleted = false;
@@ -636,11 +655,11 @@ int caching_list_directory(const char* path, dir_entry** list)
     {
       //download was not ok
       pthread_mutex_unlock(&dcachemut);
-      debugf(DBG_LEVEL_EXT,
+      debugf(DBG_LEVEL_EXTALL,
              "exit 0: caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
       return  0;
     }
-    debugf(DBG_LEVEL_EXT,
+    debugf(DBG_LEVEL_EXTALL,
            "caching_list_directory: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
     cw = new_cache(path);
     new_entry = true;
@@ -651,7 +670,7 @@ int caching_list_directory(const char* path, dir_entry** list)
     {
       //mutex unlock was forgotten
       pthread_mutex_unlock(&dcachemut);
-      debugf(DBG_LEVEL_EXT, "exit 1: caching_list_directory(%s)", path);
+      debugf(DBG_LEVEL_EXTALL, "exit 1: caching_list_directory(%s)", path);
       return  0;
     }
     //fixme: this frees dir subentries but leaves the dir parent entry, this confuses path_info
@@ -661,12 +680,12 @@ int caching_list_directory(const char* path, dir_entry** list)
       cloudfs_free_dir_list(cw->entries);
       cw->was_deleted = true;
       cw->cached = time(NULL);
-      debugf(DBG_LEVEL_EXT, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]",
+      debugf(DBG_LEVEL_EXTALL, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]",
              path);
     }
     else
     {
-      debugf(DBG_LEVEL_EXT,
+      debugf(DBG_LEVEL_EXTALL,
              "got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED w NULL]", path);
       pthread_mutex_unlock(&dcachemut);
       return 0;
@@ -674,14 +693,14 @@ int caching_list_directory(const char* path, dir_entry** list)
   }
   else
   {
-    debugf(DBG_LEVEL_EXT, "caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]",
+    debugf(DBG_LEVEL_EXTALL, "caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]",
            path);
     *list = cw->entries;
   }
   //adding new dir file list to global cache, now this dir becomes visible in cache
   cw->entries = *list;
   pthread_mutex_unlock(&dcachemut);
-  debugf(DBG_LEVEL_EXT, "exit 2: caching_list_directory(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, "exit 2: caching_list_directory(%s)", path);
   return 1;
 }
 
@@ -716,7 +735,7 @@ dir_entry* path_info(const char* path)
 //retrieve folder from local cache if exists, return null if does not exist (rather than download)
 int check_caching_list_directory(const char* path, dir_entry** list)
 {
-  debugf(DBG_LEVEL_EXT, "check_caching_list_directory(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, "check_caching_list_directory(%s)", path);
   pthread_mutex_lock(&dcachemut);
   if (!strcmp(path, "/"))
     path = "";
@@ -726,12 +745,12 @@ int check_caching_list_directory(const char* path, dir_entry** list)
     {
       *list = cw->entries;
       pthread_mutex_unlock(&dcachemut);
-      debugf(DBG_LEVEL_EXT,
+      debugf(DBG_LEVEL_EXTALL,
              "exit 0: check_caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]", path);
       return 1;
     }
   pthread_mutex_unlock(&dcachemut);
-  debugf(DBG_LEVEL_EXT,
+  debugf(DBG_LEVEL_EXTALL,
          "exit 1: check_caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
   return 0;
 }
@@ -750,30 +769,71 @@ dir_entry* check_parent_folder_for_file(const char* path)
 //check if local path is in cache, without downloading from cloud if not in cache
 dir_entry* check_path_info(const char* path)
 {
-  debugf(DBG_LEVEL_EXT, "check_path_info(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, "check_path_info(%s)", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry* tmp;
   //get parent folder cache entry
   if (!check_caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXT, "exit 0: check_path_info(%s) "KYEL"[CACHE-MISS]", path);
+    debugf(DBG_LEVEL_EXTALL, "exit 0: check_path_info(%s) "KYEL"[CACHE-MISS]",
+           path);
     return NULL;
   }
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_LEVEL_EXT, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]", path);
+      debugf(DBG_LEVEL_EXTALL, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]",
+             path);
       return tmp;
     }
   }
   if (!strcmp(path, "/"))
-    debugf(DBG_LEVEL_EXT,
+    debugf(DBG_LEVEL_EXTALL,
            "exit 2: check_path_info(%s) "KYEL"ignoring root [CACHE-MISS]", path);
   else
-    debugf(DBG_LEVEL_EXT, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]", path);
+    debugf(DBG_LEVEL_EXTALL, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]",
+           path);
   return NULL;
+}
+
+/*
+  look for segment in cache
+  if exists, check md5sum, returns file handle to file in cache
+  if does not exist, create file and return handle
+*/
+bool open_segment_from_cache(dir_entry* de, int segment_part,
+                             FILE** fp_segment, const char* method)
+{
+  char segment_file_path[NAME_MAX];
+  char segment_file_dir[NAME_MAX];
+  get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
+                           temp_dir, segment_part);
+  struct stat dir_status = { 0 };
+  if (stat(segment_file_dir, &dir_status) == -1)
+    mkdir(segment_file_dir, 0600);
+  bool file_exist = access(segment_file_path, F_OK) != -1;
+  //check if segment is in cache, with md5sum ok
+  char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+  *fp_segment = fopen(segment_file_path, method[0] == 'G' ?
+                      (file_exist ? "r+b" : "w+b") : "rb");
+  debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: open segment fp=%p",
+         *fp_segment);
+  file_md5(*fp_segment, md5_file_hash_str);
+  debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: found segment %d md5=%s",
+         segment_part, md5_file_hash_str);
+  int fno = fileno(*fp_segment);
+  if (fno == -1)
+  {
+    debugf(DBG_LEVEL_NORM, KRED
+           "open_segment_from_cache: segment fno is -1");
+    sleep_ms(3000);
+  }
+  //sleep_ms(1000);
+  rewind(*fp_segment);
+  //fflush(fp_segment);
+  return false;
 }
 
 void sleep_ms(int milliseconds)

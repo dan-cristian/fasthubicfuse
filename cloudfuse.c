@@ -37,9 +37,10 @@ extern bool option_enable_progressive_download;
 
 // thread specific variable to indicate if downloaded file is already in cache
 // https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html#Thread-Local
-static __thread bool thread_file_read_in_cache;
+//static __thread bool thread_file_read_in_cache;
 //static __thread dir_entry thread_file_read_de;
-pthread_key_t glob_thread_de;
+static pthread_key_t glob_thread_de = NULL;
+static __thread dir_entry* thread_de_read = NULL;
 
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
@@ -205,7 +206,7 @@ static int cfs_create(const char* path, mode_t mode,
   char file_path_safe[NAME_MAX] = "";
   if (*temp_dir)
   {
-    get_safe_cache_file_path(path, file_path_safe, temp_dir);
+    get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
     temp_file = fopen(file_path_safe, "w+b");
     errsv = errno;
     if (temp_file == NULL)
@@ -292,7 +293,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   if (*temp_dir)
   {
     char file_path_safe[NAME_MAX];
-    get_safe_cache_file_path(path, file_path_safe, temp_dir);
+    get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
     debugf(DBG_LEVEL_EXT, "cfs_open: try open custom temp (%s)", file_path_safe);
     if (access(file_path_safe, F_OK) != -1)
     {
@@ -367,8 +368,8 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       if (temp_file == NULL)
       {
         debugf(DBG_LEVEL_NORM,
-               KRED"exit 1: cfs_open cannot open custom temp=[%s] err=%d:%s", file_path_safe,
-               errsv, strerror(errsv));
+               KRED"exit 1: cfs_open cannot open custom temp=[%s] err=%d:%s",
+               file_path_safe, errsv, strerror(errsv));
         return -ENOENT;
       }
 
@@ -425,8 +426,8 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   info->direct_io = 1;
   info->nonseekable = 1;
 
-  pthread_key_create(&glob_thread_de, NULL);
-  pthread_setspecific(glob_thread_de, de);
+  //pthread_key_create(&glob_thread_de, NULL);
+  //pthread_setspecific(glob_thread_de, de);
   //launch download as thread if progressive is enabled and file not in cache
   if (!file_cache_ok && option_enable_progressive_download)
   {
@@ -439,9 +440,9 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       //put something different that work_buf_size to avoid wait by http
       de->downld_buf.fuse_read_size = 0;
       de->downld_buf.file_is_in_cache = false;
-      pthread_create(&de->downld_buf.thread, NULL,
-                     (void*)cloudfs_object_downld_progressive, de->full_name);
-      debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) started download thread", path);
+      //pthread_create(&de->downld_buf.thread, NULL,
+      //               (void*)cloudfs_object_downld_progressive, de->full_name);
+      //debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) started download thread", path);
     }
     else
     {
@@ -463,46 +464,82 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   return 0;
 }
 
+void globalDestructor(void* value)
+{
+  printf("In the globalDestructor\n");
+  free(value);
+  pthread_setspecific(glob_thread_de, NULL);
+}
+
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* info)
 {
+  int result;
   int sem_val;
   int rnd = random_at_most(50);
-  if (offset == 0)//avoid clutter, list only once
-    debugf(DBG_LEVEL_NORM, KBLU
-           "cfs_read(%s) buffsize=%lu offset=%lu in_cache=%d d_io=%d rnd=%d", path,
-           size, offset, thread_file_read_in_cache, info->direct_io, rnd);
-  else
+  //if (offset == 0)//avoid clutter, list only once
+  debugf(DBG_LEVEL_NORM, KBLU
+         "cfs_read(%s) buffsize=%lu d_io=%d rnd=%d "KCYN"offset=%lu ", path,
+         size, info->direct_io, rnd, offset);
+  sleep_ms(rnd);
+  /*else
     debugf(DBG_LEVEL_NORM,
            KBLU"cfs_read(%s) buffsize=%lu "KCYN"offset=%lu rand=%d",
            path,
            size, offset, rnd);
+  */
   file_buffer_size = size;
   debug_print_descriptor(info);
 
-  dir_entry* de = (dir_entry*)pthread_getspecific(glob_thread_de);
+  //dir_entry* de = (dir_entry*)pthread_getspecific(glob_thread_de);
+  dir_entry* de = thread_de_read;
   if (!de)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_read(%s):" KRED
-           " 2 unexpected missing path from cache on progressive read",
-           path);
-    return 0;
+    //first time cfs_read operation for this thread, init de
+    de = check_path_info(path);
+    if (!de)
+    {
+      debugf(DBG_LEVEL_NORM, "cfs_read(%s):" KRED
+             " 2 unexpected missing path from cache on progressive read",
+             path);
+      sleep_ms(1000);
+      return -1;
+    }
+    debugf(DBG_LEVEL_NORM, KMAG
+           "cfs_read: init download thread path=%s offset=%lu",
+           de->name, offset);
+    sleep_ms(1000);
+    //pthread_key_create(&glob_thread_de, globalDestructor);
+    //pthread_setspecific(glob_thread_de, &de);
+    thread_de_read = de;
+    de->downld_buf.fuse_read_size = size;
+    de->downld_buf.offset = offset;
+    pthread_create(&de->downld_buf.thread, NULL,
+                   (void*)cloudfs_object_downld_progressive, de->full_name);
+    de->downld_buf.download_started = true;
+    debugf(DBG_LEVEL_NORM, KBLU "cfs_read: started download thread offset=%lu",
+           offset);
+  }
+  else
+  {
+    debugf(DBG_LEVEL_NORM, KBLU "cfs_read: continue thread path=%s off=%lu",
+           de->name, de->downld_buf.offset);
+    //sleep_ms(100);
   }
 
-  if (option_enable_progressive_download && !de->downld_buf.file_is_in_cache)
+  if (option_enable_progressive_download)// && !de->downld_buf.file_is_in_cache)
   {
     //dir_entry* de = check_path_info(path);
     if (de)
     {
       //sleep_ms(rnd);
-
       if (de->downld_buf.fuse_read_size != 0
           && de->downld_buf.fuse_read_size != size)
       {
         //todo: fuse buffer size is changing from time to time (mostly on ops via samba), why?
         debugf(DBG_LEVEL_EXT, KRED
-               "cfs_read(%s): fuse size changed since last cfs_read, old=%lu new=%lu",
-               path, de->downld_buf.fuse_read_size, size);
+               "cfs_read: fuse size changed since last cfs_read, old=%lu new=%lu",
+               de->downld_buf.fuse_read_size, size);
         //sleep_ms(100);
       }
       //reset data size provided by http
@@ -510,27 +547,29 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       //inform the expected fuse buffer size to be filled in by http
       de->downld_buf.fuse_read_size = size;
       de->downld_buf.readptr = buf;
-      //fixme: curl callback might be already called at this point, before buf data was initialised, result in segfaut
-      if (offset != 0)
-      {
-        sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
-        //signal we need data, buffer is empty, triggers http data copy to buf
-        debugf(DBG_LEVEL_EXT, KBLU
-               "cfs_read(%s): post empty data, buf_size=%lu sem=%d",
-               path, size, sem_val);
-        sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
-      }
-      else de->downld_buf.download_started = true;
+      sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
+      //signal we need data, buffer is empty, triggers http data copy to buf
+      debugf(DBG_LEVEL_EXT, KBLU
+             "cfs_read: post empty data, buf_size=%lu sem=%d",
+             size, sem_val);
+      sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
+      //}
 
       sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
-      debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s): wait full data sem=%d", path,
+      debugf(DBG_LEVEL_EXT, KBLU "cfs_read: wait full data sem=%d",
              sem_val);
       //wait until data buffer is full
       sem_wait(de->downld_buf.sem_list[SEM_FULL]);
-      debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s): got full data size=%lu", path,
+      debugf(DBG_LEVEL_EXT, KBLU "cfs_read: got full data size=%lu",
              de->downld_buf.work_buf_size);
-      debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s): exit ret_code=%lu", path,
+      debugf(DBG_LEVEL_EXT, KBLU "cfs_read: exit ret_code=%lu",
              de->downld_buf.work_buf_size);
+      if (de->downld_buf.work_buf_size == 0)
+      {
+        //cleanup thread, read completed
+        de->downld_buf.download_started = false;
+        thread_de_read = NULL;
+      }
       return de->downld_buf.work_buf_size;
     }
     else
@@ -541,13 +580,18 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       return 0;
     }
   }
-
-  int result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
+  else
+  {
+    result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
+    debugf(DBG_LEVEL_EXT, "cfs_read(%s): got data from file",
+           path);
+    sleep_ms(1000);
+  }
   if (offset == 0)
     debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
            strerror(errno));
   else
-    debugf(DBG_LEVEL_EXTALL, KBLU "exit: cfs_read(%s) result=%s", path,
+    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
            strerror(errno));
   return result;
 }

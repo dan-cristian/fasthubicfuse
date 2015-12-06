@@ -29,8 +29,10 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
 #define HEADER_TEXT_MD5HASH "Etag"
 #define HEADER_TEXT_IS_SEGMENTED "X-Object-Meta-Is-Segmented"
-#define TEMP_FILE_NAME_FORMAT "%s/.cloudfuse_%s"
+#define TEMP_FILE_NAME_FORMAT "%s/cloudfuse_%s_"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
+#define TEMP_SEGMENT_DIR_SUFFIX "_segments"
+#define TEMP_SEGMENT_FORMAT "_segments/%d"
 
 #define KNRM  "\x1B[0m"
 #define KRED  "\x1B[31m"
@@ -95,6 +97,7 @@ typedef struct dir_entry
   uid_t uid;
   gid_t gid;
   bool is_segmented;//-1 for undefined
+  size_t segment_size;
   time_t accessed_in_cache;//todo: cache support based on access time
   bool metadata_downloaded;
   struct progressive_data_buf upload_buf;
@@ -134,7 +137,8 @@ int file_md5(FILE* file_handle, char* md5_file_str);
 void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
 int get_safe_cache_file_path(const char* file_path, char* file_path_safe,
-                             char* temp_dir);
+                             char* parent_dir_path_safe, char* temp_dir,
+                             int segment_part);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
 long random_at_most(long max);
@@ -152,6 +156,8 @@ void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
+bool open_segment_from_cache(dir_entry* de, int segment_part,
+                             FILE** fp_segment, const char* method);
 void sleep_ms(int milliseconds);
 char* get_home_dir();
 void cloudfs_debug(int dbg);
