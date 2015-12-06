@@ -1638,7 +1638,8 @@ void cloudfs_object_downld_progressive(const char* path)
                       &size_of_segments, &total_size))
   {
     debugf(DBG_LEVEL_NORM,
-           "cloudfs_object_downld_progressive(%s): started segmented download", path);
+           "cloudfs_object_downld_progressive(%s): started segmented download fp=%p",
+           path, fp);
     rewind(fp);
     fflush(fp);
     if (ftruncate(fileno(fp), 0) < 0)
