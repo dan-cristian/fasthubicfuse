@@ -40,7 +40,7 @@ extern bool option_enable_progressive_download;
 //static __thread bool thread_file_read_in_cache;
 //static __thread dir_entry thread_file_read_de;
 static pthread_key_t glob_thread_de = NULL;
-static __thread dir_entry* thread_de_read = NULL;
+//static __thread dir_entry* thread_de_read = NULL;
 
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
@@ -440,9 +440,8 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       //put something different that work_buf_size to avoid wait by http
       de->downld_buf.fuse_read_size = 0;
       de->downld_buf.file_is_in_cache = false;
-      //pthread_create(&de->downld_buf.thread, NULL,
-      //               (void*)cloudfs_object_downld_progressive, de->full_name);
-      //debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) started download thread", path);
+      //save de on current thread stack
+      //thread_de_read = de;
     }
     else
     {
@@ -481,119 +480,178 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   debugf(DBG_LEVEL_NORM, KBLU
          "cfs_read(%s) buffsize=%lu d_io=%d rnd=%d "KCYN"offset=%lu ", path,
          size, info->direct_io, rnd, offset);
-  sleep_ms(rnd);
-  /*else
-    debugf(DBG_LEVEL_NORM,
-           KBLU"cfs_read(%s) buffsize=%lu "KCYN"offset=%lu rand=%d",
-           path,
-           size, offset, rnd);
-  */
+  //sleep_ms(rnd);
+
   file_buffer_size = size;
   debug_print_descriptor(info);
 
-  //dir_entry* de = (dir_entry*)pthread_getspecific(glob_thread_de);
-  dir_entry* de = thread_de_read;
-  if (!de)
+  dir_entry* de = check_path_info(path);
+  if (de && de->is_segmented)
   {
-    //first time cfs_read operation for this thread, init de
-    de = check_path_info(path);
-    if (!de)
-    {
-      debugf(DBG_LEVEL_NORM, "cfs_read(%s):" KRED
-             " 2 unexpected missing path from cache on progressive read",
-             path);
-      sleep_ms(1000);
-      return -1;
-    }
+    int segment = de->segment_size / de->size;
+    dir_entry* de_seg = get_segment(de, segment);
     debugf(DBG_LEVEL_NORM, KMAG
-           "cfs_read: init download thread path=%s offset=%lu",
-           de->name, offset);
-    sleep_ms(1000);
-    //pthread_key_create(&glob_thread_de, globalDestructor);
-    //pthread_setspecific(glob_thread_de, &de);
-    thread_de_read = de;
-    de->downld_buf.fuse_read_size = size;
-    de->downld_buf.offset = offset;
-    pthread_create(&de->downld_buf.thread, NULL,
-                   (void*)cloudfs_object_downld_progressive, de->full_name);
-    de->downld_buf.download_started = true;
-    debugf(DBG_LEVEL_NORM, KBLU "cfs_read: started download thread offset=%lu",
-           offset);
-  }
-  else
-  {
-    debugf(DBG_LEVEL_NORM, KBLU "cfs_read: continue thread path=%s off=%lu",
-           de->name, de->downld_buf.offset);
-    //sleep_ms(100);
-  }
-
-  if (option_enable_progressive_download)// && !de->downld_buf.file_is_in_cache)
-  {
-    //dir_entry* de = check_path_info(path);
-    if (de)
+           "cfs_read: enter segmented path=%s offset=%lu segment=%d seg_name=%s md5=%s",
+           de->name, offset, segment, de_seg->name, de_seg->md5sum);
+    //sleep_ms(1000);
+    if (de_seg)
     {
-      //sleep_ms(rnd);
-      if (de->downld_buf.fuse_read_size != 0
-          && de->downld_buf.fuse_read_size != size)
+      FILE* fp_seg = NULL;
+      //PUT = open read only
+      //sleep_ms(3000);
+      bool in_cache = open_segment_from_cache(de, de_seg->md5sum, segment, &fp_seg,
+                                              "PUT");
+      if (in_cache)
       {
-        //todo: fuse buffer size is changing from time to time (mostly on ops via samba), why?
-        debugf(DBG_LEVEL_EXT, KRED
-               "cfs_read: fuse size changed since last cfs_read, old=%lu new=%lu",
-               de->downld_buf.fuse_read_size, size);
-        //sleep_ms(100);
-      }
-      //reset data size provided by http
-      de->downld_buf.work_buf_size = 0;
-      //inform the expected fuse buffer size to be filled in by http
-      de->downld_buf.fuse_read_size = size;
-      de->downld_buf.readptr = buf;
-      sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
-      //signal we need data, buffer is empty, triggers http data copy to buf
-      debugf(DBG_LEVEL_EXT, KBLU
-             "cfs_read: post empty data, buf_size=%lu sem=%d",
-             size, sem_val);
-      sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
-      //}
+        int fno = fileno(fp_seg);
+        if (fno != -1)
+        {
+          //fdopen(fno, "rb");
+          result = pread(fno, buf, size, offset);
+          int err = errno;
+          debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s) err=%s fno=%d", path,
+                 strerror(err), fno);
+          //FILE* fp_read = fdopen(fno, "r");
+          //result = fread(buf, size, offset, fp_read);
 
-      sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
-      debugf(DBG_LEVEL_EXT, KBLU "cfs_read: wait full data sem=%d",
-             sem_val);
-      //wait until data buffer is full
-      sem_wait(de->downld_buf.sem_list[SEM_FULL]);
-      debugf(DBG_LEVEL_EXT, KBLU "cfs_read: got full data size=%lu",
-             de->downld_buf.work_buf_size);
-      debugf(DBG_LEVEL_EXT, KBLU "cfs_read: exit ret_code=%lu",
-             de->downld_buf.work_buf_size);
-      if (de->downld_buf.work_buf_size == 0)
-      {
-        //cleanup thread, read completed
-        de->downld_buf.download_started = false;
-        thread_de_read = NULL;
+          debugf(DBG_LEVEL_EXT, KMAG
+                 "cfs_read(%s): segment %d, fread=%d "KGRN"in cache",
+                 path, result, segment);
+          //sleep_ms(100);
+          close(fno);
+          //fclose(fp_read);
+          sleep_ms(2000);
+          return result;
+        }
+        else
+        {
+          debugf(DBG_LEVEL_NORM, KRED "cfs_read(%s): Invalid seg_fp(%p) as fileno=-1",
+                 path, fp_seg);
+          fclose(fp_seg);
+          return -1;
+        }
       }
-      return de->downld_buf.work_buf_size;
+      else //not in cache
+      {
+        debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): segment %d "KYEL"not in cache",
+               path, segment);
+        sleep_ms(3000);
+
+        if (!de_seg->downld_buf.download_started) //download not started
+        {
+          de_seg->downld_buf.download_started = true;
+          de->downld_buf.fuse_read_size = size;
+          de->downld_buf.offset = offset;
+          de->downld_buf.local_cache_file = fp_seg;
+          pthread_create(&de->downld_buf.thread, NULL,
+                         (void*)cloudfs_object_downld_progressive, de->full_name);
+          debugf(DBG_LEVEL_NORM, KBLU "cfs_read: started download thread offset=%lu",
+                 offset);
+          //wait until segment is completely downloaded
+          sem_wait(de->downld_buf.sem_list[SEM_FULL]);
+        }
+
+        if (de_seg->downld_buf.download_started)
+        {
+          if (de->is_progressive)
+          {
+            //sleep_ms(rnd);
+            if (de->downld_buf.fuse_read_size != 0
+                && de->downld_buf.fuse_read_size != size)
+            {
+              //todo: fuse buffer size is changing from time to time (mostly on ops via samba), why?
+              debugf(DBG_LEVEL_EXT, KRED
+                     "cfs_read: fuse size changed since last cfs_read, old=%lu new=%lu",
+                     de->downld_buf.fuse_read_size, size);
+              //sleep_ms(100);
+            }
+            //reset data size provided by http
+            de->downld_buf.work_buf_size = 0;
+            //inform the expected fuse buffer size to be filled in by http
+            de->downld_buf.fuse_read_size = size;
+            de->downld_buf.readptr = buf;
+            sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
+            //signal we need data, buffer is empty, triggers http data copy to buf
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read: post empty data, buf_size=%lu sem=%d",
+                   size, sem_val);
+            sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
+            sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
+            debugf(DBG_LEVEL_EXT, KBLU "cfs_read: wait full data sem=%d",
+                   sem_val);
+            //wait until data buffer is full
+            sem_wait(de->downld_buf.sem_list[SEM_FULL]);
+            debugf(DBG_LEVEL_EXT, KBLU "cfs_read: got full data size=%lu",
+                   de->downld_buf.work_buf_size);
+            debugf(DBG_LEVEL_EXT, KBLU "cfs_read: exit ret_code=%lu",
+                   de->downld_buf.work_buf_size);
+            if (de->downld_buf.work_buf_size == 0)
+            {
+              //cleanup thread, read completed
+              //de->downld_buf.download_started = false;
+              //thread_de_read = NULL;
+            }
+            return de->downld_buf.work_buf_size;
+          }
+          else //not progressice
+          {
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read: downld started, wait full data download");
+            //wait until segment is completely downloaded
+            sem_wait(de->downld_buf.sem_list[SEM_FULL]);
+          }
+        }
+        debugf(DBG_LEVEL_EXT, KBLU "cfs_read: got full data");
+        in_cache = open_segment_from_cache(de, de_seg->md5sum, segment, &fp_seg,
+                                           "PUT");
+        if (in_cache)
+        {
+          int fno = fileno(fp_seg);
+          if (fno != -1)
+          {
+            debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): [2] segment %d "KGRN"in cache",
+                   path, segment);
+            result = pread(fno, buf, size, offset);
+            //sleep_ms(100);
+            fclose(fp_seg);
+            return result;
+          }
+          else
+          {
+            debugf(DBG_LEVEL_NORM, KRED
+                   "cfs_read(%s): [2] Invalid seg_fp(%p) as fileno=-1",
+                   path, fp_seg);
+            fclose(fp_seg);
+            return -1;
+          }
+        }
+        else
+        {
+          debugf(DBG_LEVEL_NORM,
+                 KRED "exit: cfs_read(%s) segment download failed, not in cache", path);
+          sleep_ms(3000);
+        }
+      }
+
+
+      if (offset == 0)
+        debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
+               strerror(errno));
+      else
+        debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
+               strerror(errno));
+      return result;
     }
-    else
-    {
-      debugf(DBG_LEVEL_EXT, "cfs_read(%s):" KRED
-             " unexpected missing path from cache on progressive read",
-             path);
-      return 0;
-    }
+    else debugf(DBG_LEVEL_NORM,
+                  KRED "exit: cfs_read(%s) segment not found on segmented", path);
   }
-  else
+  else //de not found?
   {
     result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
     debugf(DBG_LEVEL_EXT, "cfs_read(%s): got data from file",
            path);
     sleep_ms(1000);
   }
-  if (offset == 0)
-    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
-           strerror(errno));
-  else
-    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
-           strerror(errno));
-  return result;
 }
 
 //todo: flush will upload a file again even if just file attributes are changed.
@@ -856,7 +914,8 @@ static int cfs_unlink(const char* path)
   return -ENOENT;
 }
 
-static int cfs_fsync(const char* path, int idunno, struct fuse_file_info* info)
+static int cfs_fsync(const char* path, int idunno,
+                     struct fuse_file_info* info)
 {
   debugf(DBG_LEVEL_NORM, "cfs_fsync(%s)", path);
   return 0;

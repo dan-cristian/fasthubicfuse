@@ -97,6 +97,7 @@ typedef struct dir_entry
   uid_t uid;
   gid_t gid;
   bool is_segmented;//-1 for undefined
+  struct dir_entry* segments;
   size_t segment_size;
   time_t accessed_in_cache;//todo: cache support based on access time
   bool metadata_downloaded;
@@ -134,11 +135,12 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
                         int time_str_len);
 char* str2md5(const char* str, int length);
 int file_md5(FILE* file_handle, char* md5_file_str);
+int file_md5_by_name(const char* file_name_str, char* md5_file_str);
 void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
-int get_safe_cache_file_path(const char* file_path, char* file_path_safe,
-                             char* parent_dir_path_safe, char* temp_dir,
-                             int segment_part);
+int get_safe_cache_file_path(const char* path, char* file_path_safe,
+                             char* parent_dir_path_safe, const char* temp_dir,
+                             const int segment_part);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
 long random_at_most(long max);
@@ -152,11 +154,12 @@ void update_dir_cache(const char* path, off_t size, int isdir, int islink);
 dir_entry* path_info(const char* path);
 dir_entry* check_path_info(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
+dir_entry* get_segment(dir_entry* de, int segment);
 void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
-bool open_segment_from_cache(dir_entry* de, int segment_part,
+bool open_segment_from_cache(dir_entry* de, char* md5sum, int segment_part,
                              FILE** fp_segment, const char* method);
 void sleep_ms(int milliseconds);
 char* get_home_dir();

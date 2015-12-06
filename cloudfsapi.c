@@ -474,14 +474,20 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
 
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
-  debugf(DBG_LEVEL_EXT, KMAG"write_callback");
   struct segment_info* info = (struct segment_info*)userp;
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: progressive=%d",
+         info->de->is_progressive);
   //send data to fuse buffer
   if (info->de->is_progressive)
     write_callback_progressive(ptr, size, nmemb, userp);
 
   //write data to local cache file
   size_t result = rw_callback(fwrite2, ptr, size, nmemb, userp);
+  if (result == 0 && !info->de->is_progressive)
+  {
+    //signal cfs_read to wake
+    sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
+  }
   return result;
 }
 
@@ -1088,10 +1094,6 @@ void run_segment_threads_progressive(const char* method, int segments,
   //find segment number containing needed offset
   i = de->downld_buf.offset / size_of_segments;
   info[i].method = method;
-  //open segment for write on GET (download) and for read on PUT etc
-  //info[i].fp = fopen(file_path, method[0] == 'G' ? "r+" : "r");
-  debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive() part=%d fp=%p",
-         i, info[i].fp);
   info[i].part = i;
   info[i].segment_size = size_of_segments;
   info[i].size = i < full_segments ? size_of_segments : remaining;
@@ -1099,9 +1101,7 @@ void run_segment_threads_progressive(const char* method, int segments,
   info[i].de = de;
   if (de->is_segmented)
   {
-    bool in_cache = open_segment_from_cache(de, i, &info[i].fp, method);
-    debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive: segm fp=%p",
-           info[i].fp);
+    info[i].fp = get_segment(de, i)->downld_buf.local_cache_file;
     int fno = fileno(info[i].fp);
     if (fno == -1)
     {
@@ -1118,12 +1118,8 @@ void run_segment_threads_progressive(const char* method, int segments,
     else
       debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive: segm filepath=%s",
              file_path);
-    if (in_cache)
-    {
-      //return file from cache
-    }
   }
-  info[i].de->is_progressive = true;
+  //info[i].de->is_progressive = true;
   info[i].de->is_single_thread = true;
   debugf(DBG_LEVEL_NORM, KMAG
          "run_segment_threads_progressive: progressive, single thread part=%d/%d, info=%p",
@@ -1298,9 +1294,11 @@ int is_segmented(const char* path)
   return internal_is_segmented(seg_path, object, path);
 }
 
-//returns segmented file properties by parsing and retrieving the folder structure on the cloud
-//added totalsize as parameter to return the file size on list directory for segmented files
-//old implementation returns file size=0 (issue #91)
+/*returns segmented file properties by parsing and retrieving the folder structure on the cloud
+  added totalsize as parameter to return the file size on list directory for segmented files
+  old implementation returns file size=0 (issue #91)
+  populates parent file with link to segment list
+*/
 int format_segments(const char* path, char* seg_base,  long* segments,
                     long* full_segments, long* remaining, long* size_of_segments, long* total_size)
 {
@@ -1315,6 +1313,7 @@ int format_segments(const char* path, char* seg_base,  long* segments,
     //operations with segments
     //http://docs.openstack.org/developer/swift/overview_large_objects.html
     char manifest[MAX_URL_SIZE];
+    //fixme: memory is not freed for seg_dir after cloudfs_list_directory()
     dir_entry* seg_dir;
     snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, object);
     debugf(DBG_LEVEL_EXTALL, "format_segments manifest(%s)", manifest);
@@ -1352,6 +1351,17 @@ int format_segments(const char* path, char* seg_base,  long* segments,
       debugf(DBG_LEVEL_EXTALL, "exit 3: format_segments(%s)", path);
       return 0;
     }
+    else
+    {
+      //save segments dir list into parent file entry
+      dir_entry* de = check_path_info(path);
+      if (de)
+      {
+        if (de->segments)//free if a list already exists
+          cloudfs_free_dir_list(de->segments);
+        de->segments = seg_dir;
+      }
+    }
     *total_size = strtoll(str_size, NULL, 10);
     *size_of_segments = strtoll(str_segment, NULL, 10);
     *remaining = *total_size % *size_of_segments;
@@ -1362,7 +1372,7 @@ int format_segments(const char* path, char* seg_base,  long* segments,
     char tmp[MAX_URL_SIZE];
     strncpy(tmp, seg_base, MAX_URL_SIZE);
     snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
-    debugf(DBG_LEVEL_EXTALL, KMAG"format_segments seg_base2(%s)", seg_base);
+    debugf(DBG_LEVEL_EXT, KMAG"format_segments: seg_base=(%s)", seg_base);
     debugf(DBG_LEVEL_EXT,
            "exit 4: format_segments(%s) total=%d size_of_segments=%d remaining=%d, full_segments=%d segments=%d",
            path, *total_size, *size_of_segments, *remaining, *full_segments, *segments);
@@ -1701,10 +1711,12 @@ int cloudfs_object_truncate(const char* path, off_t size)
 //todo: not thread-safe?
 void get_file_metadata(dir_entry* de)
 {
-  if (de->size_on_cloud == 0 && !de->isdir && !de->metadata_downloaded)
+  if ((de->size_on_cloud == 0 || de->is_segmented) && !de->isdir
+      && !de->metadata_downloaded)
   {
     //this can be a potential segmented file, try to read segments size
-    debugf(DBG_LEVEL_EXT, KMAG"ZERO size file=%s", de->full_name);
+    debugf(DBG_LEVEL_EXT, KMAG"get_file_metadata: get segments file=%s",
+           de->full_name);
     char seg_base[MAX_URL_SIZE] = "";
     long segments;
     long full_segments;
