@@ -87,11 +87,11 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   stbuf->st_ctim.tv_nsec = de->ctime.tv_nsec;
   char time_str[TIME_CHARS] = "";
   get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_getattr: atime=[%s]", time_str);
+  debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: atime=[%s]", time_str);
   get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_getattr: mtime=[%s]", time_str);
+  debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: mtime=[%s]", time_str);
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_getattr: ctime=[%s]", time_str);
+  debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: ctime=[%s]", time_str);
   int default_mode_dir, default_mode_file;
   if (option_enable_chmod)
   {
@@ -431,7 +431,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   //launch download as thread if progressive is enabled and file not in cache
   if (!file_cache_ok && option_enable_progressive_download)
   {
-    init_semaphores(&de->downld_buf, de, "dwnld");
+    //init_semaphores(&de->downld_buf, de, "dwnld");
     de->downld_buf.local_cache_file = fdopen(dup(fileno(temp_file)), "w+b");
     errsv = errno;
     if (de->downld_buf.local_cache_file != NULL)
@@ -463,13 +463,6 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   return 0;
 }
 
-void globalDestructor(void* value)
-{
-  printf("In the globalDestructor\n");
-  free(value);
-  pthread_setspecific(glob_thread_de, NULL);
-}
-
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* info)
 {
@@ -497,14 +490,15 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     //sleep_ms(1000);
     if (de_seg)
     {
-      FILE* fp_seg = NULL;
+      //FILE* fp_seg = NULL;
       //PUT = open read only
       //sleep_ms(3000);
-      bool in_cache = open_segment_from_cache(de, de_seg->md5sum, segment, &fp_seg,
-                                              "PUT");
+      bool in_cache = open_segment_from_cache(de, de_seg->md5sum, segment,
+                                              &de_seg->downld_buf.local_cache_file,
+                                              "GET");
       if (in_cache)
       {
-        int fno = fileno(fp_seg);
+        int fno = fileno(de_seg->downld_buf.local_cache_file);
         int err;
         if (fno != -1)
         {
@@ -514,7 +508,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                  strerror(err), fno);
           debugf(DBG_LEVEL_EXT, KMAG
                  "cfs_read(%s): segment %d, fread=%d fp=%p"KGRN"in cache",
-                 path, segment, result, fp_seg);
+                 path, segment, result, de_seg->downld_buf.local_cache_file);
           //sleep_ms(100);
           close(fno);
           if (result > 0)
@@ -524,13 +518,14 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): done serving segment %d",
                    path, segment);
             in_cache = false;
+            //todo: download a new segment!!!
           }
         }
         else
         {
           debugf(DBG_LEVEL_NORM, KRED "cfs_read(%s): Invalid seg_fp(%p) as fileno=-1",
-                 path, fp_seg);
-          fclose(fp_seg);
+                 path, de_seg->downld_buf.local_cache_file);
+          fclose(de_seg->downld_buf.local_cache_file);
           return -1;
         }
       }
@@ -540,26 +535,30 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       {
         debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): segment %d "KYEL"not in cache",
                path, segment);
-        sleep_ms(3000);
+        sleep_ms(1000);
 
         if (!de_seg->downld_buf.download_started) //download not started
         {
+          init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
           de_seg->downld_buf.download_started = true;
-          de->downld_buf.fuse_read_size = size;
+          de_seg->downld_buf.fuse_read_size = size;
+          //fixme: pass offset via de but might be overwritten by another thread?
           de->downld_buf.offset = offset;
-          de->downld_buf.local_cache_file = fp_seg;
-          pthread_create(&de->downld_buf.thread, NULL,
+          de_seg->downld_buf.offset = offset;
+
+          //de_seg->downld_buf.local_cache_file = fp_seg;
+          pthread_create(&de_seg->downld_buf.thread, NULL,
                          (void*)cloudfs_object_downld_progressive, de->full_name);
           debugf(DBG_LEVEL_NORM, KBLU
                  "cfs_read: started download thread offset=%lu fp=%p",
-                 offset, fp_seg);
+                 offset, de_seg->downld_buf.local_cache_file);
           //wait until segment is completely downloaded
-          sem_wait(de->downld_buf.sem_list[SEM_FULL]);
+          sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
         }
 
         if (de_seg->downld_buf.download_started)
         {
-          if (de->is_progressive)
+          if (false)//de->is_progressive)
           {
             //sleep_ms(rnd);
             if (de->downld_buf.fuse_read_size != 0
@@ -604,30 +603,31 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             debugf(DBG_LEVEL_EXT, KBLU
                    "cfs_read: downld started, wait full data download");
             //wait until segment is completely downloaded
-            sem_wait(de->downld_buf.sem_list[SEM_FULL]);
+            sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
           }
         }
         debugf(DBG_LEVEL_EXT, KBLU "cfs_read: got full data");
-        in_cache = open_segment_from_cache(de, de_seg->md5sum, segment, &fp_seg,
+        in_cache = open_segment_from_cache(de, de_seg->md5sum,
+                                           segment, &de_seg->downld_buf.local_cache_file,
                                            "PUT");
         if (in_cache)
         {
-          int fno = fileno(fp_seg);
+          int fno = fileno(de_seg->downld_buf.local_cache_file);
           if (fno != -1)
           {
             debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): [2] segment %d "KGRN"in cache",
                    path, segment);
             result = pread(fno, buf, size, offset);
             //sleep_ms(100);
-            fclose(fp_seg);
+            fclose(de_seg->downld_buf.local_cache_file);
             return result;
           }
           else
           {
             debugf(DBG_LEVEL_NORM, KRED
                    "cfs_read(%s): [2] Invalid seg_fp(%p) as fileno=-1",
-                   path, fp_seg);
-            fclose(fp_seg);
+                   path, de_seg->downld_buf.local_cache_file);
+            fclose(de_seg->downld_buf.local_cache_file);
             return -1;
           }
         }

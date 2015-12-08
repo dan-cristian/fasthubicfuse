@@ -466,6 +466,7 @@ void dir_decache(const char* path)
   pthread_mutex_unlock(&dcachemut);
 }
 
+//data_buf exists for dowload and upload
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix)
 {
@@ -730,28 +731,28 @@ int caching_list_directory(const char* path, dir_entry** list)
 
 dir_entry* path_info(const char* path)
 {
-  debugf(DBG_LEVEL_EXT, "path_info(%s)", path);
+  debugf(DBG_LEVEL_EXTALL, "path_info(%s)", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry* tmp;
   if (!caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXT, "exit 0: path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
+    debugf(DBG_LEVEL_EXTALL, "exit 0: path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
     return NULL;
   }
   else
-    debugf(DBG_LEVEL_EXT, "path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
+    debugf(DBG_LEVEL_EXTALL, "path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
   //iterate in file list obtained from cache or downloaded
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_LEVEL_EXT, "exit 1: path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
+      debugf(DBG_LEVEL_EXTALL, "exit 1: path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
       return tmp;
     }
   }
   //miss in case the file is not found on a cached folder
-  debugf(DBG_LEVEL_EXT, "exit 2: path_info(%s) "KYEL"[CACHE-MISS]", path);
+  debugf(DBG_LEVEL_EXTALL, "exit 2: path_info(%s) "KYEL"[CACHE-MISS]", path);
   return NULL;
 }
 
@@ -836,12 +837,20 @@ bool open_segment_from_cache(dir_entry* de, char* md5sum, int segment_part,
                            temp_dir, segment_part);
   struct stat dir_status = { 0 };
   if (stat(segment_file_dir, &dir_status) == -1)
-    mkdir(segment_file_dir, 0600);
+    mkdir(segment_file_dir, 0700);
   bool file_exist = access(segment_file_path, F_OK) != -1;
+  // todo: check open modes
   *fp_segment = fopen(segment_file_path, method[0] == 'G' ?
-                      (file_exist ? "r+" : "w+") : "r");
-  debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: open segment fp=%p",
-         *fp_segment);
+                      (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
+
+  int err = errno;
+  if (*fp_segment == NULL)
+    debugf(DBG_LEVEL_NORM,
+           KRED"open_segment_from_cache: failed to open %s, fp=%p err=%s",
+           segment_file_path, *fp_segment, strerror(err));
+  else
+    debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: open segment fp=%p",
+           *fp_segment);
   if (file_exist)
   {
     debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: found segment %d md5=%s",

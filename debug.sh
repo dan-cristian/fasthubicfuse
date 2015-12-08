@@ -1,5 +1,6 @@
 killall hubicfuse
-git pull origin utime
+#git pull origin progressive_operations
+make clean
 make debug
 sudo umount -l /mnt/hubic
 sudo make install

@@ -1067,20 +1067,19 @@ void* upload_segment_progressive(void* seginfo)
 void run_segment_threads_progressive(const char* method, int segments,
                                      int full_segments,
                                      int remaining,
-                                     FILE* fp, char* seg_base, int size_of_segments, dir_entry* de)
+                                     FILE* fp, char* seg_base, int size_of_segments,
+                                     dir_entry* de)
 {
   debugf(DBG_LEVEL_NORM,
          "run_segment_threads_progressive(%s) segments=%d fp=%p size=%d",
          method, segments, fp, size_of_segments);
   char file_path[PATH_MAX] = { 0 };
-  struct segment_info* info = (struct segment_info*)
-                              malloc(segments * sizeof(struct segment_info));
-  pthread_t* threads = (pthread_t*)malloc(segments * sizeof(pthread_t));
 
   //debug_print_file_name(fp);
 #ifdef __linux__
   snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fileno(fp));
-  debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads: filepath=%s", file_path);
+  debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive: filepath=%s",
+         file_path);
 #else
   //TODO: I haven't actually tested this
   if (fcntl(fileno(fp), F_GETPATH, file_path) == -1)
@@ -1091,26 +1090,29 @@ void run_segment_threads_progressive(const char* method, int segments,
   int i, ret;
   bool multi_thread = false;
   FILE* seg_file;
-  //find segment number containing needed offset
+  struct segment_info info;
+  //find segment number containing needed offset. get offset from de (is it thread safe?)
   i = de->downld_buf.offset / size_of_segments;
-  info[i].method = method;
-  info[i].part = i;
-  info[i].segment_size = size_of_segments;
-  info[i].size = i < full_segments ? size_of_segments : remaining;
-  info[i].seg_base = seg_base;
-  info[i].de = de;
+  info.method = method;
+  info.part = i;
+  info.segment_size = size_of_segments;
+  info.size = i < full_segments ? size_of_segments : remaining;
+  info.seg_base = seg_base;
+  info.de = de;
+  dir_entry* de_seg = get_segment(de, i);
   if (de->is_segmented)
   {
-    info[i].fp = get_segment(de, i)->downld_buf.local_cache_file;
-    int fno = fileno(info[i].fp);
-    if (fno == -1)
-    {
+    info.fp = de_seg->downld_buf.local_cache_file;
+    /*int fno = fileno(info.fp);
+      if (fno == -1)
+      {
       debugf(DBG_LEVEL_NORM, KRED
              "run_segment_threads_progressive: segment fno is -1");
       sleep_ms(5000);
-    }
-    snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fno);
-    if (info[i].fp == NULL)
+      }
+      snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fno);
+    */
+    if (info.fp == NULL)
     {
       debugf(DBG_LEVEL_NORM, KRED
              "run_segment_threads_progressive: can't open segment cache file");
@@ -1120,13 +1122,22 @@ void run_segment_threads_progressive(const char* method, int segments,
              file_path);
   }
   //info[i].de->is_progressive = true;
-  info[i].de->is_single_thread = true;
+  info.de->is_single_thread = true;
   debugf(DBG_LEVEL_NORM, KMAG
          "run_segment_threads_progressive: progressive, single thread part=%d/%d, info=%p",
          i, segments, info);
-  upload_segment_progressive((void*) & (info[i]));
-  free(info);
-  free(threads);
+  upload_segment_progressive((void*) & (info));
+  if (de->is_segmented)
+  {
+    //post to flush potential incomplete read
+    sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
+    //post with 0 data to ensure a force read exit
+    sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
+    //todo: check what close/clean ops with download_buf needs done
+    //fflush(fp);
+    //rewind(fp);
+  }
+  de->downld_buf.download_started = false;
   debugf(DBG_LEVEL_EXT, "exit: run_segment_threads_progressive(%s)", method);
 }
 
@@ -1354,12 +1365,13 @@ int format_segments(const char* path, char* seg_base,  long* segments,
     else
     {
       //save segments dir list into parent file entry
+      //fixme: unsafe as it get's overwritten and data is lost
       dir_entry* de = check_path_info(path);
       if (de)
       {
-        if (de->segments)//free if a list already exists
-          cloudfs_free_dir_list(de->segments);
-        de->segments = seg_dir;
+        if (!de->segments)//free if a list already exists
+          //cloudfs_free_dir_list(de->segments);
+          de->segments = seg_dir;
       }
     }
     *total_size = strtoll(str_size, NULL, 10);
@@ -1653,14 +1665,8 @@ void cloudfs_object_downld_progressive(const char* path)
                                     de->downld_buf.local_cache_file, seg_base, size_of_segments, de);
     debugf(DBG_LEVEL_NORM,
            KMAG"cloudfs_object_downld_progressive: post buffer signal full");
-    //post to flush potential incomplete read
-    sem_post(de->downld_buf.sem_list[SEM_FULL]);
-    //post with 0 data to ensure a force read exit
-    sem_post(de->downld_buf.sem_list[SEM_FULL]);
-    //todo: check what close/clean ops with download_buf needs done
-    //fflush(fp);
-    //rewind(fp);
-    de->downld_buf.download_started = false;
+
+
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)", path);
     sleep_ms(5000);
     //return 1;
