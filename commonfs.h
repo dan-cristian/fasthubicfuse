@@ -58,6 +58,8 @@ typedef struct
   int flags;
 } openfile;
 
+
+
 typedef struct progressive_data_buf
 {
   const char* readptr;
@@ -110,6 +112,22 @@ typedef struct dir_entry
   int islink;
   struct dir_entry* next;
 } dir_entry;
+
+typedef struct thread_job
+{
+  dir_entry* de;
+  off_t* file_offset;
+  int* segment_part;
+  off_t* segment_offset;
+  FILE* fp;
+  long* segments;
+  long* full_segments;
+  long* remaining;
+  long* size_of_segments;
+  long* total_size;
+  pthread_t thread;
+  void* self_reference;
+} thread_job;
 
 // linked list with cached folder names
 typedef struct dir_cache

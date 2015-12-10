@@ -1064,43 +1064,40 @@ void* upload_segment_progressive(void* seginfo)
   Changed function to support progressive operations, where multiple threads are not
   desired as on download you want to get first segment faster than the rest
 */
-void run_segment_threads_progressive(const char* method, int segments,
-                                     int full_segments,
-                                     int remaining,
-                                     FILE* fp, char* seg_base, int size_of_segments,
-                                     dir_entry* de)
+void run_segment_threads_progressive(const char* method, char* seg_base,
+                                     thread_job* job)
 {
   debugf(DBG_LEVEL_NORM,
          "run_segment_threads_progressive(%s) segments=%d fp=%p size=%d",
-         method, segments, fp, size_of_segments);
+         method, job->segments, job->fp, job->size_of_segments);
   char file_path[PATH_MAX] = { 0 };
 
   //debug_print_file_name(fp);
 #ifdef __linux__
-  snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fileno(fp));
+  snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fileno(job->fp));
   debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive: filepath=%s",
          file_path);
 #else
   //TODO: I haven't actually tested this
-  if (fcntl(fileno(fp), F_GETPATH, file_path) == -1)
+  if (fcntl(fileno(job->fp), F_GETPATH, file_path) == -1)
     fprintf(stderr, "couldn't get the path name\n");
   debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive: ALT filepath=%s",
          file_path);
 #endif
-  int i, ret;
+  int ret;
   bool multi_thread = false;
   FILE* seg_file;
   struct segment_info info;
   //find segment number containing needed offset. get offset from de (is it thread safe?)
-  i = de->downld_buf.offset / size_of_segments;
   info.method = method;
-  info.part = i;
-  info.segment_size = size_of_segments;
-  info.size = i < full_segments ? size_of_segments : remaining;
+  info.part = *job->segment_part;
+  info.segment_size = *job->size_of_segments;
+  info.size = *job->segment_part < *job->full_segments ? *job->size_of_segments :
+              *job->remaining;
   info.seg_base = seg_base;
-  info.de = de;
-  dir_entry* de_seg = get_segment(de, i);
-  if (de->is_segmented)
+  info.de = job->de;
+  dir_entry* de_seg = get_segment(job->de, *job->segment_part);
+  if (job->de->is_segmented)
   {
     info.fp = de_seg->downld_buf.local_cache_file;
     /*int fno = fileno(info.fp);
@@ -1125,9 +1122,9 @@ void run_segment_threads_progressive(const char* method, int segments,
   info.de->is_single_thread = true;
   debugf(DBG_LEVEL_NORM, KMAG
          "run_segment_threads_progressive: progressive, single thread part=%d/%d, info=%p",
-         i, segments, info);
+         job->segment_part, job->segments, info);
   upload_segment_progressive((void*) & (info));
-  if (de->is_segmented)
+  if (job->de->is_segmented)
   {
     //post to flush potential incomplete read
     sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
@@ -1137,7 +1134,7 @@ void run_segment_threads_progressive(const char* method, int segments,
     //fflush(fp);
     //rewind(fp);
   }
-  de->downld_buf.download_started = false;
+  job->de->downld_buf.download_started = false;
   debugf(DBG_LEVEL_EXT, "exit: run_segment_threads_progressive(%s)", method);
 }
 
@@ -1631,65 +1628,75 @@ int cloudfs_object_write_fp(const char* path, FILE* fp)
 /*
   progressive download from cloud
 */
-void cloudfs_object_downld_progressive(const char* path)
+void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
 {
-  debugf(DBG_LEVEL_NORM, "cloudfs_object_downld_progressive(%s)", path);
-  char* encoded = curl_escape(path, 0);
+  struct thread_job* job = arg;
+  debugf(DBG_LEVEL_NORM, "cloudfs_object_downld_progressive(%s)",
+         job->de->full_name);
+  char* encoded = curl_escape(job->de->full_name, 0);
   char seg_base[MAX_URL_SIZE] = "";
-  long segments;
-  long full_segments;
-  long remaining;
-  long size_of_segments;
-  long total_size;
-
-  dir_entry* de = check_path_info(path);
-  FILE* fp = de->downld_buf.local_cache_file;
+  /*long segments;
+    long full_segments;
+    long remaining;
+    long size_of_segments;
+    long total_size;
+  */
+  //dir_entry* de = check_path_info(path);
+  //FILE* fp = de->downld_buf.local_cache_file;
 
   //checks if this file is a segmented one
-  if (format_segments(path, seg_base, &segments, &full_segments, &remaining,
+  /*if (format_segments(job->de->full_name, seg_base, &segments, &full_segments,
+                      &remaining,
                       &size_of_segments, &total_size))
+  */
+  if (format_segments(job->de->full_name, seg_base, job->segments,
+                      job->full_segments,
+                      job->remaining,
+                      job->size_of_segments, job->total_size))
   {
     debugf(DBG_LEVEL_NORM,
            "cloudfs_object_downld_progressive(%s): started segmented download fp=%p",
-           path, fp);
-    rewind(fp);
-    fflush(fp);
-    if (ftruncate(fileno(fp), 0) < 0)
+           job->de->full_name, job->fp);
+    rewind(job->fp);
+    fflush(job->fp);
+    if (ftruncate(fileno(job->fp), 0) < 0)
     {
       debugf(DBG_LEVEL_NORM, KRED
              "cloudfs_object_downld_progressive: ftruncate failed, aborting!");
       abort();
     }
     //download all segments from cloud to local file, single or multi threaded
-    run_segment_threads_progressive("GET", segments, full_segments, remaining,
-                                    de->downld_buf.local_cache_file, seg_base, size_of_segments, de);
+    run_segment_threads_progressive("GET", seg_base, job);
     debugf(DBG_LEVEL_NORM,
            KMAG"cloudfs_object_downld_progressive: post buffer signal full");
 
 
-    debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)", path);
+    debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)",
+           job->de->full_name);
     sleep_ms(5000);
     //return 1;
   }
   else
   {
     debugf(DBG_LEVEL_NORM,
-           "cloudfs_object_downld_progressive(%s): started non-segmented download", path);
+           "cloudfs_object_downld_progressive(%s): started non-segmented download",
+           job->de->full_name);
     //get not segmented file
-    int response = send_request("GET", encoded, fp, NULL, NULL, NULL,
-                                path);
+    int response = send_request("GET", encoded, job->fp, NULL, NULL, NULL,
+                                job->de->full_name);
     curl_free(encoded);
-    fflush(fp);
-    if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
+    fflush(job->fp);
+    if ((response >= 200 && response < 300) || ftruncate(fileno(job->fp), 0))
     {
-      debugf(DBG_LEVEL_NORM, "exit 1: cloudfs_object_downld_progressive(%s)", path);
+      debugf(DBG_LEVEL_NORM, "exit 1: cloudfs_object_downld_progressive(%s)",
+             job->de->full_name);
       //return 1;
     }
     else
     {
-      rewind(fp);
+      rewind(job->fp);
       debugf(DBG_LEVEL_NORM, "exit 2: cloudfs_object_downld_progressive(%s) "
-             KRED"error", path);
+             KRED"error", job->de->full_name);
       //return 0;
     }
   }
