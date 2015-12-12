@@ -1090,13 +1090,13 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   struct segment_info info;
   //find segment number containing needed offset. get offset from de (is it thread safe?)
   info.method = method;
-  info.part = *job->segment_part;
-  info.segment_size = *job->size_of_segments;
-  info.size = *job->segment_part < *job->full_segments ? *job->size_of_segments :
-              *job->remaining;
+  info.part = job->segment_part;
+  info.segment_size = job->size_of_segments;
+  info.size = job->segment_part < job->full_segments ? job->size_of_segments :
+              job->remaining;
   info.seg_base = seg_base;
   info.de = job->de;
-  dir_entry* de_seg = get_segment(job->de, *job->segment_part);
+  dir_entry* de_seg = get_segment(job->de, job->segment_part);
   if (job->de->is_segmented)
   {
     info.fp = de_seg->downld_buf.local_cache_file;
@@ -1118,7 +1118,7 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
       debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads_progressive: segm filepath=%s",
              file_path);
   }
-  //info[i].de->is_progressive = true;
+  info.de->is_progressive = false;
   info.de->is_single_thread = true;
   debugf(DBG_LEVEL_NORM, KMAG
          "run_segment_threads_progressive: progressive, single thread part=%d/%d, info=%p",
@@ -1359,18 +1359,7 @@ int format_segments(const char* path, char* seg_base,  long* segments,
       debugf(DBG_LEVEL_EXTALL, "exit 3: format_segments(%s)", path);
       return 0;
     }
-    else
-    {
-      //save segments dir list into parent file entry
-      //fixme: unsafe as it get's overwritten and data is lost
-      dir_entry* de = check_path_info(path);
-      if (de)
-      {
-        if (!de->segments)//free if a list already exists
-          //cloudfs_free_dir_list(de->segments);
-          de->segments = seg_dir;
-      }
-    }
+
     *total_size = strtoll(str_size, NULL, 10);
     *size_of_segments = strtoll(str_segment, NULL, 10);
     *remaining = *total_size % *size_of_segments;
@@ -1378,6 +1367,44 @@ int format_segments(const char* path, char* seg_base,  long* segments,
     *segments = *full_segments + (*remaining > 0);
     snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%s/%s/",
              container, object, timestamp, str_size, str_segment);
+
+    //save segments dir list into parent file entry
+    //fixme: unsafe as it get's overwritten and data is lost
+    dir_entry* de = check_path_info(path);
+    if (de)
+    {
+      if (!de->segments)
+      {
+        de->segments = seg_dir;
+        de->segment_count = *segments;
+      }
+      else
+      {
+        //todo: free if is old and no op is active for this segment
+        dir_entry* new_seg = seg_dir;
+        dir_entry* old_seg;
+        int de_segment;
+        while (new_seg)
+        {
+          de_segment = atoi(new_seg->name);
+          old_seg = get_segment(de, de_segment);
+          //check if segments are identical, if not replace de with new segment list
+          if (!old_seg || strcasecmp(old_seg->md5sum, new_seg->md5sum))
+          {
+            debugf(DBG_LEVEL_EXT, KMAG
+                   "format_segments: modified segment list for (%s)", de->full_name);
+            //todo: what if there are download segmented ops in progress?
+            cloudfs_free_dir_list(de->segments);
+            de->segments = seg_dir;
+            de->segment_count = *segments;
+            break;
+          }
+          new_seg = new_seg->next;
+        }
+      }
+    }
+
+
     char tmp[MAX_URL_SIZE];
     strncpy(tmp, seg_base, MAX_URL_SIZE);
     snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
@@ -1649,14 +1676,15 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
                       &remaining,
                       &size_of_segments, &total_size))
   */
-  if (format_segments(job->de->full_name, seg_base, job->segments,
-                      job->full_segments,
-                      job->remaining,
-                      job->size_of_segments, job->total_size))
+  job->de->downld_buf.download_started = true;
+  if (format_segments(job->de->full_name, seg_base, &job->segments,
+                      &job->full_segments,
+                      &job->remaining,
+                      &job->size_of_segments, &job->total_size))
   {
     debugf(DBG_LEVEL_NORM,
-           "cloudfs_object_downld_progressive(%s): started segmented download fp=%p",
-           job->de->full_name, job->fp);
+           "cloudfs_object_downld_progressive(%s): started segmented download fp=%p part=%d",
+           job->de->full_name, job->fp, job->segment_part);
     rewind(job->fp);
     fflush(job->fp);
     if (ftruncate(fileno(job->fp), 0) < 0)
@@ -1674,6 +1702,7 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)",
            job->de->full_name);
     sleep_ms(5000);
+
     //return 1;
   }
   else
@@ -1700,6 +1729,7 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
       //return 0;
     }
   }
+  job->de->downld_buf.download_started = false;
 }
 
 int cloudfs_object_truncate(const char* path, off_t size)
@@ -2115,7 +2145,7 @@ void cloudfs_option_curl_verbose(int option)
   option_curl_verbose = option ? true : false;
 }
 
-static struct
+static struct reconnect_args
 {
   char client_id    [MAX_HEADER_SIZE];
   char client_secret[MAX_HEADER_SIZE];

@@ -100,6 +100,7 @@ typedef struct dir_entry
   gid_t gid;
   bool is_segmented;//-1 for undefined
   struct dir_entry* segments;
+  long segment_count;
   size_t segment_size;
   time_t accessed_in_cache;//todo: cache support based on access time
   bool metadata_downloaded;
@@ -116,15 +117,15 @@ typedef struct dir_entry
 typedef struct thread_job
 {
   dir_entry* de;
-  off_t* file_offset;
-  int* segment_part;
-  off_t* segment_offset;
+  off_t file_offset;
+  int segment_part;
+  off_t segment_offset;
   FILE* fp;
-  long* segments;
-  long* full_segments;
-  long* remaining;
-  long* size_of_segments;
-  long* total_size;
+  long segments;
+  long full_segments;
+  long remaining;
+  long size_of_segments;
+  long total_size;
   pthread_t thread;
   void* self_reference;
 } thread_job;
