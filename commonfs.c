@@ -526,6 +526,15 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
   return true;
 }
 
+int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
+{
+  sem_close(data_buf->sem_list[sem_index]);
+  sem_unlink(data_buf->sem_name_list[sem_index]);
+  free(data_buf->sem_name_list[sem_index]);
+  data_buf->sem_list[sem_index] = NULL;
+  data_buf->sem_name_list[sem_index] = NULL;
+}
+
 long random_at_most(long max)
 {
   unsigned long
@@ -883,8 +892,17 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
       file_md5(*fp_segment, md5_file_hash_str);
       de_seg->md5sum_local = strdup(md5_file_hash_str);
     }
+    else
+      debugf(DBG_LEVEL_NORM, KMAG
+             "open_segment_from_cache: segment md5sum_local=%s md5sum=%s",
+             de_seg->md5sum_local, de_seg->md5sum);
     bool match = (de && de->md5sum != NULL
                   && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
+    if (!match)
+    {
+      free(de_seg->md5sum_local);
+      de_seg->md5sum_local = NULL;
+    }
     //rewind(*fp_segment);
     return match;
   }

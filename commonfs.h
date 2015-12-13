@@ -119,6 +119,7 @@ typedef struct dir_entry
 typedef struct thread_job
 {
   dir_entry* de;
+  dir_entry* de_seg;
   off_t file_offset;
   int segment_part;
   off_t segment_offset;
@@ -164,6 +165,7 @@ int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              const int segment_part);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
+int free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
 long random_at_most(long max);
 dir_entry* init_dir_entry();
 void copy_dir_entry(dir_entry* src, dir_entry* dst);

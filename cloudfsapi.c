@@ -485,9 +485,13 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
   size_t result = rw_callback(fwrite2, ptr, size, nmemb, userp);
   if (result == 0 && !info->de->is_progressive)
   {
+    debugf(DBG_LEVEL_EXT, KMAG"write_callback: post data buf full");
     //signal cfs_read to wake
+    //todo: check if this scenario happens
     sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
   }
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: result=%lu",
+         result);
   return result;
 }
 
@@ -815,15 +819,16 @@ static int send_request_size(const char* method, const char* path, void* fp,
     {
       if (de)
       {
-        //reset local cache md5sum
+        //reset local cache md5sum on file retrieval
         free(de->md5sum_local);
         de->md5sum_local = NULL;
       }
       if (is_segment)
       {
-        debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s)", orig_path);
+        debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s) fp=%p", orig_path,
+               fp);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);//fp=seginfo actually
       }
       else if (fp)
       {
@@ -1672,20 +1677,7 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
          job->de->full_name);
   char* encoded = curl_escape(job->de->full_name, 0);
   char seg_base[MAX_URL_SIZE] = "";
-  /*long segments;
-    long full_segments;
-    long remaining;
-    long size_of_segments;
-    long total_size;
-  */
-  //dir_entry* de = check_path_info(path);
-  //FILE* fp = de->downld_buf.local_cache_file;
 
-  //checks if this file is a segmented one
-  /*if (format_segments(job->de->full_name, seg_base, &segments, &full_segments,
-                      &remaining,
-                      &size_of_segments, &total_size))
-  */
   job->de->downld_buf.download_started = true;
   if (format_segments(job->de->full_name, seg_base, &job->segments,
                       &job->full_segments,
@@ -1705,13 +1697,9 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
     }
     //download all segments from cloud to local file, single or multi threaded
     run_segment_threads_progressive("GET", seg_base, job);
-
-
-
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)",
            job->de->full_name);
     //sleep_ms(5000);
-
     //return 1;
   }
   else
@@ -1739,6 +1727,9 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
     }
   }
   job->de->downld_buf.download_started = false;
+  free_semaphores(&job->de_seg->downld_buf, SEM_EMPTY);
+  free_semaphores(&job->de_seg->downld_buf, SEM_FULL);
+  pthread_exit(NULL);
 }
 
 int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
@@ -1749,6 +1740,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
   de_seg->downld_buf.fuse_read_size = size;
   struct thread_job* job = malloc(sizeof(struct thread_job));
   job->de = de;
+  job->de_seg = de_seg;
   job->segment_part = de_seg->segment_part;
   job->file_offset = offset;
   job->self_reference = job;
@@ -1760,6 +1752,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
   debugf(DBG_LEVEL_NORM, KBLU
          "cloudfs_download_segment: started download offset=%lu fp=%p part=%lu",
          offset, de_seg->downld_buf.local_cache_file, de_seg->segment_part);
+
   return true;
 }
 

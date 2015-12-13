@@ -524,8 +524,22 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                    path, segment_part, result, de_seg->downld_buf.local_cache_file);
             //sleep_ms(100);
             close(fno);
+            fclose(de_seg->downld_buf.local_cache_file);
             if (result > 0)
+            {
+              //download next segment in advance
+              if (de_seg_next && !de_seg_next->downld_buf.download_started)
+              {
+                bool next_in_cache = open_segment_from_cache(de, de_seg_next, //segment_part,
+                                     &de_seg_next->downld_buf.local_cache_file,
+                                     "GET");
+                if (!next_in_cache && !de_seg_next->downld_buf.download_started)
+                  cloudfs_download_segment(de_seg_next, de, size, offset);
+                else
+                  fclose(de_seg_next->downld_buf.local_cache_file);
+              }
               return result;
+            }
             else
             {
               debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): done serving segment %d",
@@ -556,33 +570,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           if (!de_seg->downld_buf.download_started) //download not started
           {
             cloudfs_download_segment(de_seg, de, size, offset);
-            if (de_seg_next)
-            {
-              bool next_in_cache = open_segment_from_cache(de, de_seg_next, //segment_part,
-                                   &de_seg_next->downld_buf.local_cache_file,
-                                   "GET");
-              if (!next_in_cache && !de_seg_next->downld_buf.download_started)
-                cloudfs_download_segment(de_seg_next, de, size, offset);
-            }
-
-            /*
-              init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
-              de_seg->downld_buf.download_started = true;
-              de_seg->downld_buf.fuse_read_size = size;
-              struct thread_job* job = malloc(sizeof(struct thread_job));
-              job->de = de;
-              job->segment_part = segment_part;
-              job->file_offset = offset;
-              job->self_reference = job;
-              job->total_size = -1;
-              job->full_segments = -1;
-              job->fp = de_seg->downld_buf.local_cache_file;
-              pthread_create(&job->thread, NULL,
-                           (void*)cloudfs_object_downld_progressive, job);
-              debugf(DBG_LEVEL_NORM, KBLU
-                   "cfs_read: started download thread offset=%lu fp=%p",
-                   offset, de_seg->downld_buf.local_cache_file);
-            */
             //wait until segment is completely downloaded
             sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
             //and perform read?
@@ -637,7 +624,8 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                      "cfs_read(%s): downld already started, "
                      KYEL "wait data download", path);
               //wait until segment is completely downloaded
-              sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+              if (de_seg->downld_buf.sem_list[SEM_FULL])
+                sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
             }
           }
         }
