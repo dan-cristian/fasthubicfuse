@@ -91,4 +91,6 @@ void get_file_metadata(dir_entry* de);
 int cloudfs_update_meta(dir_entry* de);
 void cloudfs_object_upload_progressive(const char* path);
 void* cloudfs_object_downld_progressive(void* path);
+int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
+                             size_t size, off_t offset);
 #endif

@@ -475,8 +475,8 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   struct segment_info* info = (struct segment_info*)userp;
-  debugf(DBG_LEVEL_EXT, KMAG"write_callback: progressive=%d",
-         info->de->is_progressive);
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: progressive=%d size=%lu",
+         info->de->is_progressive, size * nmemb);
   //send data to fuse buffer
   if (info->de->is_progressive)
     write_callback_progressive(ptr, size, nmemb, userp);
@@ -813,6 +813,12 @@ static int send_request_size(const char* method, const char* path, void* fp,
     }
     else if (!strcasecmp(method, "GET"))
     {
+      if (de)
+      {
+        //reset local cache md5sum
+        free(de->md5sum_local);
+        de->md5sum_local = NULL;
+      }
       if (is_segment)
       {
         debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s)", orig_path);
@@ -1127,14 +1133,18 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   if (job->de->is_segmented)
   {
     //post to flush potential incomplete read
+    debugf(DBG_LEVEL_NORM, KMAG
+           "run_segment_threads_progressive: 1-post buffer signal full");
     sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
     //post with 0 data to ensure a force read exit
+    debugf(DBG_LEVEL_NORM, KMAG
+           "run_segment_threads_progressive: 2-post buffer signal full");
     sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
     //todo: check what close/clean ops with download_buf needs done
     //fflush(fp);
     //rewind(fp);
   }
-  job->de->downld_buf.download_started = false;
+  //job->de->downld_buf.download_started = false;
   debugf(DBG_LEVEL_EXT, "exit: run_segment_threads_progressive(%s)", method);
 }
 
@@ -1165,7 +1175,7 @@ void run_segment_threads(const char* method, int segments, int full_segments,
     fprintf(stderr, "couldn't get the path name\n");
   debugf(DBG_LEVEL_NORM, KMAG"run_segment_threads: ALT filepath=%s", file_path);
 #endif
-  sleep_ms(2000);
+  //sleep_ms(2000);
   int i, ret;
   bool multi_thread = false;
 
@@ -1695,13 +1705,12 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
     }
     //download all segments from cloud to local file, single or multi threaded
     run_segment_threads_progressive("GET", seg_base, job);
-    debugf(DBG_LEVEL_NORM,
-           KMAG"cloudfs_object_downld_progressive: post buffer signal full");
+
 
 
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)",
            job->de->full_name);
-    sleep_ms(5000);
+    //sleep_ms(5000);
 
     //return 1;
   }
@@ -1730,6 +1739,28 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
     }
   }
   job->de->downld_buf.download_started = false;
+}
+
+int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
+                             size_t size, off_t offset)
+{
+  init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
+  de_seg->downld_buf.download_started = true;
+  de_seg->downld_buf.fuse_read_size = size;
+  struct thread_job* job = malloc(sizeof(struct thread_job));
+  job->de = de;
+  job->segment_part = de_seg->segment_part;
+  job->file_offset = offset;
+  job->self_reference = job;
+  job->total_size = -1;
+  job->full_segments = -1;
+  job->fp = de_seg->downld_buf.local_cache_file;
+  pthread_create(&job->thread, NULL,
+                 (void*)cloudfs_object_downld_progressive, job);
+  debugf(DBG_LEVEL_NORM, KBLU
+         "cloudfs_download_segment: started download offset=%lu fp=%p part=%lu",
+         offset, de_seg->downld_buf.local_cache_file, de_seg->segment_part);
+  return true;
 }
 
 int cloudfs_object_truncate(const char* path, off_t size)
@@ -1779,17 +1810,18 @@ void get_file_metadata(dir_entry* de)
   else debugf(DBG_LEVEL_EXT,
                 KCYN "get_file_metadata(%s) not looking for segments, size_cloud=%lu",
                 de->full_name, de->size_on_cloud);
-  if (option_get_extended_metadata)
+  if (option_get_extended_metadata && !de->isdir)
   {
     debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",
            de->full_name, de->size_on_cloud);
     //retrieve additional file metadata with a quick HEAD query
     char* encoded = curl_escape(de->full_name, 0);
-    de->metadata_downloaded = true;
     int response = send_request("GET", encoded, NULL, NULL, NULL, de,
                                 de->full_name);
+    de->metadata_downloaded = true;
     curl_free(encoded);
-    debugf(DBG_LEVEL_EXT, KCYN "exit: get_file_metadata(%s)", de->full_name);
+    debugf(DBG_LEVEL_EXT, KCYN "exit: get_file_metadata(%s) hash=%s",
+           de->full_name, de->md5sum);
   }
   return;
 }

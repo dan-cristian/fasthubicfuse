@@ -94,13 +94,15 @@ typedef struct dir_entry
   struct timespec mtime;
   struct timespec ctime;
   struct timespec atime;
-  char* md5sum;
+  char* md5sum;//md5sum on cloud
+  char* md5sum_local;//md5sum of local cached file/segment
   mode_t chmod;
   uid_t uid;
   gid_t gid;
   bool is_segmented;//-1 for undefined
   struct dir_entry* segments;
-  long segment_count;
+  long segment_count;//number of segments for this file
+  long segment_part;//segment number if this represents a segment
   size_t segment_size;
   time_t accessed_in_cache;//todo: cache support based on access time
   bool metadata_downloaded;
@@ -178,7 +180,8 @@ void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
-bool open_segment_from_cache(dir_entry* de, char* md5sum, int segment_part,
+bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
+                             //int segment_part,
                              FILE** fp_segment, const char* method);
 void sleep_ms(int milliseconds);
 char* get_home_dir();

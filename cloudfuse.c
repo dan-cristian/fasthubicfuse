@@ -54,8 +54,8 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   if (!de)
   {
     debug_list_cache_content();
-    debugf(DBG_LEVEL_NORM, KBLU"exit 1: cfs_getattr(%s) "KYEL"not-in-cache/cloud",
-           path);
+    debugf(DBG_LEVEL_NORM, KBLU"exit 1: cfs_getattr(%s) file not found "
+           KYEL "not-in-cache/cloud", path);
     return -ENOENT;
   }
   //lazzy download of file metadata, only when really needed
@@ -119,7 +119,8 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
     stbuf->st_mode = S_IFREG | default_mode_file;
     stbuf->st_nlink = 1;
   }
-  debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_getattr(%s)", path);
+  debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_getattr(%s) size=%lu", path,
+         de->size);
   return 0;
 }
 
@@ -277,12 +278,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   int errsv;
   bool file_cache_ok = false;
   dir_entry* de = path_info(path);
-  if (de && de->downld_buf.download_started)
-  {
-    debugf(DBG_LEVEL_NORM,
-           KRED"cfs_open(%s): file opened while download is running", path);
-    return 0;
-  }
+
   if (*temp_dir)
   {
     char file_path_safe[NAME_MAX];
@@ -295,20 +291,28 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       errsv = errno;
       if (temp_file == NULL)
       {
-        debugf(DBG_LEVEL_NORM,
-               KRED"exit 0: cfs_open can't open temp_file=[%s] err=%d:%s", file_path_safe,
-               errsv, strerror(errsv));
+        debugf(DBG_LEVEL_NORM, KRED
+               "exit 0: cfs_open can't open temp_file=[%s] err=%d:%s",
+               file_path_safe, errsv, strerror(errsv));
         return -ENOENT;
       }
       else
       {
-        debugf(DBG_LEVEL_EXT, "cfs_open: "KGRN"file is in cache(%s)", file_path_safe);
+        debugf(DBG_LEVEL_EXT, "cfs_open: " KGRN "file is in cache(%s)",
+               file_path_safe);
         //todo: compute md5sum to ensure file content is OK
         if (de)
         {
-          char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
-          file_md5(temp_file, md5_file_hash_str);
-          if (de && de->md5sum != NULL && (!strcasecmp(md5_file_hash_str, de->md5sum)))
+          if (!option_enable_progressive_download && de->md5sum_local == NULL)
+          {
+            //save md5sum to avoid repetead calculations
+            char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+            file_md5(temp_file, md5_file_hash_str);
+            de->md5sum_local = strdup(md5_file_hash_str);
+          }
+
+          if (de && de->md5sum && de->md5sum_local
+              && (!strcasecmp(de->md5sum_local, de->md5sum)))
           {
             debugf(DBG_LEVEL_EXT, "cfs_open: "KGRN"md5sum cache OK");
             file_cache_ok = true;
@@ -319,8 +323,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
             debugf(DBG_LEVEL_EXT, "cfs_open: "KYEL"md5sum cache NOT OK (%s)",
                    file_path_safe);
             debugf(DBG_LEVEL_EXT, "cfs_open: "KYEL"md5sum de_cache=%s, local=%s",
-                   de->md5sum,
-                   md5_file_hash_str);
+                   de->md5sum, de->md5sum_local);
             fclose(temp_file);
           }
         }
@@ -339,7 +342,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       debugf(DBG_LEVEL_EXT, "cfs_open: file not in cache, err=%s", strerror(errsv));
       //FIXME: commented out as this condition will not be meet in some odd cases and program will crash
       //if (!(info->flags & O_WRONLY)) {
-      debugf(DBG_LEVEL_EXT, "cfs_open: opening custom temp(%s) for write",
+      debugf(DBG_LEVEL_EXT, "cfs_open: opening custom temp(%s)",
              file_path_safe);
       // we need to lock on the filename another process could open the file
       // while we are writing to it and then only read part of the file
@@ -422,12 +425,14 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   of->flags = info->flags;
   info->fh = (uintptr_t)of;
   info->direct_io = 1;
-  info->nonseekable = 1;
+  //non seek must be set to 0 to enable
+  //video players work via samba (as they perform seek to end)
+  info->nonseekable = 0;
 
   //launch download as thread if progressive is enabled and file not in cache
   if (!file_cache_ok && option_enable_progressive_download)
   {
-    if (de->downld_buf.local_cache_file != NULL)
+    if (de->downld_buf.download_started)
       debugf(DBG_LEVEL_NORM, "cfs_open(%s): " KYEL
              "local file already opened, op. in progress",
              path);
@@ -447,7 +452,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       else
       {
         debugf(DBG_LEVEL_NORM, KRED
-               "cfs_open(%s): exit, failed opening temp_file err=%s",
+               "cfs_open(%s): exit 6, failed opening temp_file err=%s",
                path, strerror(errno));
         fclose(temp_file);
         return -ENOENT;
@@ -456,13 +461,14 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   }
   else
   {
-    debugf(DBG_LEVEL_NORM, KMAG"exit: cfs_open(%s) "KGRN"FILE in CACHE", path);
+    debugf(DBG_LEVEL_NORM, KMAG"exit 7: cfs_open(%s) "KGRN"FILE in CACHE", path);
     //signal file should be in cache at cfs_read
     de->downld_buf.file_is_in_cache = true;
   }
   fclose(temp_file);
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_open(%s)", path);
+  debugf(DBG_LEVEL_NORM, KBLU "exit 8: cfs_open(%s)", path);
   return 0;
+  //return ((openfile*)(uintptr_t)info->fh)->fd;
 }
 
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
@@ -485,10 +491,12 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   if (de && de->is_segmented)
   {
     int segment_part = offset / de->segment_size;//de->segment_size / de->size;
-    dir_entry* de_seg;
+    dir_entry* de_seg, *de_seg_next;
     while (result <= 0)
     {
       de_seg = get_segment(de, segment_part);
+      de_seg_next = get_segment(de, segment_part + 1);
+
       //offset in segment is diff than full file offset
       offset_seg = offset - (segment_part * de->segment_size);
       debugf(DBG_LEVEL_NORM, KMAG
@@ -498,7 +506,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       if (de_seg)
       {
         //sleep_ms(3000);
-        bool in_cache = open_segment_from_cache(de, de_seg->md5sum, segment_part,
+        bool in_cache = open_segment_from_cache(de, de_seg, //segment_part,
                                                 &de_seg->downld_buf.local_cache_file,
                                                 "GET");
         if (in_cache)
@@ -524,7 +532,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                      path, segment_part);
               //force download new segment
               segment_part++;
-
               //exit if all segments are downloaded
               if (segment_part == de->segment_count)
                 break;
@@ -544,30 +551,38 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         {
           debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): segment %d "KYEL"not in cache",
                  path, segment_part);
-          sleep_ms(1000);
+          //sleep_ms(1000);
 
           if (!de_seg->downld_buf.download_started) //download not started
           {
-            init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
-            de_seg->downld_buf.download_started = true;
-            de_seg->downld_buf.fuse_read_size = size;
-            //fixme: pass offset via de but might be overwritten by another thread?
-            //de->downld_buf.offset = offset;
-            //de_seg->downld_buf.offset = offset;
+            cloudfs_download_segment(de_seg, de, size, offset);
+            if (de_seg_next)
+            {
+              bool next_in_cache = open_segment_from_cache(de, de_seg_next, //segment_part,
+                                   &de_seg_next->downld_buf.local_cache_file,
+                                   "GET");
+              if (!next_in_cache && !de_seg_next->downld_buf.download_started)
+                cloudfs_download_segment(de_seg_next, de, size, offset);
+            }
 
-            struct thread_job* job = malloc(sizeof(struct thread_job));
-            job->de = de;
-            job->segment_part = segment_part;
-            job->file_offset = offset;
-            job->self_reference = job;
-            job->total_size = -1;
-            job->full_segments = -1;
-            job->fp = de_seg->downld_buf.local_cache_file;
-            pthread_create(&job->thread, NULL,
+            /*
+              init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
+              de_seg->downld_buf.download_started = true;
+              de_seg->downld_buf.fuse_read_size = size;
+              struct thread_job* job = malloc(sizeof(struct thread_job));
+              job->de = de;
+              job->segment_part = segment_part;
+              job->file_offset = offset;
+              job->self_reference = job;
+              job->total_size = -1;
+              job->full_segments = -1;
+              job->fp = de_seg->downld_buf.local_cache_file;
+              pthread_create(&job->thread, NULL,
                            (void*)cloudfs_object_downld_progressive, job);
-            debugf(DBG_LEVEL_NORM, KBLU
+              debugf(DBG_LEVEL_NORM, KBLU
                    "cfs_read: started download thread offset=%lu fp=%p",
                    offset, de_seg->downld_buf.local_cache_file);
+            */
             //wait until segment is completely downloaded
             sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
             //and perform read?
@@ -616,12 +631,13 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
               }
               return de->downld_buf.work_buf_size;
             }
-            else //not progressice
+            else //download is already running, maybe started by another thread
             {
-              //debugf(DBG_LEVEL_EXT, KBLU
-              //       "cfs_read: downld started, wait full data download");
+              debugf(DBG_LEVEL_EXT, KBLU
+                     "cfs_read(%s): downld already started, "
+                     KYEL "wait data download", path);
               //wait until segment is completely downloaded
-              //sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+              sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
             }
           }
         }
@@ -662,8 +678,9 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   int errsv = 0;
   if (of)
   {
-    off_t file_size = cloudfs_file_size(of->fd);
-    update_dir_cache(path, file_size, 0, 0);
+    //this reset file size to 0 for large segmented files
+    //off_t file_size = cloudfs_file_size(of->fd);
+    //update_dir_cache(path, file_size, 0, 0);
     if (of->flags & O_RDWR || of->flags & O_WRONLY)
     {
       FILE* fp = fdopen(dup(of->fd), "r");
@@ -671,11 +688,17 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       if (fp != NULL)
       {
         dir_entry* de = check_path_info(path);
+        if (!de)
+        {
+          debugf(DBG_LEVEL_NORM, "cfs_flush(%s): "KRED "file not found in cache",
+                 path);
+          return -ENOENT;
+        }
         //on progressive ops upload is already done
-        if (option_enable_progressive_upload && file_size > 0)
+        if (option_enable_progressive_upload && de->size > 0)
         {
           debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
-                 path, file_size);
+                 path, de->size);
           //signal completion of read/write operation
           de->upload_buf.write_completed = true;
           //signal last data available in buffer for upload

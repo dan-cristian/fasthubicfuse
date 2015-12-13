@@ -392,13 +392,16 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
     free(de->content_type);
     //TODO free all added fields
     free(de->md5sum);
+    free(de->md5sum_local);
     free(de->full_name_hash);
     //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
     free(de);
   }
 }
 
-//return a segment entry from dir_entry
+/*return a segment entry from dir_entry
+  NOTE: it also sets the segment_part field
+*/
 dir_entry* get_segment(dir_entry* de, int segment)
 {
   int de_segment;
@@ -407,7 +410,11 @@ dir_entry* get_segment(dir_entry* de, int segment)
   {
     de_segment = atoi(des->name);
     if (de_segment == segment)
+    {
+      if (des->segment_part != segment)
+        des->segment_part = segment;
       return des;
+    }
     des = des->next;
   }
   return NULL;
@@ -552,6 +559,7 @@ dir_entry* init_dir_entry()
   de->size = 0;
   de->next = NULL;
   de->md5sum = NULL;
+  de->md5sum_local = NULL;
   de->accessed_in_cache = time(NULL);
   de->last_modified = time(NULL);
   de->mtime.tv_sec = time(NULL);
@@ -565,10 +573,14 @@ dir_entry* init_dir_entry()
   de->uid = 0;
   de->upload_buf.upload_completed = false;
   de->upload_buf.write_completed = false;
+  de->upload_buf.local_cache_file = NULL;
   de->downld_buf.download_started = false;
+  de->downld_buf.local_cache_file = NULL;
   de->full_name_hash = NULL;
   de->is_segmented = -1;//undefined
   de->segments = NULL;
+  de->segment_count = 0;
+  de->segment_part = -1;
   return de;
 }
 
@@ -828,13 +840,14 @@ dir_entry* check_path_info(const char* path)
   if exists, check md5sum, returns file handle to file in cache
   if does not exist, create file and return handle
 */
-bool open_segment_from_cache(dir_entry* de, char* md5sum, int segment_part,
+bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
+                             //int segment_part,
                              FILE** fp_segment, const char* method)
 {
   char segment_file_path[NAME_MAX] = {0};
   char segment_file_dir[NAME_MAX] = {0};
   get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
-                           temp_dir, segment_part);
+                           temp_dir, de_seg->segment_part);
   struct stat dir_status = { 0 };
   if (stat(segment_file_dir, &dir_status) == -1)
     mkdir(segment_file_dir, 0700);
@@ -854,7 +867,7 @@ bool open_segment_from_cache(dir_entry* de, char* md5sum, int segment_part,
   if (file_exist)
   {
     debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: found segment %d md5=%s",
-           segment_part, md5sum);
+           de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
     if (fno == -1)
     {
@@ -864,10 +877,14 @@ bool open_segment_from_cache(dir_entry* de, char* md5sum, int segment_part,
     }
     //sleep_ms(1000);
     //check if segment is in cache, with md5sum ok
-    char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
-    file_md5(*fp_segment, md5_file_hash_str);
+    if (de_seg->md5sum_local == NULL)
+    {
+      char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+      file_md5(*fp_segment, md5_file_hash_str);
+      de_seg->md5sum_local = strdup(md5_file_hash_str);
+    }
     bool match = (de && de->md5sum != NULL
-                  && (!strcasecmp(md5_file_hash_str, md5sum)));
+                  && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
     //rewind(*fp_segment);
     return match;
   }
