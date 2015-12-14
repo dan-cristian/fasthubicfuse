@@ -571,7 +571,8 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           {
             cloudfs_download_segment(de_seg, de, size, offset);
             //wait until segment is completely downloaded
-            sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+            if (de_seg->downld_buf.sem_list[SEM_FULL])
+              sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
             //and perform read?
             debugf(DBG_LEVEL_EXT, KBLU "cfs_read: segmented, got full data");
           }

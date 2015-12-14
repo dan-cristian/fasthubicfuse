@@ -528,6 +528,13 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
 {
+  int sem_val = 0;
+  while (sem_val == 0)
+  {
+    sem_getvalue(data_buf->sem_list[sem_index], &sem_val);
+    if (sem_val > 0)
+      sem_post(data_buf->sem_list[sem_index]);
+  }
   sem_close(data_buf->sem_list[sem_index]);
   sem_unlink(data_buf->sem_name_list[sem_index]);
   free(data_buf->sem_name_list[sem_index]);

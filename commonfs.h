@@ -124,11 +124,11 @@ typedef struct thread_job
   int segment_part;
   off_t segment_offset;
   FILE* fp;
-  long segments;
+  //long segments;
   long full_segments;
   long remaining;
-  long size_of_segments;
-  long total_size;
+  //long size_of_segments;
+  //long total_size;
   pthread_t thread;
   void* self_reference;
 } thread_job;

@@ -485,12 +485,12 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
   size_t result = rw_callback(fwrite2, ptr, size, nmemb, userp);
   if (result == 0 && !info->de->is_progressive)
   {
-    debugf(DBG_LEVEL_EXT, KMAG"write_callback: post data buf full");
+    debugf(DBG_LEVEL_EXT, KMAG "write_callback: post data buf full");
     //signal cfs_read to wake
     //todo: check if this scenario happens
     sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
   }
-  debugf(DBG_LEVEL_EXT, KMAG"write_callback: result=%lu",
+  debugf(DBG_LEVEL_EXTALL, KMAG"write_callback: result=%lu",
          result);
   return result;
 }
@@ -721,6 +721,10 @@ static int send_request_size(const char* method, const char* path, void* fp,
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, option_curl_verbose ? 1 : 0);
+    //test to fix slow download issue
+    //curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1);
+    //curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1);
+
     add_header(&headers, "X-Auth-Token", storage_token);
     dir_entry* de;
     if (de_cached_entry == NULL)
@@ -804,7 +808,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
       }
       if (is_segment)
       {
-        //fixme: progressive upload not working if file is segmented. conflict on read_callback.
+        //fixme: progressive upload not working if file is segmented. conflict on read_callback?
         debugf(DBG_LEVEL_EXT,
                "send_request_size(%s): PUT is segmented, "KYEL"readcallback used", orig_path);
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
@@ -825,10 +829,14 @@ static int send_request_size(const char* method, const char* path, void* fp,
       }
       if (is_segment)
       {
-        debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s) fp=%p", orig_path,
-               fp);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);//fp=seginfo actually
+        struct segment_info* info = (struct segment_info*)fp;
+        debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s) fp=%p part=%d",
+               orig_path, fp, info->part);
+        //curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        //curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);//fp=seginfo actually
+        curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, info->fp);
       }
       else if (fp)
       {
@@ -870,7 +878,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
       curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
     }
     //common code for all operations
-    if (false)//option_curl_progress_state)
+    if (option_curl_progress_state)
     {
       //enable progress reporting
       //http://curl.haxx.se/libcurl/c/progressfunc.html
@@ -1030,7 +1038,7 @@ void* upload_segment_progressive(void* seginfo)
   //debugf(DBG_LEVEL_NORM,
   //       KMAG"upload_segment: started segment part=%d seginfo=%p fp=%p prog=%d",
   //       info->part, seginfo, info->fp, info->is_progressive);
-  char seg_path[MAX_URL_SIZE] = { 0 };
+  //char seg_path[MAX_URL_SIZE] = { 0 };
   //changed!
   fseek(info->fp, 0, SEEK_SET);
   //debugf(DBG_LEVEL_NORM,
@@ -1040,19 +1048,19 @@ void* upload_segment_progressive(void* seginfo)
   //debugf(DBG_LEVEL_NORM,
   //       KMAG"upload_segment: step 2 part=%d seginfo=%p fp=%p prog=%d",
   //       info->part, seginfo, info->fp, info->is_progressive);
-  snprintf(seg_path, MAX_URL_SIZE, "%s%08i", info->seg_base, info->part);
+  //snprintf(seg_path, MAX_URL_SIZE, "%s%08i", info->seg_base, info->part);
   /*debugf(DBG_LEVEL_NORM,
     KMAG"upload_segment: step 3 part=%d seginfo=%p fp=%p prog=%d",
     info->part, seginfo, info->fp, info->is_progressive);
   */
-  char* encoded = curl_escape(seg_path, 0);
+  char* encoded = curl_escape(info->seg_base, 0);
   debugf(DBG_LEVEL_EXT, KCYN
          "upload_segment_progressive(%s) part=%d size=%d seg_size=%d %s",
-         info->method, info->part, info->size, info->segment_size, seg_path);
+         info->method, info->part, info->size, info->segment_size, info->seg_base);
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size, 1, NULL, seg_path);
+                                   info->size, 1, NULL, info->seg_base);
   if (!(response >= 200 && response < 300))
-    fprintf(stderr, "Segment %s failed with response %d", seg_path,
+    fprintf(stderr, "Segment %s failed with response %d", info->seg_base,
             response);
   curl_free(encoded);
   debugf(DBG_LEVEL_NORM,
@@ -1080,7 +1088,7 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
 {
   debugf(DBG_LEVEL_NORM,
          "run_segment_threads_progressive(%s) segments=%d fp=%p size=%d",
-         method, job->segments, job->fp, job->size_of_segments);
+         method, job->de->segment_count, job->fp, job->de->segment_size);
   char file_path[PATH_MAX] = { 0 };
 
   //debug_print_file_name(fp);
@@ -1102,15 +1110,15 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   //find segment number containing needed offset. get offset from de (is it thread safe?)
   info.method = method;
   info.part = job->segment_part;
-  info.segment_size = job->size_of_segments;
-  info.size = job->segment_part < job->full_segments ? job->size_of_segments :
+  info.segment_size = job->de->segment_size;
+  info.size = job->segment_part < job->full_segments ? job->de->segment_size :
               job->remaining;
   info.seg_base = seg_base;
   info.de = job->de;
-  dir_entry* de_seg = get_segment(job->de, job->segment_part);
+  //dir_entry* de_seg = get_segment(job->de, job->segment_part);
   if (job->de->is_segmented)
   {
-    info.fp = de_seg->downld_buf.local_cache_file;
+    info.fp = job->de_seg->downld_buf.local_cache_file;
     /*int fno = fileno(info.fp);
       if (fno == -1)
       {
@@ -1133,18 +1141,18 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   info.de->is_single_thread = true;
   debugf(DBG_LEVEL_NORM, KMAG
          "run_segment_threads_progressive: progressive, single thread part=%d/%d, info=%p",
-         job->segment_part, job->segments, info);
+         job->segment_part, job->de->segment_count, info);
   upload_segment_progressive((void*) & (info));
   if (job->de->is_segmented)
   {
     //post to flush potential incomplete read
     debugf(DBG_LEVEL_NORM, KMAG
            "run_segment_threads_progressive: 1-post buffer signal full");
-    sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
+    sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
     //post with 0 data to ensure a force read exit
     debugf(DBG_LEVEL_NORM, KMAG
            "run_segment_threads_progressive: 2-post buffer signal full");
-    sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
+    sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
     //todo: check what close/clean ops with download_buf needs done
     //fflush(fp);
     //rewind(fp);
@@ -1447,6 +1455,8 @@ void cloudfs_init()
   curl_global_init(CURL_GLOBAL_ALL);
   pthread_mutex_init(&pool_mut, NULL);
   curl_version_info_data* cvid = curl_version_info(CURLVERSION_NOW);
+  debugf(DBG_LEVEL_NORM, KYEL "CURL version=%s ssl=%s",
+         cvid->version, cvid->ssl_version);
   // CentOS/RHEL 5 get stupid mode, because they have a broken libcurl
   if (cvid->version_num == RHEL5_LIBCURL_VERSION)
   {
@@ -1676,13 +1686,16 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
   debugf(DBG_LEVEL_NORM, "cloudfs_object_downld_progressive(%s)",
          job->de->full_name);
   char* encoded = curl_escape(job->de->full_name, 0);
-  char seg_base[MAX_URL_SIZE] = "";
+  //char seg_base[MAX_URL_SIZE] = "";
 
   job->de->downld_buf.download_started = true;
-  if (format_segments(job->de->full_name, seg_base, &job->segments,
+
+  /*if (format_segments(job->de->full_name, seg_base, &job->segments,
                       &job->full_segments,
                       &job->remaining,
                       &job->size_of_segments, &job->total_size))
+  */
+  if (job->de->is_segmented)
   {
     debugf(DBG_LEVEL_NORM,
            "cloudfs_object_downld_progressive(%s): started segmented download fp=%p part=%d",
@@ -1696,7 +1709,8 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
       abort();
     }
     //download all segments from cloud to local file, single or multi threaded
-    run_segment_threads_progressive("GET", seg_base, job);
+    run_segment_threads_progressive("GET", job->de_seg->full_name /*seg_base*/,
+                                    job);
     debugf(DBG_LEVEL_NORM, "exit 0: cloudfs_object_downld_progressive(%s)",
            job->de->full_name);
     //sleep_ms(5000);
@@ -1744,7 +1758,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
   job->segment_part = de_seg->segment_part;
   job->file_offset = offset;
   job->self_reference = job;
-  job->total_size = -1;
+  //job->total_size = -1;
   job->full_segments = -1;
   job->fp = de_seg->downld_buf.local_cache_file;
   pthread_create(&job->thread, NULL,
