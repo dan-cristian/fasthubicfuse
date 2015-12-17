@@ -426,7 +426,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   info->fh = (uintptr_t)of;
   info->direct_io = 1;
   //non seek must be set to 0 to enable
-  //video players work via samba (as they perform seek to end)
+  // video players work via samba (as they perform a seek to file end)
   info->nonseekable = 0;
 
   //launch download as thread if progressive is enabled and file not in cache
