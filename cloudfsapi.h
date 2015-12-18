@@ -59,6 +59,8 @@ struct segment_info
   FILE* fp;
   int part;
   long size;
+  long size_copy;
+  long size_processed;
   long segment_size;
   char* seg_base;
   const char* method;

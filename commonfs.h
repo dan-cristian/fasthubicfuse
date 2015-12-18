@@ -102,8 +102,10 @@ typedef struct dir_entry
   bool is_segmented;//-1 for undefined
   struct dir_entry* segments;
   long segment_count;//number of segments for this file
+  long segment_full_count;//number of full segments for this file
   long segment_part;//segment number if this represents a segment
   size_t segment_size;
+  size_t segment_remaining;
   time_t accessed_in_cache;//todo: cache support based on access time
   bool metadata_downloaded;
   struct progressive_data_buf upload_buf;
@@ -124,11 +126,6 @@ typedef struct thread_job
   int segment_part;
   off_t segment_offset;
   FILE* fp;
-  //long segments;
-  long full_segments;
-  long remaining;
-  //long size_of_segments;
-  //long total_size;
   pthread_t thread;
   void* self_reference;
 } thread_job;

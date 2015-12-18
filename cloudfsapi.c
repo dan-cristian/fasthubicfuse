@@ -28,7 +28,7 @@
 
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
-#define REQUEST_RETRIES 3
+#define REQUEST_RETRIES 5
 #define MAX_FILES 10000
 // size of buffer for writing to disk look at ioblksize.h in coreutils
 // and try some values on your own system if you want the best performance
@@ -340,7 +340,18 @@ void set_direntry_headers(dir_entry* de, curl_slist* headers)
 size_t fwrite2(void* ptr, size_t size, size_t nmemb, FILE* filep)
 {
   //debug_print_file_name(filep);
-  return fwrite((const void*)ptr, size, nmemb, filep);
+  //debugf(DBG_LEVEL_EXT, KCYN "fwrite2: size=%lu",
+  //       size * nmemb);
+  size_t result = fwrite((const void*)ptr, size, nmemb, filep);
+  //debugf(DBG_LEVEL_EXT, KCYN "fwrite2: res=%lu",
+  //       result);
+  if (result != size * nmemb)
+  {
+    debugf(DBG_LEVEL_NORM, KRED
+           "fwrite2: error write to file result=%lu err=%s",
+           result, strerror(errno));
+  }
+  return result;
 }
 
 /*
@@ -356,6 +367,7 @@ static size_t rw_callback(size_t (*rw)(void*, size_t, size_t, FILE*),
     return 0;
   size_t amt_read = rw(ptr, 1, info->size < mem ? info->size : mem, info->fp);
   info->size -= amt_read;
+  info->size_processed += amt_read;
   return amt_read;
 }
 
@@ -475,21 +487,34 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   struct segment_info* info = (struct segment_info*)userp;
-  debugf(DBG_LEVEL_EXT, KMAG"write_callback: progressive=%d size=%lu",
-         info->de->is_progressive, size * nmemb);
+  debugf(DBG_LEVEL_EXT, KMAG"write_callback: progressive=%d size=%lu max=%lu",
+         info->de->is_progressive, size * nmemb, CURL_MAX_WRITE_SIZE);
   //send data to fuse buffer
   if (info->de->is_progressive)
     write_callback_progressive(ptr, size, nmemb, userp);
 
   //write data to local cache file
   size_t result = rw_callback(fwrite2, ptr, size, nmemb, userp);
+
+  if (result != size * nmemb)
+  {
+    debugf(DBG_LEVEL_EXT, KRED
+           "write_callback: unable to write all data, result=%lu",
+           result);
+    sleep_ms(5000);
+    sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
+    return 0;
+  }
+
   if (result == 0 && !info->de->is_progressive)
   {
-    debugf(DBG_LEVEL_EXT, KMAG "write_callback: post data buf full");
+    debugf(DBG_LEVEL_EXT, KMAG "write_callback: post data buf full, result=%lu",
+           result);
     //signal cfs_read to wake
     //todo: check if this scenario happens
     sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
   }
+
   debugf(DBG_LEVEL_EXTALL, KMAG"write_callback: result=%lu",
          result);
   return result;
@@ -677,7 +702,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
                              off_t file_size, int is_segment,
                              dir_entry* de_cached_entry, const char* unencoded_path)
 {
-  debugf(DBG_LEVEL_NORM, "send_request_size(%s) (%s)", method, path);
+  debugf(DBG_LEVEL_NORM, "send_request_size(%s) size=%lu (%s)", method,
+         file_size, path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -685,6 +711,12 @@ static int send_request_size(const char* method, const char* path, void* fp,
   long response = -1;
   int tries = 0;
   double total_time;
+  bool is_download = false;
+  bool is_upload = false;
+  double size_downloaded = 0;
+  double size_uploaded = 0;
+  struct segment_info* info = NULL;
+
   //needed to keep the response data, for debug purposes
   struct MemoryStruct chunk;
   if (!storage_url[0])
@@ -775,6 +807,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
     }
     else if (!strcasecmp(method, "PUT"))
     {
+      is_upload = true;
       //todo: read response headers and update file meta (etag & last-modified)
       //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
       debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu", orig_path,
@@ -829,14 +862,25 @@ static int send_request_size(const char* method, const char* path, void* fp,
       }
       if (is_segment)
       {
-        struct segment_info* info = (struct segment_info*)fp;
+        is_download = true;
+        info = (struct segment_info*)fp;
         debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s) fp=%p part=%d",
                orig_path, fp, info->part);
-        //curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        //curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);//fp=seginfo actually
-        curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, info->fp);
+        /**/
+        //download via callback
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, info);//fp=seginfo actually
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 3 * 102400);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3);
+        //assume we need to append to an existing file
+        if (tries > 0 && size_downloaded > 0)
+          curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, info->size_processed);
+        /**/
+        /*
+          //download directly to file
+          curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
+          curl_easy_setopt(curl, CURLOPT_WRITEDATA, info->fp);
+        */
       }
       else if (fp)
       {
@@ -902,9 +946,12 @@ static int send_request_size(const char* method, const char* path, void* fp,
     curl_easy_perform(curl);
 
     char* effective_url;
+
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
     curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effective_url);
     curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &total_time);
+    curl_easy_getinfo(curl, CURLINFO_SIZE_DOWNLOAD, &size_downloaded);
+    curl_easy_getinfo(curl, CURLINFO_SIZE_UPLOAD, &size_uploaded);
     debugf(DBG_LEVEL_EXTALL,
            "status: send_request_size(%s) completed HTTP REQ:%s total_time=%.1f seconds",
            orig_path, effective_url, total_time);
@@ -924,13 +971,25 @@ static int send_request_size(const char* method, const char* path, void* fp,
       debugf(DBG_LEVEL_NORM, KRED"send_request_size: error message=[%s]",
              chunk.memory);
     }
+    if (is_download && file_size > 0 && info != NULL
+        && file_size != info->size_processed)
+    {
+      debugf(DBG_LEVEL_NORM, KRED
+             "send_request_size: download interrupted, expect size=%lu but got size=%.0f",
+             file_size, size_downloaded);
+      response = 417;//too slow, signal error and hope for faster download
+      //struct segment_info* info = (struct segment_info*)fp;
+      //info->size = info->size_copy;
+      //rewind(info->fp);
+    }
     free(chunk.memory);
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE")
         && response == 409))
     {
       debugf(DBG_LEVEL_NORM,
-             "exit 0: send_request_size(%s) speed=%.1f sec "KCYN"(%s) "KGRN"[HTTP OK]",
-             orig_path, total_time, method);
+             "exit 0: send_request_size(%s) speed=%.1f sec res=%d dwn=%.0f upld=%.0f"
+             KCYN "(%s) "KGRN"[HTTP OK]",
+             orig_path, total_time, response, size_downloaded, size_uploaded, method);
       return response;
     }
     //handle cases when file is not found, no point in retrying, should exit
@@ -947,7 +1006,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
              "send_request_size: httpcode=%d (%s)(%s), retrying "KRED"[HTTP ERR]", response,
              method, path);
       //todo: try to list response content for debug purposes
-      sleep(8 << tries); // backoff
+      if (response != 417)
+        sleep(8 << tries); // backoff
     }
     if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
     {
@@ -1033,8 +1093,8 @@ void* upload_segment_progressive(void* seginfo)
 {
   struct segment_info* info = (struct segment_info*)seginfo;
   debugf(DBG_LEVEL_EXT,
-         "upload_segment_progressive: started segment part=%d seginfo=%p",
-         info->part, seginfo);
+         "upload_segment_progressive: started segment part=%d size=%lu",
+         info->part, info->size);
   //debugf(DBG_LEVEL_NORM,
   //       KMAG"upload_segment: started segment part=%d seginfo=%p fp=%p prog=%d",
   //       info->part, seginfo, info->fp, info->is_progressive);
@@ -1111,10 +1171,14 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   info.method = method;
   info.part = job->segment_part;
   info.segment_size = job->de->segment_size;
-  info.size = job->segment_part < job->full_segments ? job->de->segment_size :
-              job->remaining;
+  info.size = job->segment_part < job->de->segment_full_count ?
+              job->de->segment_size :
+              job->de->segment_remaining;
+  //need a copy as info.size will be changed during download
+  info.size_copy = info.size;
+  info.size_processed = 0;
   info.seg_base = seg_base;
-  info.de = job->de;
+  info.de = job->de_seg;
   //dir_entry* de_seg = get_segment(job->de, job->segment_part);
   if (job->de->is_segmented)
   {
@@ -1758,8 +1822,6 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
   job->segment_part = de_seg->segment_part;
   job->file_offset = offset;
   job->self_reference = job;
-  //job->total_size = -1;
-  job->full_segments = -1;
   job->fp = de_seg->downld_buf.local_cache_file;
   pthread_create(&job->thread, NULL,
                  (void*)cloudfs_object_downld_progressive, job);
@@ -1812,6 +1874,9 @@ void get_file_metadata(dir_entry* de)
       de->size = total_size;
       de->segment_size = size_of_segments;
       de->is_segmented = true;
+      de->segment_count = segments;
+      de->segment_full_count = full_segments;
+      de->segment_remaining = remaining;
     }
   }
   else debugf(DBG_LEVEL_EXT,
