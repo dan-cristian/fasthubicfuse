@@ -46,6 +46,8 @@ typedef struct extra_options
   char enable_chown[OPTION_SIZE];
   char enable_progressive_upload[OPTION_SIZE];
   char enable_progressive_download[OPTION_SIZE];
+  char min_speed_limit_progressive[OPTION_SIZE];
+  char read_ahead[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);
@@ -93,6 +95,7 @@ void get_file_metadata(dir_entry* de);
 int cloudfs_update_meta(dir_entry* de);
 void cloudfs_object_upload_progressive(const char* path);
 void* cloudfs_object_downld_progressive(void* path);
+int download_ahead_segment(dir_entry* de, int seg_part);
 int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
-                             size_t size, off_t offset);
+                             size_t size);
 #endif

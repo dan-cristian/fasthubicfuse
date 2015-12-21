@@ -69,6 +69,7 @@ typedef struct progressive_data_buf
   bool write_completed;
   bool file_is_in_cache;
   bool download_started;
+  bool reading_ahead;
   pthread_t thread;
   sem_t* isempty_semaphore;
   char* isempty_semaphore_name;
@@ -122,12 +123,12 @@ typedef struct thread_job
 {
   dir_entry* de;
   dir_entry* de_seg;
-  off_t file_offset;
   int segment_part;
   off_t segment_offset;
-  FILE* fp;
+  //FILE* fp;
   pthread_t thread;
   void* self_reference;
+  bool is_single_thread;
 } thread_job;
 
 // linked list with cached folder names
@@ -174,7 +175,7 @@ void update_dir_cache(const char* path, off_t size, int isdir, int islink);
 dir_entry* path_info(const char* path);
 dir_entry* check_path_info(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
-dir_entry* get_segment(dir_entry* de, int segment);
+dir_entry* get_segment(dir_entry* de, int segment_index);
 void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);

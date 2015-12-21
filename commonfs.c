@@ -41,6 +41,8 @@ bool option_enable_chown = false;
 bool option_enable_chmod = false;
 bool option_enable_progressive_upload = false;
 bool option_enable_progressive_download = false;
+double option_min_speed_limit_progressive = 0;
+long option_read_ahead = 0;
 size_t file_buffer_size = 0;
 
 // needed to get correct GMT / local time, as it does not work
@@ -402,17 +404,17 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
 /*return a segment entry from dir_entry
   NOTE: it also sets the segment_part field
 */
-dir_entry* get_segment(dir_entry* de, int segment)
+dir_entry* get_segment(dir_entry* de, int segment_index)
 {
   int de_segment;
   dir_entry* des = de->segments;
   while (des)
   {
     de_segment = atoi(des->name);
-    if (de_segment == segment)
+    if (de_segment == segment_index)
     {
-      if (des->segment_part != segment)
-        des->segment_part = segment;
+      if (des->segment_part != segment_index)
+        des->segment_part = segment_index;
       return des;
     }
     des = des->next;
@@ -528,18 +530,16 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
 {
-  int sem_val = 0;
-  while (sem_val == 0)
+  if (data_buf->sem_list[sem_index])
   {
-    sem_getvalue(data_buf->sem_list[sem_index], &sem_val);
-    if (sem_val > 0)
-      sem_post(data_buf->sem_list[sem_index]);
+    sem_post(data_buf->sem_list[sem_index]);
+    sem_post(data_buf->sem_list[sem_index]);
+    sem_close(data_buf->sem_list[sem_index]);
+    sem_unlink(data_buf->sem_name_list[sem_index]);
+    free(data_buf->sem_name_list[sem_index]);
+    data_buf->sem_list[sem_index] = NULL;
+    data_buf->sem_name_list[sem_index] = NULL;
   }
-  sem_close(data_buf->sem_list[sem_index]);
-  sem_unlink(data_buf->sem_name_list[sem_index]);
-  free(data_buf->sem_name_list[sem_index]);
-  data_buf->sem_list[sem_index] = NULL;
-  data_buf->sem_name_list[sem_index] = NULL;
 }
 
 long random_at_most(long max)
@@ -592,6 +592,11 @@ dir_entry* init_dir_entry()
   de->upload_buf.local_cache_file = NULL;
   de->downld_buf.download_started = false;
   de->downld_buf.local_cache_file = NULL;
+  de->downld_buf.reading_ahead = false;
+  de->downld_buf.fuse_read_size = -1;
+  de->downld_buf.work_buf_size = -1;
+  de->downld_buf.offset = -1;
+
   de->full_name_hash = NULL;
   de->is_segmented = -1;//undefined
   de->segments = NULL;
@@ -868,6 +873,12 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
   if (stat(segment_file_dir, &dir_status) == -1)
     mkdir(segment_file_dir, 0700);
   bool file_exist = access(segment_file_path, F_OK) != -1;
+  if (*fp_segment != NULL)
+  {
+    debugf(DBG_LEVEL_EXT, KRED "open_segment_from_cache(%s) fp not null, down=%d!",
+           de_seg->name, de_seg->downld_buf.download_started);
+    abort();
+  }
   // todo: check open modes
   *fp_segment = fopen(segment_file_path, method[0] == 'G' ?
                       (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
@@ -878,11 +889,13 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
            KRED"open_segment_from_cache: failed to open %s, fp=%p err=%s",
            segment_file_path, *fp_segment, strerror(err));
   else
-    debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: open segment fp=%p",
-           *fp_segment);
+    debugf(DBG_LEVEL_EXTALL,
+           KMAG"open_segment_from_cache: open segment fp=%p segindex=%d",
+           *fp_segment, de_seg->segment_part);
   if (file_exist)
   {
-    debugf(DBG_LEVEL_NORM, KMAG"open_segment_from_cache: found segment %d md5=%s",
+    debugf(DBG_LEVEL_EXTALL,
+           KMAG"open_segment_from_cache: found segment %d md5=%s",
            de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
     if (fno == -1)
@@ -900,7 +913,7 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
       de_seg->md5sum_local = strdup(md5_file_hash_str);
     }
     else
-      debugf(DBG_LEVEL_NORM, KMAG
+      debugf(DBG_LEVEL_EXTALL, KMAG
              "open_segment_from_cache: segment md5sum_local=%s md5sum=%s",
              de_seg->md5sum_local, de_seg->md5sum);
     bool match = (de && de->md5sum != NULL

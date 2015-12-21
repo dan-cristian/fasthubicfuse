@@ -25,15 +25,19 @@ extern pthread_mutex_t dcachemut;
 extern pthread_mutexattr_t mutex_attr;
 extern int debug;
 extern int cache_timeout;
+extern int verify_ssl;
+extern bool option_get_extended_metadata;
+extern bool option_curl_verbose;
 extern int option_cache_statfs_timeout;
 extern int option_debug_level;
-extern bool option_get_extended_metadata;
 extern bool option_curl_progress_state;
 extern bool option_enable_chown;
 extern bool option_enable_chmod;
 extern size_t file_buffer_size;
 extern bool option_enable_progressive_upload;
 extern bool option_enable_progressive_download;
+extern long option_min_speed_limit_progressive;
+extern long option_read_ahead;
 
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
@@ -478,65 +482,60 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   off_t offset_seg;
   int sem_val;
   int rnd = random_at_most(50);
-  //if (offset == 0)//avoid clutter, list only once
-  debugf(DBG_LEVEL_NORM, KBLU
-         "cfs_read(%s) buffsize=%lu d_io=%d rnd=%d "KCYN"offset=%lu ", path,
-         size, info->direct_io, rnd, offset);
+  if (offset == 0)//avoid clutter, list only once
+    debugf(DBG_LEVEL_EXT, KBLU
+           "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
   //sleep_ms(rnd);
-
+  int iters = 0;
   file_buffer_size = size;
   debug_print_descriptor(info);
   bool in_cache = false;
   dir_entry* de = check_path_info(path);
   if (de && de->is_segmented)
   {
-    int segment_part = offset / de->segment_size;//de->segment_size / de->size;
-    dir_entry* de_seg, *de_seg_next;
+    int segment_part = offset / de->segment_size;
+    dir_entry* de_seg;
     while (result <= 0)
     {
       de_seg = get_segment(de, segment_part);
-      de_seg_next = get_segment(de, segment_part + 1);
-
       //offset in segment is diff than full file offset
       offset_seg = offset - (segment_part * de->segment_size);
-      debugf(DBG_LEVEL_NORM, KMAG
+      debugf(DBG_LEVEL_EXTALL, KMAG
              "cfs_read: while segmented path=%s offset=%lu segment=%d seg_name=%s md5=%s",
              de->name, offset, segment_part, de_seg->name, de_seg->md5sum);
-      //sleep_ms(1000);
       if (de_seg)
       {
-        //sleep_ms(3000);
-        bool in_cache = open_segment_from_cache(de, de_seg, //segment_part,
-                                                &de_seg->downld_buf.local_cache_file,
-                                                "GET");
+        bool in_cache;
+        //while is downloading or nearly finishing
+        if (de_seg->downld_buf.download_started || de_seg->downld_buf.local_cache_file)
+          in_cache = false;
+        else
+        {
+          in_cache = open_segment_from_cache(de, de_seg,
+                                             &de_seg->downld_buf.local_cache_file,
+                                             "GET");
+        }
         if (in_cache)
         {
           int fno = fileno(de_seg->downld_buf.local_cache_file);
           int err;
-          if (fno != -1)
+          if (fno != -1)//safety check, not sure why
           {
             result = pread(fno, buf, size, offset_seg);
             err = errno;
-            debugf(DBG_LEVEL_NORM, KBLU "cfs_read(%s) err=%s fno=%d fp=%p", path,
-                   strerror(err), fno);
-            debugf(DBG_LEVEL_EXT, KMAG
-                   "cfs_read(%s): segment %d, fread=%d fp=%p"KGRN"in cache",
-                   path, segment_part, result, de_seg->downld_buf.local_cache_file);
+            debugf(DBG_LEVEL_EXTALL, KBLU "cfs_read(%s) err=%s fno=%d fp=%p", path,
+                   strerror(err), fno, de_seg->downld_buf.local_cache_file);
             //sleep_ms(100);
             close(fno);
             fclose(de_seg->downld_buf.local_cache_file);
+            de_seg->downld_buf.local_cache_file = NULL;
             if (result > 0)
             {
-              //download next segment in advance
-              if (de_seg_next && !de_seg_next->downld_buf.download_started)
+              de_seg = get_segment(de, segment_part + 1);
+              if (de_seg && !de->downld_buf.reading_ahead)
               {
-                bool next_in_cache = open_segment_from_cache(de, de_seg_next, //segment_part,
-                                     &de_seg_next->downld_buf.local_cache_file,
-                                     "GET");
-                if (!next_in_cache && !de_seg_next->downld_buf.download_started)
-                  cloudfs_download_segment(de_seg_next, de, size, offset);
-                else
-                  fclose(de_seg_next->downld_buf.local_cache_file);
+                //download next 'x' segment(s) in advance asynch.
+                download_ahead_segment(de, segment_part + 1);
               }
               return result;
             }
@@ -544,7 +543,9 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             {
               debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): done serving segment %d",
                      path, segment_part);
-              //force download new segment
+              free_semaphores(&de_seg->downld_buf, SEM_EMPTY);
+              free_semaphores(&de_seg->downld_buf, SEM_FULL);
+              //force download (or read if in cache) of a new segment
               segment_part++;
               //exit if all segments are downloaded
               if (segment_part == de->segment_count)
@@ -556,6 +557,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             debugf(DBG_LEVEL_NORM, KRED "cfs_read(%s): Invalid seg_fp(%p) as fileno=-1",
                    path, de_seg->downld_buf.local_cache_file);
             fclose(de_seg->downld_buf.local_cache_file);
+            de_seg->downld_buf.local_cache_file = NULL;
             return -1;
           }
         }
@@ -569,16 +571,23 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
 
           if (!de_seg->downld_buf.download_started) //download not started
           {
-            cloudfs_download_segment(de_seg, de, size, offset);
+            cloudfs_download_segment(de_seg, de, size);
             //wait until segment is completely downloaded
             if (de_seg->downld_buf.sem_list[SEM_FULL])
+            {
+              debugf(DBG_LEVEL_EXT, KBLU
+                     "cfs_read: 1-wait data seg=%s", de_seg->name);
               sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+            }
             //and perform read?
-            debugf(DBG_LEVEL_EXT, KBLU "cfs_read: segmented, got full data");
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read: segmented, got full data seg=%s", de_seg->name);
           }
 
           if (de_seg->downld_buf.download_started)
           {
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read(%s): downld already started seg_name=%s", path, de_seg->name);
             if (false)//de->is_progressive)
             {
               //sleep_ms(rnd);
@@ -621,16 +630,22 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             }
             else //download is already running, maybe started by another thread
             {
-              debugf(DBG_LEVEL_EXT, KBLU
-                     "cfs_read(%s): downld already started, "
-                     KYEL "wait data download", path);
+              debugf(DBG_LEVEL_EXT,
+                     "cfs_read(%s): " KYEL "wait download seg_name=%s", path, de_seg->name);
               //wait until segment is completely downloaded
               if (de_seg->downld_buf.sem_list[SEM_FULL])
+              {
+                debugf(DBG_LEVEL_EXT, KBLU
+                       "cfs_read: 2-wait data seg=%s", de_seg->name);
                 sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+              }
+              debugf(DBG_LEVEL_EXT, "cfs_read(%s): "
+                     KYEL "wait over seg_name=%s", path, de_seg->name);
             }
           }
         }
       }
+      iters++;
     }//end while
     return result;
   }
@@ -683,6 +698,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                  path);
           return -ENOENT;
         }
+
         //on progressive ops upload is already done
         if (option_enable_progressive_upload && de->size > 0)
         {
@@ -1161,7 +1177,9 @@ ExtraFuseOptions extra_options =
   .enable_chown = "false",
   .enable_chmod = "false",
   .enable_progressive_upload = "false",
-  .enable_progressive_download = "false"
+  .enable_progressive_download = "false",
+  .min_speed_limit_progressive = "0",
+  .read_ahead = "0"
 };
 
 int parse_option(void* data, const char* arg, int key,
@@ -1190,7 +1208,10 @@ int parse_option(void* data, const char* arg, int key,
       sscanf(arg, " enable_progressive_download = %[^\r\n ]",
              extra_options.enable_progressive_download) ||
       sscanf(arg, " enable_progressive_upload = %[^\r\n ]",
-             extra_options.enable_progressive_upload)
+             extra_options.enable_progressive_upload) ||
+      sscanf(arg, " min_speed_limit_progressive = %[^\r\n ]",
+             extra_options.min_speed_limit_progressive) ||
+      sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead)
      )
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -1232,10 +1253,15 @@ bool initialise_options(struct fuse_args args)
   public_container = options.container;
   temp_dir = options.temp_dir;
 
-  cloudfs_verify_ssl(!strcasecmp(options.verify_ssl, "true"));
-  cloudfs_option_get_extended_metadata(!strcasecmp(
-                                         extra_options.get_extended_metadata, "true"));
-  cloudfs_option_curl_verbose(!strcasecmp(extra_options.curl_verbose, "true"));
+  if (*options.verify_ssl)
+    verify_ssl = !strcasecmp(options.verify_ssl, "true") ? 2 : 0;
+
+  if (*extra_options.get_extended_metadata)
+    option_get_extended_metadata = !strcasecmp(extra_options.get_extended_metadata,
+                                   "true");
+  if (*extra_options.curl_verbose)
+    option_curl_verbose = !strcasecmp(extra_options.curl_verbose,
+                                      "true");
   if (*extra_options.debug_level)
     option_debug_level = atoi(extra_options.debug_level);
   if (*extra_options.cache_statfs_timeout)
@@ -1253,6 +1279,11 @@ bool initialise_options(struct fuse_args args)
   if (*extra_options.enable_progressive_upload)
     option_enable_progressive_upload = !strcasecmp(
                                          extra_options.enable_progressive_upload, "true");
+  if (*extra_options.min_speed_limit_progressive)
+    option_min_speed_limit_progressive = atoll(
+                                           extra_options.min_speed_limit_progressive);
+  if (*extra_options.read_ahead)
+    option_read_ahead = atoll(extra_options.read_ahead);
 
   if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
   {
@@ -1292,6 +1323,10 @@ bool initialise_options(struct fuse_args args)
             "  enable_progressive_download=[true to enable progressive operation support]\n");
     fprintf(stderr,
             "  enable_progressive_upload=[true to enable progressive operation support]\n");
+    fprintf(stderr,
+            "  min_speed_limit_progressive=[0 to disable, or = number of transferred bytes per second limit under which operation will be aborted and resumed]\n");
+    fprintf(stderr,
+            "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
     return false;
   }
   return true;
@@ -1310,6 +1345,8 @@ int main(int argc, char** argv)
   cloudfs_init();
   if (debug)
   {
+    fprintf(stderr, "verify_ssl = %lu\n", verify_ssl);
+    fprintf(stderr, "curl_progress_state = %lu\n", option_curl_progress_state);
     fprintf(stderr, "segment_size = %lu\n", segment_size);
     fprintf(stderr, "segment_above = %lu\n", segment_above);
     fprintf(stderr, "debug_level = %d\n", option_debug_level);
@@ -1321,6 +1358,9 @@ int main(int argc, char** argv)
             option_enable_progressive_download);
     fprintf(stderr, "enable_progressive_upload = %d\n",
             option_enable_progressive_upload);
+    fprintf(stderr, "min_speed_limit_progressive = %d\n",
+            option_min_speed_limit_progressive);
+    fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
   }
   cloudfs_set_credentials(options.client_id, options.client_secret,
                           options.refresh_token);
