@@ -47,6 +47,7 @@ typedef struct extra_options
   char enable_progressive_upload[OPTION_SIZE];
   char enable_progressive_download[OPTION_SIZE];
   char min_speed_limit_progressive[OPTION_SIZE];
+  char min_speed_timeout[OPTION_SIZE];
   char read_ahead[OPTION_SIZE];
 } ExtraFuseOptions;
 
@@ -97,4 +98,6 @@ void cloudfs_object_upload_progressive(const char* path);
 void* cloudfs_object_downld_progressive(void* path);
 int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                            bool sync_first);
+int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
+                             size_t size);
 #endif

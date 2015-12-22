@@ -3,6 +3,7 @@
 #include <fuse.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <assert.h>
 
 typedef enum { false, true } bool;
 #define MAX_PATH_SIZE (1024 + 256 + 3)
@@ -98,6 +99,7 @@ typedef struct dir_entry
   // additional attributes
   struct timespec mtime;
   struct timespec ctime;
+  struct timespec ctime_local;//cached time used for content change check
   struct timespec atime;
   char* md5sum;//md5sum on cloud
   char* md5sum_local;//md5sum of local cached file/segment
@@ -185,10 +187,13 @@ void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
 bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
-                             //int segment_part,
                              FILE** fp_segment, const char* method);
+bool open_file_from_cache(dir_entry* de, FILE** fp, const char* method);
 void sleep_ms(int milliseconds);
 char* get_home_dir();
+bool file_changed_time(dir_entry* de);
+bool file_changed_md5(dir_entry* de);
+int update_direntry_md5sum(char* md5sum_str, FILE* fp);
 void cloudfs_debug(int dbg);
 void debugf(int level, char* fmt, ...);
 

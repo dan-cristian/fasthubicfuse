@@ -39,6 +39,7 @@ extern size_t file_buffer_size;
 extern bool option_enable_progressive_upload;
 extern bool option_enable_progressive_download;
 extern long option_min_speed_limit_progressive;
+extern long option_min_speed_timeout;
 extern long option_read_ahead;
 
 static int cfs_getattr(const char* path, struct stat* stbuf)
@@ -204,8 +205,8 @@ static int cfs_create(const char* path, mode_t mode,
   FILE* temp_file;
   int errsv;
   char file_path_safe[NAME_MAX] = "";
-  if (*temp_dir)
-  {
+  /*if (*temp_dir)
+    {
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
     temp_file = fopen(file_path_safe, "w+b");
     errsv = errno;
@@ -216,9 +217,9 @@ static int cfs_create(const char* path, mode_t mode,
              strerror(errsv));
       return -EIO;
     }
-  }
-  else
-  {
+    }
+    else
+    {
     temp_file = tmpfile();
     errsv = errno;
     if (temp_file == NULL)
@@ -228,12 +229,14 @@ static int cfs_create(const char* path, mode_t mode,
              strerror(errsv));
       return -EIO;
     }
-  }
-  openfile* of = (openfile*)malloc(sizeof(openfile));
-  of->fd = dup(fileno(temp_file));
-  fclose(temp_file);
-  of->flags = info->flags;
-  info->fh = (uintptr_t)of;
+    }
+    openfile* of = (openfile*)malloc(sizeof(openfile));
+    of->fd = dup(fileno(temp_file));
+    fclose(temp_file);
+    of->flags = info->flags;
+    info->fh = (uintptr_t)of;
+  */
+  info->fh = -1;
   update_dir_cache(path, 0, 0, 0);
   info->direct_io = 1;
   dir_entry* de = check_path_info(path);
@@ -249,6 +252,8 @@ static int cfs_create(const char* path, mode_t mode,
     de->mtime.tv_nsec = now.tv_nsec;
     de->ctime.tv_sec = now.tv_sec;
     de->ctime.tv_nsec = now.tv_nsec;
+    de->ctime_local.tv_sec = now.tv_sec;
+    de->ctime_local.tv_nsec = now.tv_nsec;
     char time_str[TIME_CHARS] = "";
     get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
     debugf(DBG_LEVEL_EXT, KCYN"cfs_create: atime=[%s]", time_str);
@@ -284,9 +289,12 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   int errsv;
   bool file_cache_ok = false;
   dir_entry* de = path_info(path);
+  if (!de)
+    return -ENOENT;
 
-  if (*temp_dir)
-  {
+  /*
+    if (*temp_dir)
+    {
     char file_path_safe[NAME_MAX];
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
     debugf(DBG_LEVEL_EXT, "cfs_open: try open custom temp (%s)", file_path_safe);
@@ -392,9 +400,9 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       }
     }
     //else file is in cache
-  }
-  else
-  {
+    }
+    else
+    {
     //using system standard temp directory
     temp_file = tmpfile();
     if (temp_file == NULL)
@@ -415,29 +423,34 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
         return -ENOENT;
       }
     }
-  }
-  update_dir_cache(path, (de ? de->size : 0), 0, 0);
-  openfile* of = (openfile*)malloc(sizeof(openfile));//where is this free'd?
-  of->fd = dup(fileno(temp_file));
-  if (of->fd == -1)
-  {
+    }
+  */
+  /*
+    update_dir_cache(path, (de ? de->size : 0), 0, 0);
+    openfile* of = (openfile*)malloc(sizeof(openfile));//where is this free'd?
+    of->fd = dup(fileno(temp_file));
+    if (of->fd == -1)
+    {
     //FIXME: potential leak if free not used?
     free(of);
     debugf(DBG_LEVEL_NORM, KRED "exit 5: cfs_open(%s) of->fd", path);
     return -ENOENT;
-  }
-  debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) fp=%p", path, temp_file);
+    }
+    debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) fp=%p", path, temp_file);
 
-  of->flags = info->flags;
-  info->fh = (uintptr_t)of;
+    of->flags = info->flags;
+  */
+  //info->fh = (uintptr_t)of;
+  info->fh = -1;
   info->direct_io = 1;
   //non seek must be set to 0 to enable
   // video players work via samba (as they perform a seek to file end)
   info->nonseekable = 0;
 
-  //launch download as thread if progressive is enabled and file not in cache
-  if (!file_cache_ok && option_enable_progressive_download)
-  {
+  /*
+    //launch download as thread if progressive is enabled and file not in cache
+    if (!file_cache_ok && option_enable_progressive_download)
+    {
     //if (de->downld_buf.download_started)
     //  debugf(DBG_LEVEL_NORM, "cfs_open(%s): " KYEL
     //         "local file already opened, op. in progress",
@@ -464,14 +477,15 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
       return -ENOENT;
     }
     //}
-  }
-  else
-  {
+    }
+    else
+    {
     debugf(DBG_LEVEL_NORM, KMAG"exit 7: cfs_open(%s) "KGRN"FILE in CACHE", path);
     //signal file should be in cache at cfs_read
     de->downld_buf.file_is_in_cache = true;
-  }
-  fclose(temp_file);
+    }
+    fclose(temp_file);
+  */
   debugf(DBG_LEVEL_NORM, KBLU "exit 8: cfs_open(%s)", path);
   return 0;
   //return ((openfile*)(uintptr_t)info->fh)->fd;
@@ -482,7 +496,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
 {
   int result = -1;
   off_t offset_seg;
-  int sem_val;
+  int sem_val, err;
   int rnd = random_at_most(50);
   if (offset == 0)//avoid clutter, list only once
     debugf(DBG_LEVEL_EXT, KBLU
@@ -518,12 +532,26 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): seg %d " KYEL "not in cache",
                  de_seg->name, segment_part);
           download_ahead_segment(de_seg, de, fp_segment, true);
+          if (de_seg->downld_buf.mutex_initialised)
+          {
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read: 1-wait lock seg=%s", de_seg->name);
+            pthread_mutex_lock(&de_seg->downld_buf.mutex);
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read: 1-wait data seg=%s", de_seg->name);
+            if (de_seg->downld_buf.sem_list[SEM_FULL])
+              sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+            pthread_mutex_unlock(&de_seg->downld_buf.mutex);
+          }
+          else
+          {
+            debugf(DBG_LEVEL_EXT, KBLU
+                   "cfs_read: 2-wait data seg=%s", de_seg->name);
+            if (de_seg->downld_buf.sem_list[SEM_FULL])
+              sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
+          }
           debugf(DBG_LEVEL_EXT, KBLU
-                 "cfs_read: 1-wait data seg=%s", de_seg->name);
-          if (de_seg->downld_buf.sem_list[SEM_FULL])
-            sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
-          debugf(DBG_LEVEL_EXT, KBLU
-                 "cfs_read: 1-got full data seg=%s", de_seg->name);
+                 "cfs_read: got full data seg=%s", de_seg->name);
           fclose(fp_segment);
           fp_segment = NULL;
           in_cache = open_segment_from_cache(de, de_seg, &fp_segment, HTTP_GET);
@@ -537,8 +565,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         if (in_cache)
         {
           int fno = fileno(fp_segment);
-          int err;
-          if (fno != -1)//safety check, not sure why
+          if (fno != -1)//safety check
           {
             result = pread(fno, buf, size, offset_seg);
             err = errno;
@@ -627,19 +654,60 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   if (de && !de->is_segmented)
   {
     //handle progressive download for not segmented files
-    debugf(DBG_LEVEL_NORM, "cfs_read(%s): read non segmented file",
-           path);
-  }
+    debugf(DBG_LEVEL_NORM, "cfs_read(%s): read non segmented file", path);
+    bool in_cache;
+    FILE* fp_file = NULL;
+    while (result <= 0)
+    {
+      in_cache = open_file_from_cache(de, &fp_file, HTTP_GET);
+      if (!in_cache)
+      {
+        cloudfs_download_segment(de, de, fp_file, de->size);
+        fclose(fp_file);
+        fp_file = NULL;
+        in_cache = open_file_from_cache(de, &fp_file, HTTP_GET);
+        if (!in_cache)
+          debugf(DBG_LEVEL_EXT, KYEL
+                 "cfs_read: download failed file=%s", de->name);
+        else
+          debugf(DBG_LEVEL_EXT, "cfs_read: download OK file=%s", de->name);
+      }
 
-  result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
-  debugf(DBG_LEVEL_EXT, "cfs_read(%s): got data from file", path);
-  if (offset == 0)
+      if (in_cache)
+      {
+        int fno = fileno(fp_file);
+        if (fno != -1)//safety check
+        {
+          result = pread(fno, buf, size, offset);
+          err = errno;
+          debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s) fno=%d fp=%p err=%s",
+                 de->name, fno, fp_file, strerror(err));
+          close(fno);
+          fclose(fp_file);
+          fp_file = NULL;
+          return result;
+        }
+        else abort();
+      }
+      else
+      {
+        debugf(DBG_LEVEL_NORM, KRED "cfs_read(%s): unable to download", de->name);
+        return -ENOENT;
+      }
+    }//end while
+    return result;
+  }
+  /*
+    result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
+    debugf(DBG_LEVEL_EXT, "cfs_read(%s): got data from file", path);
+    if (offset == 0)
     debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
-           strerror(errno));
-  else
+    strerror(errno));
+    else
     debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
-           strerror(errno));
-  return result;
+    strerror(errno));
+    return result;
+  */
 }
 
 //todo: flush will upload a file again even if just file attributes are changed.
@@ -652,86 +720,102 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
   debug_print_descriptor(info);
-  openfile* of = (openfile*)(uintptr_t)info->fh;
   int errsv = 0;
-  if (of)
-  {
-    //this reset file size to 0 for large segmented files
-    //off_t file_size = cloudfs_file_size(of->fd);
-    //update_dir_cache(path, file_size, 0, 0);
-    if (of->flags & O_RDWR || of->flags & O_WRONLY)
+  dir_entry* de = check_path_info(path);
+  assert(de);
+  /*
+    if (info->fh != -1)
     {
-      FILE* fp = fdopen(dup(of->fd), "r");
-      errsv = errno;
-      if (fp != NULL)
+    openfile* of = (openfile*)(uintptr_t)info->fh;
+    if (of)
+    {
+      //this reset file size to 0 for large segmented files
+      //off_t file_size = cloudfs_file_size(of->fd);
+      //update_dir_cache(path, file_size, 0, 0);
+      if (of->flags & O_RDWR || of->flags & O_WRONLY)
       {
-        dir_entry* de = check_path_info(path);
-        if (!de)
+        FILE* fp = fdopen(dup(of->fd), "r");
+        errsv = errno;
+        if (fp != NULL)
         {
-          debugf(DBG_LEVEL_NORM, "cfs_flush(%s): "KRED "file not found in cache",
-                 path);
-          return -ENOENT;
-        }
-
-        //on progressive ops upload is already done
-        if (option_enable_progressive_upload && de->size > 0)
-        {
-          debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
-                 path, de->size);
-          //signal completion of read/write operation
-          de->upload_buf.write_completed = true;
-          //signal last data available in buffer for upload
-          sem_post(de->upload_buf.isfull_semaphore);
-          sem_wait(de->upload_buf.isempty_semaphore);
-          fclose(fp);
-          errsv = 0;
-        }
-        else
-        {
-          rewind(fp);
-          //calculate md5 hash, compare with cloud hash to determine if file content is changed
-          char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
-          file_md5(fp, md5_file_hash_str);
-          if (de && de->md5sum != NULL && (!strcasecmp(md5_file_hash_str, de->md5sum)))
+          //on progressive ops upload is already done
+          if (option_enable_progressive_upload && de->size > 0)
           {
-            //file content is identical, no need to upload entire file, just update metadata
-            debugf(DBG_LEVEL_NORM, KBLU
-                   "cfs_flush(%s): skip full upload as content did not change", path);
-            cloudfs_update_meta(de);
+            debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
+                   path, de->size);
+            //signal completion of read/write operation
+            de->upload_buf.write_completed = true;
+            //signal last data available in buffer for upload
+            sem_post(de->upload_buf.isfull_semaphore);
+            sem_wait(de->upload_buf.isempty_semaphore);
+            fclose(fp);
+            errsv = 0;
           }
           else
           {
-            //upload file from cache to cloud
             rewind(fp);
-            debugf(DBG_LEVEL_NORM, KBLU
-                   "cfs_flush(%s): perform full upload as content changed (or no file found in cache)",
-                   path);
-            if (!cloudfs_object_read_fp(path, fp))
+            //calculate md5 hash, compare with cloud hash to determine if file content is changed
+            char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+            file_md5(fp, md5_file_hash_str);
+            if (de && de->md5sum != NULL && (!strcasecmp(md5_file_hash_str, de->md5sum)))
             {
-              fclose(fp);
-              errsv = errno;
-              debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_flush(%s) result=%d:%s", path, errsv,
-                     strerror(errsv));
-              return -ENOENT;
+              //file content is identical, no need to upload entire file, just update metadata
+              debugf(DBG_LEVEL_NORM, KBLU
+                     "cfs_flush(%s): skip full upload as content did not change", path);
+              cloudfs_update_meta(de);
             }
+            else
+            {
+              //upload file from cache to cloud
+              rewind(fp);
+              debugf(DBG_LEVEL_NORM, KBLU
+                     "cfs_flush(%s): perform full upload as content changed (or no file found in cache)",
+                     path);
+              if (!cloudfs_object_read_fp(path, fp))
+              {
+                fclose(fp);
+                errsv = errno;
+                debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_flush(%s) result=%d:%s", path, errsv,
+                       strerror(errsv));
+                return -ENOENT;
+              }
+            }
+            fclose(fp);
+            errsv = errno;
           }
-          fclose(fp);
-          errsv = errno;
         }
+        else
+          debugf(DBG_LEVEL_EXT, KRED "status: cfs_flush, err=%d:%s", errsv,
+                 strerror(errsv));
       }
       else
-        debugf(DBG_LEVEL_EXT, KRED "status: cfs_flush, err=%d:%s", errsv,
-               strerror(errsv));
+      {
+        //todo: what to do here?
+
+      }
+    }
+    }
+  */
+  //else //fh == -1
+  //{
+  if (!de->is_segmented)
+  {
+    if (/*file_changed_time(de) || */file_changed_md5(de))
+    {
+      debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content changed", de->name);
+      FILE* fp = NULL;
+      open_file_from_cache(de, &fp, HTTP_PUT);
+      cloudfs_object_read_fp(path, fp);
+      update_direntry_md5sum(de->md5sum_local, fp);
+      fclose(fp);
     }
     else
-    {
-      //todo: what to do here?
-
-    }
+      debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content not changed", de->name);
   }
   debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
          strerror(errsv));
   return 0;
+  //}
 }
 
 static int cfs_release(const char* path, struct fuse_file_info* info)
@@ -740,8 +824,8 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
          "cfs_release(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
-  //if (info->fh != 0)
-  close(((openfile*)(uintptr_t)info->fh)->fd);
+  if (info->fh != -1)
+    close(((openfile*)(uintptr_t)info->fh)->fd);
   debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
@@ -783,18 +867,22 @@ static int cfs_write(const char* path, const char* buf, size_t length,
                      off_t offset, struct fuse_file_info* info)
 {
   if (offset == 0)//avoid clutter
-    debugf(DBG_LEVEL_EXT,
-           KBLU "cfs_write(%s) bufflength=%lu offset=%lu *buf=%lu", path, length, offset,
-           buf);
+    debugf(DBG_LEVEL_EXT, KBLU
+           "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
   else
-    debugf(DBG_LEVEL_EXTALL,
-           KBLU "cfs_write(%s) bufflength=%lu offset=%lu *buf=%lu", path, length, offset,
-           buf);
+    debugf(DBG_LEVEL_EXT, KBLU
+           "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
+  int result, errsv;
   // FIXME: Potential inconsistent cache update if pwrite fails?
   update_dir_cache(path, offset + length, 0, 0);
-  //writes to local cache file
-  int result = pwrite(((openfile*)(uintptr_t)info->fh)->fd, buf, length, offset);
-  int errsv = errno;
+  if (info->fh != -1)
+  {
+    //writes to local cache file
+    result = pwrite(((openfile*)(uintptr_t)info->fh)->fd, buf, length, offset);
+    errsv = errno;
+  }
+  dir_entry* de = check_path_info(path);
+
   //todo: send data also to progressive upload buffer and wait
   //until this data chunck is uploaded, to show real upload progress
   //fixme: prior check of md5sum file content not done here, upload optimisation not functional
@@ -882,12 +970,28 @@ static int cfs_write(const char* path, const char* buf, size_t length,
              "cfs_write(%s):"KRED" unexpected missing path from cache on progressive write",
              path);
   }
+  else//not progressive
+  {
+    FILE* fp = NULL;
+    bool in_cache = open_file_from_cache(de, &fp, HTTP_PUT);
+    int fno = fileno(fp);
+    assert(fno != -1);
+    result = pwrite(fno, buf, length, offset);
+    errsv = errno;
+    fclose(fp);
+  }
   if (errsv == 0)
-    debugf(DBG_LEVEL_EXTALL, KBLU "exit 0: cfs_write(%s) result=%d:%s", path,
-           errsv, strerror(errsv));
+    debugf(DBG_LEVEL_EXT, KBLU "exit 0: cfs_write(%s) result=%s", path,
+           strerror(errsv));
   else
-    debugf(DBG_LEVEL_EXTALL, KBLU "exit 1: cfs_write(%s) "KRED"result=%d:%s", path,
-           errsv, strerror(errsv));
+    debugf(DBG_LEVEL_EXT, KBLU "exit 1: cfs_write(%s) "KRED"result=%s", path,
+           strerror(errsv));
+  clock_gettime(CLOCK_REALTIME, &de->ctime_local);
+  if (de->md5sum_local)
+  {
+    free(de->md5sum_local);
+    de->md5sum_local = NULL;
+  }
   return result;
 }
 
@@ -920,6 +1024,9 @@ static int cfs_fsync(const char* path, int idunno,
 static int cfs_truncate(const char* path, off_t size)
 {
   debugf(DBG_LEVEL_NORM, "cfs_truncate(%s)", path);
+  dir_entry* de = check_path_info(path);
+  assert(de);
+  clock_gettime(CLOCK_REALTIME, &de->ctime_local);
   cloudfs_object_truncate(path, size);
   debugf(DBG_LEVEL_NORM, "exit: cfs_truncate(%s)", path);
   return 0;
@@ -1070,15 +1177,13 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);
     return -ENOENT;
   }
-  struct timespec now;
-  clock_gettime(CLOCK_REALTIME, &now);
   if (path_de->atime.tv_sec != times[0].tv_sec
       || path_de->atime.tv_nsec != times[0].tv_nsec ||
       path_de->mtime.tv_sec != times[1].tv_sec
       || path_de->mtime.tv_nsec != times[1].tv_nsec)
   {
     debugf(DBG_LEVEL_EXT, KCYN
-           "cfs_utimens: change for %s, prev: atime=%li.%li mtime=%li.%li, new: atime=%li.%li mtime=%li.%li",
+           "cfs_utimens: change %s prev: atime=%li.%li mtime=%li.%li new: atime=%li.%li mtime=%li.%li",
            path,
            path_de->atime.tv_sec, path_de->atime.tv_nsec, path_de->mtime.tv_sec,
            path_de->mtime.tv_nsec,
@@ -1091,7 +1196,7 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     path_de->atime = times[0];
     path_de->mtime = times[1];
     // not sure how to best obtain ctime from fuse source file. just record current date.
-    path_de->ctime = now;
+    clock_gettime(CLOCK_REALTIME, &path_de->ctime);
     //calling a meta cloud update here is not always needed.
     //touch for example opens and closes/flush the file.
     //worth implementing a meta cache functionality to avoid multiple uploads on meta changes
@@ -1153,6 +1258,7 @@ ExtraFuseOptions extra_options =
   .enable_progressive_upload = "false",
   .enable_progressive_download = "false",
   .min_speed_limit_progressive = "0",
+  .min_speed_timeout = "3",
   .read_ahead = "0"
 };
 
@@ -1185,6 +1291,8 @@ int parse_option(void* data, const char* arg, int key,
              extra_options.enable_progressive_upload) ||
       sscanf(arg, " min_speed_limit_progressive = %[^\r\n ]",
              extra_options.min_speed_limit_progressive) ||
+      sscanf(arg, " min_speed_timeout = %[^\r\n ]",
+             extra_options.min_speed_timeout) ||
       sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead)
      )
     return 0;
@@ -1258,6 +1366,8 @@ bool initialise_options(struct fuse_args args)
                                            extra_options.min_speed_limit_progressive);
   if (*extra_options.read_ahead)
     option_read_ahead = atoll(extra_options.read_ahead);
+  if (*extra_options.min_speed_timeout)
+    option_min_speed_timeout = atoll(extra_options.min_speed_timeout);
 
   if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
   {
@@ -1300,6 +1410,8 @@ bool initialise_options(struct fuse_args args)
     fprintf(stderr,
             "  min_speed_limit_progressive=[0 to disable, or = number of transferred bytes per second limit under which operation will be aborted and resumed]\n");
     fprintf(stderr,
+            "  min_speed_timeout=[number of seconds after which slow operation will be aborted and resumed]\n");
+    fprintf(stderr,
             "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
     return false;
   }
@@ -1334,6 +1446,7 @@ int main(int argc, char** argv)
             option_enable_progressive_upload);
     fprintf(stderr, "min_speed_limit_progressive = %d\n",
             option_min_speed_limit_progressive);
+    fprintf(stderr, "min_speed_timeout = %d\n", option_min_speed_timeout);
     fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
   }
   cloudfs_set_credentials(options.client_id, options.client_secret,

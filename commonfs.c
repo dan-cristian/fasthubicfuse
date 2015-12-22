@@ -42,7 +42,8 @@ bool option_enable_chown = false;
 bool option_enable_chmod = false;
 bool option_enable_progressive_upload = false;
 bool option_enable_progressive_download = false;
-double option_min_speed_limit_progressive = 0;
+long option_min_speed_limit_progressive = 0;//use long not double
+long option_min_speed_timeout;
 long option_read_ahead = 0;
 size_t file_buffer_size = 0;
 
@@ -181,6 +182,7 @@ int file_md5(FILE* file_handle, char* md5_file_str)
   char mdchar[3];//2 chars for md5 + null string terminator
   unsigned char* data_buf = malloc(1024 * sizeof(unsigned char));
   MD5_Init(&mdContext);
+  assert(fseek(file_handle, 0, SEEK_SET) == 0);
   while ((bytes = fread(data_buf, 1, 1024, file_handle)) != 0)
     MD5_Update(&mdContext, data_buf, bytes);
   MD5_Final(c, &mdContext);
@@ -194,6 +196,38 @@ int file_md5(FILE* file_handle, char* md5_file_str)
   debugf(DBG_LEVEL_EXT, "file_md5: end compute sum=%s fp=%p",
          md5_file_str, file_handle);
   return 0;
+}
+
+/*
+  determines if local cache content equals cloud content
+*/
+bool file_changed_md5(dir_entry* de)
+{
+  bool result;
+  result = (!de->md5sum || !de->md5sum_local
+            || strcasecmp(de->md5sum_local, de->md5sum));
+  return result;
+}
+
+/*
+  determines if cached file time is different than cloud time.
+  if different this usually means content has changed (write or trunc).
+*/
+bool file_changed_time(dir_entry* de)
+{
+  bool result;
+  result = (de->ctime.tv_sec != de->ctime_local.tv_sec
+            || de->ctime.tv_nsec == de->ctime_local.tv_nsec);
+  return result;
+}
+
+int update_direntry_md5sum(char* md5sum_str, FILE* fp)
+{
+  char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+  file_md5(fp, md5_file_hash_str);
+  if (md5sum_str)
+    free(md5sum_str);
+  md5sum_str = strdup(md5_file_hash_str);
 }
 
 int file_md5_by_name(const char* file_name_str, char* md5_file_str)
@@ -604,7 +638,7 @@ dir_entry* init_dir_entry()
   de->downld_buf.sem_name_list[SEM_FULL] = NULL;
   de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
-  de->is_segmented = -1;//undefined
+  de->is_segmented = false;
   de->segments = NULL;
   de->segment_count = 0;
   de->segment_part = -1;
@@ -871,6 +905,7 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
                              //int segment_part,
                              FILE** fp_segment, const char* method)
 {
+  assert(*fp_segment == NULL);
   char segment_file_path[NAME_MAX] = {0};
   char segment_file_dir[NAME_MAX] = {0};
   get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
@@ -879,40 +914,21 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
   if (stat(segment_file_dir, &dir_status) == -1)
     mkdir(segment_file_dir, 0700);
   bool file_exist = access(segment_file_path, F_OK) != -1;
-  if (*fp_segment != NULL)
-  {
-    debugf(DBG_LEVEL_EXT, KRED "open_segment_from_cache(%s) fp not null!",
-           de_seg->name);
-    abort();
-  }
   // todo: check open modes
   *fp_segment = fopen(segment_file_path, method[0] == 'G' ?
                       (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
-
   int err = errno;
-  if (*fp_segment == NULL)
-  {
-    debugf(DBG_LEVEL_NORM,
-           KRED"open_segment_from_cache: failed to open %s, fp=%p err=%s",
-           segment_file_path, *fp_segment, strerror(err));
-    abort();
-  }
-  else
-    debugf(DBG_LEVEL_EXTALL,
-           KMAG"open_segment_from_cache: open segment fp=%p segindex=%d",
-           *fp_segment, de_seg->segment_part);
+  assert(*fp_segment);
+  debugf(DBG_LEVEL_EXTALL,
+         KMAG"open_segment_from_cache: open segment fp=%p segindex=%d",
+         *fp_segment, de_seg->segment_part);
   if (file_exist)
   {
     debugf(DBG_LEVEL_EXTALL,
            KMAG"open_segment_from_cache: found segment %d md5=%s",
            de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
-    if (fno == -1)
-    {
-      debugf(DBG_LEVEL_NORM, KRED
-             "open_segment_from_cache: segment fno is -1");
-      return false;
-    }
+    assert(fno != -1);
     //sleep_ms(1000);
     //check if segment is in cache, with md5sum ok
     if (de_seg->md5sum_local == NULL)
@@ -934,6 +950,56 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
              de_seg->md5sum_local, de_seg->md5sum);
       free(de_seg->md5sum_local);
       de_seg->md5sum_local = NULL;
+    }
+    return match;
+  }
+  return false;
+}
+
+/*
+  look for file in cache
+  if exists, check md5sum, returns file handle to file in cache
+  if does not exist, create file and return handle
+*/
+bool open_file_from_cache(dir_entry* de, FILE** fp, const char* method)
+{
+  assert(*fp == NULL);
+  char file_path[NAME_MAX] = { 0 };
+  get_safe_cache_file_path(de->full_name, file_path, NULL, temp_dir, -1);
+  bool file_exist = access(file_path, F_OK) != -1;
+  // todo: check open modes
+  *fp = fopen(file_path, method[0] == 'G' ?
+              (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
+  int err = errno;
+  assert(*fp);
+  debugf(DBG_LEVEL_EXTALL, KMAG"open_file_from_cache: open fp=%p", *fp);
+  if (file_exist)
+  {
+    debugf(DBG_LEVEL_EXTALL, KMAG "open_file_from_cache: found file md5=%s",
+           de->md5sum);
+    int fno = fileno(*fp);
+    assert(fno != -1);
+    //sleep_ms(1000);
+    //check if segment is in cache, with md5sum ok
+    if (de->md5sum_local == NULL)
+    {
+      char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+      file_md5(*fp, md5_file_hash_str);
+      de->md5sum_local = strdup(md5_file_hash_str);
+    }
+    else
+      debugf(DBG_LEVEL_EXTALL, KMAG
+             "open_file_from_cache: md5sum_local=%s md5sum=%s",
+             de->md5sum_local, de->md5sum);
+    bool match = (de && de->md5sum != NULL
+                  && (!strcasecmp(de->md5sum_local, de->md5sum)));
+    if (!match)
+    {
+      debugf(DBG_LEVEL_EXT, "open_file_from_cache: "
+             KYEL "no match, md5sum_local=%s md5sum=%s",
+             de->md5sum_local, de->md5sum);
+      free(de->md5sum_local);
+      de->md5sum_local = NULL;
     }
     return match;
   }
