@@ -23,6 +23,7 @@
 #include <libxml/xpathInternals.h>
 #include <errno.h>
 #include <fuse.h>
+#include <assert.h>
 #include "commonfs.h"
 #include "cloudfsapi.h"
 #include "config.h"
@@ -38,6 +39,7 @@
 static char storage_url[MAX_URL_SIZE];
 static char storage_token[MAX_HEADER_SIZE];
 static pthread_mutex_t pool_mut;
+extern pthread_mutexattr_t segment_mutex_attr;
 static CURL* curl_pool[1024];
 static int curl_pool_count = 0;
 extern int debug;
@@ -708,8 +710,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
                              off_t file_size, int is_segment,
                              dir_entry* de_cached_entry, const char* unencoded_path)
 {
-  debugf(DBG_LEVEL_NORM, "send_request_size(%s) size=%lu (%s)", method,
-         file_size, path);
+  debugf(DBG_LEVEL_NORM, "send_request_size(%s) size=%lu seg=%d (%s:%s)",
+         method, file_size, is_segment, path, unencoded_path);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -870,8 +872,9 @@ static int send_request_size(const char* method, const char* path, void* fp,
       {
         is_download = true;
         info = (struct segment_info*)fp;
-        debugf(DBG_LEVEL_EXT, "send_request_size: GET SEGMENT (%s) fp=%p part=%d",
-               orig_path, fp, info->part);
+        debugf(DBG_LEVEL_EXT,
+               "send_request_size: GET SEGMENT (%s) fp=%p part=%d proc=%lu",
+               orig_path, fp, info->part, info->size_processed);
         /**/
         //download via callback
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -1149,7 +1152,6 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   bool multi_thread = false;
   FILE* seg_file;
   struct segment_info info;
-  //find segment number containing needed offset. get offset from de (is it thread safe?)
   info.method = method;
   info.part = job->segment_part;
   info.segment_size = job->de->segment_size;
@@ -1707,19 +1709,19 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
   char* encoded = curl_escape(job->de->full_name, 0);
   if (job->de->is_segmented)
   {
-    job->de_seg->downld_buf.download_started = true;
+    //job->de_seg->downld_buf.download_started = true;
     debugf(DBG_LEVEL_EXT,
            "cloudfs_object_downld_progressive(%s:%s): started seg download part=%d",
            job->de->name, job->de_seg->name, job->segment_part);
     //download all segments from cloud to local file, single or multi threaded
-    run_segment_threads_progressive("GET", job->de_seg->full_name, job);
-    job->de_seg->downld_buf.download_started = false;
-    debugf(DBG_LEVEL_EXT, KMAG
-           "cloudfs_object_downld_progressive: 1-post buffer signal full");
-    sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
-    debugf(DBG_LEVEL_EXT, KMAG
-           "cloudfs_object_downld_progressive: 2-post buffer signal full");
-    sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
+    run_segment_threads_progressive(HTTP_GET, job->de_seg->full_name, job);
+    //job->de_seg->downld_buf.download_started = false;
+    //debugf(DBG_LEVEL_EXT, KMAG
+    //       "cloudfs_object_downld_progressive: 1-post buffer signal full");
+    //sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
+    //debugf(DBG_LEVEL_EXT, KMAG
+    //       "cloudfs_object_downld_progressive: 2-post buffer signal full");
+    //sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
     //todo: check what close/clean ops with download_buf needs done
     debugf(DBG_LEVEL_EXT,
            "cloudfs_object_downld_progressive(%s:%s): done download",
@@ -1731,7 +1733,7 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
            "cloudfs_object_downld_progressive(%s): started non-segmented download",
            job->de->name);
     //get an un-segmented file
-    int response = send_request("GET", encoded,
+    int response = send_request(HTTP_GET, encoded,
                                 job->de->downld_buf.local_cache_file,
                                 NULL, NULL, NULL, job->de->full_name);
     curl_free(encoded);
@@ -1764,59 +1766,61 @@ int download_ahead_segment_thread(void* arg)
   dir_entry* de_seg;
   bool in_cache;
   long seg_read_ahead_count;
-  struct thread_job* seg_job = malloc(sizeof(struct thread_job));
   if (option_read_ahead == -1)
     seg_read_ahead_count = job->de->segment_count - job->segment_part;
   else //ceil or floor does not compile/link properly
     seg_read_ahead_count = (option_read_ahead / job->de->segment_size) + 1;
+  FILE* fp_segment = NULL;
+
   for (segindex = job->segment_part;
        (segindex < job->de->segment_count
-        && segindex < job->segment_part + seg_read_ahead_count);
-       segindex++)
+        && segindex < job->segment_part + seg_read_ahead_count); segindex++)
   {
     de_seg = get_segment(job->de, segindex);
+    assert(de_seg);
     debugf(DBG_LEVEL_EXT, KCYN
            "download_ahead_segment_th(%s:%s): from segindex=%d count=%d",
            job->de->name, (de_seg ? de_seg->name : ""), segindex,
            job->segment_part + seg_read_ahead_count);
     if (de_seg)
     {
-      in_cache = open_segment_from_cache(job->de, de_seg,
-                                         &de_seg->downld_buf.local_cache_file,
-                                         "GET");
+      in_cache = open_segment_from_cache(job->de, de_seg, &fp_segment, HTTP_GET);
+      assert(fp_segment);
       if (!in_cache)
-      {
-        init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
-        seg_job->de = job->de;
-        seg_job->de_seg = de_seg;
-        seg_job->segment_part = segindex;
-        seg_job->self_reference = seg_job;
-        seg_job->is_single_thread = true;
-        cloudfs_object_downld_progressive(seg_job);
-      }
-      fclose(de_seg->downld_buf.local_cache_file);
-      de_seg->downld_buf.local_cache_file = NULL;
+        cloudfs_download_segment(de_seg, job->de, fp_segment, 0);
+      fclose(fp_segment);
+      fp_segment = NULL;
     }
   }
   debugf(DBG_LEVEL_EXT, KCYN
          "download_ahead_segment_th(%s): exit segindex=%d",
          job->de->name, segindex);
-  free(seg_job);
-  job->de->downld_buf.reading_ahead = false;
+  job->de->downld_buf.ahead_thread_count--;
+  free(job->self_reference);
 }
 
 /*
-  downloading ahead segments
+  downloading ahead segments.
+  if sync_first = true, get first segment sync and rest async.
 */
-int download_ahead_segment(dir_entry* de, int seg_part)
+int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
+                           bool sync_first)
 {
   debugf(DBG_LEVEL_EXT, KCYN "download_ahead_segment(%s): segindex=%d",
-         de->name, seg_part);
-  de->downld_buf.reading_ahead = true;
+         de->name, de_seg->segment_part);
+  de->downld_buf.ahead_thread_count++;
+  int index = 0;
+  if (sync_first)
+  {
+    //get current segment sync.
+    cloudfs_download_segment(de_seg, de, fp, 0);
+    index = 1;
+  }
+  //get the rest async.
   struct thread_job* job = malloc(sizeof(struct thread_job));
   job->de = de;
-  job->segment_part = seg_part;
-  job->self_reference = job;
+  job->segment_part = de_seg->segment_part + index;
+  job->self_reference = job;//todo: free this
   pthread_create(&job->thread, NULL,
                  (void*)download_ahead_segment_thread, job);
   return true;
@@ -1827,26 +1831,69 @@ int download_ahead_segment(dir_entry* de, int seg_part)
   size = 0 for segments read ahead and saved to local cache files
   download completion is signaled via semaphores
 */
-int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de,
+int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                              size_t size)
 {
+  debugf(DBG_LEVEL_EXT, KMAG
+         "cloudfs_download_segment: starting download %s part=%lu",
+         de->name, de_seg->segment_part);
+  if (!de_seg->downld_buf.mutex_initialised)
+  {
+    pthread_mutex_init(&de_seg->downld_buf.mutex, &segment_mutex_attr);
+    de_seg->downld_buf.mutex_initialised = true;
+  }
+  pthread_mutex_lock(&de_seg->downld_buf.mutex);
+  debugf(DBG_LEVEL_EXT, KMAG "cloudfs_download_segment: passed lock %s part=%lu",
+         de->name, de_seg->segment_part);
+  //after lock file might be in cache already
+  if (de_seg->md5sum_local != NULL
+      && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)))
+  {
+    debugf(DBG_LEVEL_EXT, KMAG
+           "cloudfs_download_segment: cache ok after lock %s part=%lu",
+           de->name, de_seg->segment_part);
+    pthread_mutex_unlock(&de_seg->downld_buf.mutex);
+    return true;
+  }
+
   init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
   de_seg->downld_buf.fuse_read_size = size;
-  struct thread_job* job = malloc(sizeof(struct thread_job));
-  job->de = de;
-  job->de_seg = de_seg;
-  job->segment_part = de_seg->segment_part;
-  job->self_reference = job;
-  job->is_single_thread = true;
-  //pthread_create(&job->thread, NULL,
-  //               (void*)cloudfs_object_downld_progressive, job);
-  cloudfs_object_downld_progressive(job);
-  fclose(de_seg->downld_buf.local_cache_file);
-  de_seg->downld_buf.local_cache_file = NULL;
-  free(job);
-  debugf(DBG_LEVEL_NORM, KBLU
-         "cloudfs_download_segment: started download fp=%p part=%lu",
-         de_seg->downld_buf.local_cache_file, de_seg->segment_part);
+  struct segment_info info;
+  info.method = HTTP_GET;
+  info.part = de_seg->segment_part;
+  info.segment_size = de->segment_size;
+  info.size = de_seg->segment_part < de->segment_full_count ?
+              de->segment_size : de->segment_remaining;
+  //need a copy for resume as info.size will be changed during download
+  info.size_copy = info.size;
+  info.size_processed = 0;
+  info.seg_base = de_seg->full_name;
+  info.de = de_seg;
+  info.fp = fp;
+  info.de->is_progressive = false;
+  info.de->is_single_thread = true;
+  assert(info.fp);
+  assert(fseek(info.fp, 0, SEEK_SET) == 0);
+  setvbuf(info.fp, NULL, _IOFBF, DISK_BUFF_SIZE);
+  char* encoded = curl_escape(info.seg_base, 0);
+  int response = send_request_size(info.method, encoded, &info, NULL, NULL,
+                                   info.size, 1, NULL, info.seg_base);
+  if (!(response >= 200 && response < 300))
+    debugf(DBG_LEVEL_NORM, KRED
+           "cloudfs_download_segment: %s failed resp=%d proc=%lu",
+           info.seg_base, response, info.size_processed);
+  curl_free(encoded);
+  fflush(info.fp);
+
+  sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
+
+  free_semaphores(&de_seg->downld_buf, SEM_EMPTY);
+  free_semaphores(&de_seg->downld_buf, SEM_FULL);
+  pthread_mutex_unlock(&de_seg->downld_buf.mutex);
+  debugf(DBG_LEVEL_EXT, KMAG
+         "cloudfs_download_segment: done fp=%p part=%lu proc=%lu",
+         de_seg->downld_buf.local_cache_file, de_seg->segment_part,
+         info.size_processed);
   return true;
 }
 

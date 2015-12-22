@@ -27,6 +27,7 @@
 
 pthread_mutex_t dcachemut;
 pthread_mutexattr_t mutex_attr;
+pthread_mutexattr_t segment_mutex_attr;
 dir_cache* dcache;
 char* temp_dir;
 int cache_timeout;
@@ -483,12 +484,16 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
          de->full_name,
          prefix, strlen(prefix));
   char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + 20] = "\0";
-  int errsv;
-  int sem_val;
+  int errsv, sem_val, i;
   char* sem_name;
-  int i;
   for (i = 0; i < 2; i++)
   {
+    if (data_buf->sem_list[i] || data_buf->sem_name_list[i])
+    {
+      debugf(DBG_LEVEL_NORM, KYEL
+             "init_semaphores(%s): semaphore %d not null @init", de->name, i);
+      abort();
+    }
     if (i == SEM_EMPTY)
       sem_name = "isempty";
     else if (i == SEM_FULL)
@@ -563,10 +568,6 @@ long random_at_most(long max)
   return x / bin_size;
 }
 
-int open_semaphores()
-{
-
-}
 
 dir_entry* init_dir_entry()
 {
@@ -590,13 +591,18 @@ dir_entry* init_dir_entry()
   de->upload_buf.upload_completed = false;
   de->upload_buf.write_completed = false;
   de->upload_buf.local_cache_file = NULL;
-  de->downld_buf.download_started = false;
+  //de->downld_buf.download_started = false;
   de->downld_buf.local_cache_file = NULL;
-  de->downld_buf.reading_ahead = false;
+  //de->downld_buf.reading_ahead = false;
   de->downld_buf.fuse_read_size = -1;
   de->downld_buf.work_buf_size = -1;
   de->downld_buf.offset = -1;
-
+  de->downld_buf.mutex_initialised = false;
+  de->downld_buf.sem_list[SEM_EMPTY] = NULL;
+  de->downld_buf.sem_list[SEM_FULL] = NULL;
+  de->downld_buf.sem_name_list[SEM_EMPTY] = NULL;
+  de->downld_buf.sem_name_list[SEM_FULL] = NULL;
+  de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
   de->is_segmented = -1;//undefined
   de->segments = NULL;
@@ -875,8 +881,8 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
   bool file_exist = access(segment_file_path, F_OK) != -1;
   if (*fp_segment != NULL)
   {
-    debugf(DBG_LEVEL_EXT, KRED "open_segment_from_cache(%s) fp not null, down=%d!",
-           de_seg->name, de_seg->downld_buf.download_started);
+    debugf(DBG_LEVEL_EXT, KRED "open_segment_from_cache(%s) fp not null!",
+           de_seg->name);
     abort();
   }
   // todo: check open modes
@@ -885,9 +891,12 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
 
   int err = errno;
   if (*fp_segment == NULL)
+  {
     debugf(DBG_LEVEL_NORM,
            KRED"open_segment_from_cache: failed to open %s, fp=%p err=%s",
            segment_file_path, *fp_segment, strerror(err));
+    abort();
+  }
   else
     debugf(DBG_LEVEL_EXTALL,
            KMAG"open_segment_from_cache: open segment fp=%p segindex=%d",
@@ -920,13 +929,14 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
                   && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
     if (!match)
     {
+      debugf(DBG_LEVEL_EXT, "open_segment_from_cache: "
+             KYEL "no match, md5sum_local=%s md5sum=%s",
+             de_seg->md5sum_local, de_seg->md5sum);
       free(de_seg->md5sum_local);
       de_seg->md5sum_local = NULL;
     }
-    //rewind(*fp_segment);
     return match;
   }
-  //fflush(fp_segment);
   return false;
 }
 

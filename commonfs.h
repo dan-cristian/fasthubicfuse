@@ -33,6 +33,8 @@ typedef enum { false, true } bool;
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
 #define TEMP_SEGMENT_DIR_SUFFIX "_segments"
 #define TEMP_SEGMENT_FORMAT "_segments/%d"
+#define HTTP_GET "GET"
+#define HTTP_PUT "PUT"
 
 #define KNRM  "\x1B[0m"
 #define KRED  "\x1B[31m"
@@ -68,9 +70,11 @@ typedef struct progressive_data_buf
   bool upload_completed;
   bool write_completed;
   bool file_is_in_cache;
-  bool download_started;
-  bool reading_ahead;
+  //bool download_started;
+  int ahead_thread_count;
   pthread_t thread;
+  pthread_mutex_t mutex;
+  bool mutex_initialised;
   sem_t* isempty_semaphore;
   char* isempty_semaphore_name;
   sem_t* isfull_semaphore;
