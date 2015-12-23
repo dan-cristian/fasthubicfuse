@@ -33,6 +33,8 @@ char* temp_dir;
 int cache_timeout;
 int debug = 0;
 int verify_ssl = 2;
+long segment_size;//segment file size
+long segment_above;//max size of a file before being segmented
 bool option_get_extended_metadata = false;
 bool option_curl_verbose = false;
 int option_cache_statfs_timeout = 0;
@@ -436,8 +438,9 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
   }
 }
 
-/*return a segment entry from dir_entry
-  NOTE: it also sets the segment_part field
+/*
+  return a segment entry from dir_entry
+  NOTE!: it also sets the segment_part field
 */
 dir_entry* get_segment(dir_entry* de, int segment_index)
 {
@@ -454,7 +457,45 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
     }
     des = des->next;
   }
-  return NULL;
+  return des;//this will be NULL
+}
+
+/*
+  returns the segment.
+  if does not exist then a new empty segment is created, used when writing new files.
+*/
+dir_entry* get_create_segment(dir_entry* de, int segment_index)
+{
+  dir_entry* de_seg = get_segment(de, segment_index);
+  if (!de_seg)
+  {
+    de_seg = init_dir_entry();
+    de_seg->segment_part = segment_index;
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    char string_float[TIME_CHARS];
+    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+    char meta_mtime[TIME_CHARS];
+    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+    char seg_base[MAX_URL_SIZE] = "";
+    char container[MAX_URL_SIZE] = "";
+    char object[MAX_URL_SIZE] = "";
+    split_path(de->full_name, seg_base, container, object);
+    char manifest[MAX_URL_SIZE];
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
+             container, object, meta_mtime, /* how to get this? de->size*/, segment_size);
+    char tmp[MAX_URL_SIZE];
+    strncpy(tmp, seg_base, MAX_URL_SIZE);
+    snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
+    char seg_name[8 + 1] = { 0 };
+    snprintf(seg_name, 8 + 1, "%08i", segment_index);
+    de_seg->name = strdup(seg_name);
+    char seg_path[MAX_URL_SIZE] = { 0 };
+    snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, segment_index);
+    de_seg->full_name = strdup(seg_path);
+  }
+  return de_seg;
 }
 
 void dir_decache(const char* path)
@@ -622,8 +663,8 @@ dir_entry* init_dir_entry()
   de->chmod = 0;
   de->gid = 0;
   de->uid = 0;
-  de->upload_buf.upload_completed = false;
-  de->upload_buf.write_completed = false;
+  //de->upload_buf.upload_completed = false;
+  //de->upload_buf.write_completed = false;
   de->upload_buf.local_cache_file = NULL;
   //de->downld_buf.download_started = false;
   de->downld_buf.local_cache_file = NULL;
@@ -636,6 +677,10 @@ dir_entry* init_dir_entry()
   de->downld_buf.sem_list[SEM_FULL] = NULL;
   de->downld_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_name_list[SEM_FULL] = NULL;
+  de->upload_buf.sem_list[SEM_EMPTY] = NULL;
+  de->upload_buf.sem_list[SEM_FULL] = NULL;
+  de->upload_buf.sem_name_list[SEM_EMPTY] = NULL;
+  de->upload_buf.sem_name_list[SEM_FULL] = NULL;
   de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
   de->is_segmented = false;
@@ -694,7 +739,6 @@ void update_dir_cache(const char* path, off_t size, int isdir, int islink)
       de->name = strdup(&path[strlen(cw->path) + 1]);
       de->full_name = strdup(path);
 
-      //fix: the conditions below were mixed up dir -> link?
       if (islink)
         de->content_type = strdup("application/link");
       if (isdir)
@@ -898,16 +942,15 @@ dir_entry* check_path_info(const char* path)
 
 /*
   look for segment in cache
-  if exists, check md5sum, returns file handle to file in cache
+  if exists, returns file handle to file in cache
   if does not exist, create file and return handle
 */
-bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
-                             //int segment_part,
-                             FILE** fp_segment, const char* method)
+bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
+                           FILE** fp_segment, const char* method)
 {
   assert(*fp_segment == NULL);
-  char segment_file_path[NAME_MAX] = {0};
-  char segment_file_dir[NAME_MAX] = {0};
+  char segment_file_path[NAME_MAX] = { 0 };
+  char segment_file_dir[NAME_MAX] = { 0 };
   get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
                            temp_dir, de_seg->segment_part);
   struct stat dir_status = { 0 };
@@ -929,7 +972,25 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
            de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
     assert(fno != -1);
-    //sleep_ms(1000);
+  }
+  return file_exist;
+}
+
+/*
+  look for segment in cache
+  if exists, check md5sum, returns file handle to file in cache
+  if does not exist, create file and return handle
+*/
+bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
+                            FILE** fp_segment, const char* method)
+{
+  bool file_exist = open_segment_in_cache(de, de_seg, fp_segment, method);
+
+  if (file_exist)
+  {
+    debugf(DBG_LEVEL_EXTALL,
+           KMAG"open_segment_from_cache: found segment %d md5=%s",
+           de_seg->segment_part, de_seg->md5sum);
     //check if segment is in cache, with md5sum ok
     if (de_seg->md5sum_local == NULL)
     {
@@ -956,6 +1017,25 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
   return false;
 }
 
+/*
+  verify if file is in cache and has correct content
+*/
+bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
+{
+  bool result = false;
+  char segment_file_path[NAME_MAX] = { 0 };
+  get_safe_cache_file_path(de->full_name, segment_file_path, NULL,
+                           temp_dir, de_seg->segment_part);
+  bool file_exist = access(segment_file_path, F_OK) != -1;
+  if (file_exist)
+  {
+    size_t seg_size = cloudfs_file_size(fileno(fp));
+    if (seg_size == de_seg->size)
+      result = (de && de->md5sum && de_seg->md5sum_local && de_seg->md5sum
+                && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
+  }
+  return result;
+}
 /*
   returns if file was found in cache and sets open fp pointer
 */
@@ -991,8 +1071,6 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   {
     debugf(DBG_LEVEL_EXTALL, KMAG "open_file_cache_md5: found file md5=%s",
            de->md5sum);
-    int fno = fileno(*fp);
-    assert(fno != -1);
     //check if segment is in cache, with md5sum ok
     if (de->md5sum_local == NULL)
     {

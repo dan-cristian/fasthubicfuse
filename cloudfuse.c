@@ -525,7 +525,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       {
         bool in_cache;
         FILE* fp_segment = NULL;
-        in_cache = open_segment_from_cache(de, de_seg, &fp_segment, HTTP_GET);
+        in_cache = open_segment_cache_md5(de, de_seg, &fp_segment, HTTP_GET);
         if (!in_cache)
         {
           debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): seg %d " KYEL "not in cache",
@@ -553,7 +553,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                  "cfs_read: got full data seg=%s", de_seg->name);
           fclose(fp_segment);
           fp_segment = NULL;
-          in_cache = open_segment_from_cache(de, de_seg, &fp_segment, HTTP_GET);
+          in_cache = open_segment_cache_md5(de, de_seg, &fp_segment, HTTP_GET);
           if (!in_cache)
             debugf(DBG_LEVEL_EXT, KYEL
                    "cfs_read: read ahead failed seg=%s", de_seg->name);
@@ -650,9 +650,9 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     return result;
   }
 
+  //non-segmented files
   if (de && !de->is_segmented)
   {
-    //handle progressive download for not segmented files
     debugf(DBG_LEVEL_NORM, "cfs_read(%s): read non segmented file", path);
     bool in_cache;
     FILE* fp_file = NULL;
@@ -797,14 +797,27 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   */
   //else //fh == -1
   //{
-  if (!de->is_segmented)
+
+  if (option_enable_progressive_upload && de->size > 0)
+  {
+    debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
+           path, de->size);
+    //signal completion of read/write operation
+    //de->upload_buf.write_completed = true;
+    //signal last data available in buffer for upload
+    if (de->upload_buf.sem_list[SEM_FULL])
+      sem_post(de->upload_buf.sem_list[SEM_FULL]);
+    //if (de->upload_buf.sem_list[SEM_EMPTY])
+    //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+    errsv = 0;
+  }
+
+  //if segmented or progressive upload is already done by now, skip it
+  if (!de->is_segmented && !option_enable_progressive_upload)
   {
     if (/*file_changed_time(de) || */file_changed_md5(de))
     {
       debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content changed", de->name);
-      //FILE* fp = NULL;
-      //open_file_from_cache(de, &fp, HTTP_PUT);
-      //cloudfs_object_read_fp(path, fp);
       cloudfs_upload_segment(de, de);
     }
     else
@@ -861,6 +874,9 @@ static int cfs_ftruncate(const char* path, off_t size,
   return 0;
 }
 
+/*
+  upload file to cloud
+*/
 static int cfs_write(const char* path, const char* buf, size_t length,
                      off_t offset, struct fuse_file_info* info)
 {
@@ -868,129 +884,114 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     debugf(DBG_LEVEL_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
   else
-    debugf(DBG_LEVEL_EXT, KBLU
+    debugf(DBG_LEVEL_EXTALL, KBLU
            "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
   int result, errsv;
-  // FIXME: Potential inconsistent cache update if pwrite fails?
-  update_dir_cache(path, offset + length, 0, 0);
-  if (info->fh != -1)
-  {
-    //writes to local cache file
-    result = pwrite(((openfile*)(uintptr_t)info->fh)->fd, buf, length, offset);
-    errsv = errno;
-  }
   dir_entry* de = check_path_info(path);
-
-  //todo: send data also to progressive upload buffer and wait
-  //until this data chunck is uploaded, to show real upload progress
-  //fixme: prior check of md5sum file content not done here, upload optimisation not functional
-  if (option_enable_progressive_upload)
+  if (!de)
   {
-    int sem_val_full, sem_val_empty;
-    dir_entry* de = check_path_info(path);
-    if (de)
-    {
-      de->upload_buf.offset = offset;
-      de->upload_buf.readptr = buf;
-      de->upload_buf.work_buf_size = length;
-      //debugf(DBG_LEVEL_EXTALL, KCYN"BUF=[%s]", de->upload_buf.readptr);
-      if (offset == 0)
-      {
-        de->upload_buf.write_completed = false;
-        //start upload op with a new thread
-        debugf(DBG_LEVEL_NORM, KBLU"cfs_write(%s) start upload thread buf_len=%lu",
-               path, length);
-        //using semaphores for buffer upload
-        //http://pages.cs.wisc.edu/~remzi/Classes/537/Fall2008/Notes/threads-semaphores.txt
-        //semaphore prefix len must be < 20
-        char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + 20] = "\0";
-        snprintf(semaphore_name, sizeof(semaphore_name), "/isempty_%s",
-                 de->full_name_hash);
-        //don't forget to free this
-        de->upload_buf.isempty_semaphore_name = strdup(
-            semaphore_name);
-        //ensure semaphore does not exist
-        //(might be in the system from a previous unclean finished operation)
-        sem_unlink(de->upload_buf.isempty_semaphore_name);
-        if ((de->upload_buf.isempty_semaphore = sem_open(
-            de->upload_buf.isempty_semaphore_name, O_CREAT | O_EXCL, 0644,
-            0)) == SEM_FAILED)
-        {
-          errsv = errno;
-          debugf(DBG_LEVEL_NORM,
-                 KRED"cfs_write(%s): cannot init isempty semaphore for progressive upload, err=%s",
-                 path, strerror(errsv));
-          exit(1);
-        }
-        else
-        {
-          sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_empty);
-          debugf(DBG_LEVEL_EXTALL,
-                 KMAG "cfs_write(%s): isempty_semaphore created, size_left=%lu, sem_val_empty=%d",
-                 path, de->upload_buf.work_buf_size, sem_val_empty);
-        }
-        snprintf(semaphore_name, sizeof(semaphore_name), "/isfull_%s",
-                 de->full_name_hash);
-        de->upload_buf.isfull_semaphore_name = strdup(semaphore_name);
-        sem_unlink(de->upload_buf.isfull_semaphore_name);
-        if ((de->upload_buf.isfull_semaphore = sem_open(
-            de->upload_buf.isfull_semaphore_name, O_CREAT | O_EXCL, 0644,
-            0)) == SEM_FAILED)
-        {
-          errsv = errno;
-          debugf(DBG_LEVEL_NORM,
-                 KRED"cfs_write(%s): cannot init isfull semaphore for progressive upload, err=%s",
-                 path, strerror(errsv));
-          exit(1);
-        }
-        else
-        {
-          sem_getvalue(de->upload_buf.isempty_semaphore, &sem_val_full);
-          debugf(DBG_LEVEL_EXTALL,
-                 KMAG "cfs_write(%s): isfull_semaphore created, size_left=%lu, sem_val_full=%d",
-                 path, de->upload_buf.work_buf_size, sem_val_full);
-        }
-        pthread_create(&de->upload_buf.thread, NULL,
-                       (void*)cloudfs_object_upload_progressive, de->full_name);
-        debugf(DBG_LEVEL_EXTALL, KMAG "cfs_write(%s): curl upload initialised", path);
-      }
-      //signal there is data available in buffer for upload
-      sem_post(de->upload_buf.isfull_semaphore);
-      //wait until previous buffer data is uploaded
-      sem_wait(de->upload_buf.isempty_semaphore);
-      sem_getvalue(de->upload_buf.isfull_semaphore, &sem_val_full);
-      debugf(DBG_LEVEL_EXTALL,
-             KMAG "cfs_write(%s): new buffer ready for upload, sem_val_full=%d", path,
-             sem_val_full);
-    }
-    else
-      debugf(DBG_LEVEL_EXT,
-             "cfs_write(%s):"KRED" unexpected missing path from cache on progressive write",
-             path);
+    update_dir_cache(path, offset, 0, 0);
+    de = check_path_info(path);
   }
-  else//not progressive
+  assert(de);
+  /*
+    if (de->is_segmented)
+    {
+    int i;
+    dir_entry* de_seg;
+    size_t file_size = offset + length;
+    long seg_count = file_size / segment_size;
+    FILE* fp = NULL;
+    int seg_index = offset / segment_size;
+    if (file_size % segment_size > 0)
+      seg_count++;
+
+    for (i = seg_index)
+    {
+      de_seg = get_create_segment(de, seg_index);
+      //todo: work in progress
+      open_segment_in_cache(de, de_seg, &fp, HTTP_PUT);
+      int fno = fileno(fp);
+      assert(fno != -1);
+      result = pwrite(fno, buf, length, offset);
+      errsv = errno;
+      fclose(fp);
+      clock_gettime(CLOCK_REALTIME, &de->ctime_local);
+      de_seg->size = offset + result;//length;
+    }
+    debugf(DBG_LEVEL_EXT, KBLU "exit 1: cfs_write(%s) result=%s", path,
+           strerror(errsv));
+    return result;
+    }
+
+  */
+  //if (!de->is_segmented)
+  //{
+  //todo: prior check of md5sum file content not done here,
+  //upload optimisation not functional
+  if (!option_enable_progressive_upload)
   {
+    //regular upload, copy first in cache, upload at flush, no progress
     FILE* fp = NULL;
     bool in_cache = open_file_in_cache(de, &fp, HTTP_PUT);
     int fno = fileno(fp);
     assert(fno != -1);
     result = pwrite(fno, buf, length, offset);
+    de->size = offset + result;
     errsv = errno;
     fclose(fp);
-  }
-  if (errsv == 0)
+    clock_gettime(CLOCK_REALTIME, &de->ctime_local);
+    if (de->md5sum_local)
+    {
+      free(de->md5sum_local);
+      de->md5sum_local = NULL;
+    }
     debugf(DBG_LEVEL_EXT, KBLU "exit 0: cfs_write(%s) result=%s", path,
            strerror(errsv));
-  else
-    debugf(DBG_LEVEL_EXT, KBLU "exit 1: cfs_write(%s) "KRED"result=%s", path,
-           strerror(errsv));
-  clock_gettime(CLOCK_REALTIME, &de->ctime_local);
-  if (de->md5sum_local)
-  {
-    free(de->md5sum_local);
-    de->md5sum_local = NULL;
+    return result;
   }
-  return result;
+  else
+  {
+    dir_entry* de_seg;
+    int sem_val_full, sem_val_empty;
+    de->upload_buf.offset = offset;
+    de->upload_buf.readptr = buf;
+    de->upload_buf.work_buf_size = length;
+    de->size = offset + length;
+    if (option_enable_progressive_upload)// && de->size > segment_above)
+    {
+      int seg_index = offset / segment_size;
+      de_seg = get_create_segment(de, seg_index);
+    }
+    if (offset == 0)
+    {
+      init_semaphores(&de->upload_buf, de, "upload");
+      //progressive for large (segmented files)
+      if (option_enable_progressive_upload)// && de->size > segment_above)
+      {
+        bool folder_ok = cloudfs_create_segment(de_seg, de);
+        assert(folder_ok);
+        ;
+      }
+      else //progressive for non-segmented files
+      {
+        //start file upload with a new thread
+        debugf(DBG_LEVEL_NORM, KBLU"cfs_write(%s) start upload thread buf_len=%lu",
+               path, length);
+        pthread_create(&de->upload_buf.thread, NULL,
+                       (void*)cloudfs_object_upload_progressive, de->full_name);
+      }
+    }
+    //signal there is data available in buffer for upload
+    sem_post(de->upload_buf.sem_list[SEM_FULL]);//isfull_semaphore);
+    //wait until previous buffer data is uploaded
+    sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);//isempty_semaphore);
+    sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
+    debugf(DBG_LEVEL_EXTALL, KMAG
+           "cfs_write(%s): buffer for upload, sem_val_full=%d", path,
+           sem_val_full);
+    return length;//?
+  }
 }
 
 static int cfs_unlink(const char* path)
@@ -1048,40 +1049,46 @@ static int cfs_statfs(const char* path, struct statvfs* stat)
 
 static int cfs_chown(const char* path, uid_t uid, gid_t gid)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
-  dir_entry* de = check_path_info(path);
-  if (de)
+  if (option_enable_chown)
   {
-    if (de->uid != uid || de->gid != gid)
+    debugf(DBG_LEVEL_NORM, KBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
+    dir_entry* de = check_path_info(path);
+    if (de)
     {
-      debugf(DBG_LEVEL_NORM, "cfs_chown(%s): change from uid:gid %d:%d to %d:%d",
-             path, de->uid, de->gid, uid, gid);
-      de->uid = uid;
-      de->gid = gid;
-      //issue a PUT request to update metadata (quick request just to update headers)
-      int response = cloudfs_update_meta(de);
+      if (de->uid != uid || de->gid != gid)
+      {
+        debugf(DBG_LEVEL_NORM, "cfs_chown(%s): change from uid:gid %d:%d to %d:%d",
+               path, de->uid, de->gid, uid, gid);
+        de->uid = uid;
+        de->gid = gid;
+        //issue a PUT request to update metadata (quick request just to update headers)
+        int response = cloudfs_update_meta(de);
+      }
     }
+    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_chown(%s,%d,%d)", path, uid, gid);
   }
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_chown(%s,%d,%d)", path, uid, gid);
   return 0;
 }
 
 static int cfs_chmod(const char* path, mode_t mode)
 {
-  debugf(DBG_LEVEL_NORM, KBLU"cfs_chmod(%s,%d)", path, mode);
-  dir_entry* de = check_path_info(path);
-  if (de)
+  if (option_enable_chmod)
   {
-    if (de->chmod != mode)
+    debugf(DBG_LEVEL_NORM, KBLU"cfs_chmod(%s,%d)", path, mode);
+    dir_entry* de = check_path_info(path);
+    if (de)
     {
-      debugf(DBG_LEVEL_NORM, "cfs_chmod(%s): change mode from %d to %d", path,
-             de->chmod, mode);
-      de->chmod = mode;
-      //todo: issue a PUT request to update metadata (empty request just to update headers?)
-      int response = cloudfs_update_meta(de);
+      if (de->chmod != mode)
+      {
+        debugf(DBG_LEVEL_NORM, "cfs_chmod(%s): change mode from %d to %d", path,
+               de->chmod, mode);
+        de->chmod = mode;
+        //todo: issue a PUT request to update metadata (empty request just to update headers?)
+        int response = cloudfs_update_meta(de);
+      }
     }
+    debugf(DBG_LEVEL_NORM, KBLU"exit: cfs_chmod(%s,%d)", path, mode);
   }
-  debugf(DBG_LEVEL_NORM, KBLU"exit: cfs_chmod(%s,%d)", path, mode);
   return 0;
 }
 

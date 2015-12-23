@@ -8,6 +8,7 @@
 typedef enum { false, true } bool;
 #define MAX_PATH_SIZE (1024 + 256 + 3)
 #define THREAD_NAMELEN 16
+#define MAX_URL_SIZE (MAX_PATH_SIZE * 3)
 // 64 bit time + nanoseconds
 #define TIME_CHARS 32
 #define DBG_LEVEL_NORM 0
@@ -68,18 +69,13 @@ typedef struct progressive_data_buf
   const char* readptr;
   size_t work_buf_size;
   off_t offset;
-  bool upload_completed;
-  bool write_completed;
+  //bool upload_completed;
+  //bool write_completed;
   bool file_is_in_cache;
-  //bool download_started;
   int ahead_thread_count;
   pthread_t thread;
   pthread_mutex_t mutex;
   bool mutex_initialised;
-  sem_t* isempty_semaphore;
-  char* isempty_semaphore_name;
-  sem_t* isfull_semaphore;
-  char* isfull_semaphore_name;
   sem_t* sem_list[2];
   char* sem_name_list[2];
   size_t fuse_read_size;
@@ -182,14 +178,18 @@ dir_entry* path_info(const char* path);
 dir_entry* check_path_info(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
 dir_entry* get_segment(dir_entry* de, int segment_index);
+dir_entry* get_create_segment(dir_entry* de, int segment_index);
 void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
-bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
-                             FILE** fp_segment, const char* method);
+bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
+                           FILE** fp_segment, const char* method);
+bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
+                            FILE** fp_segment, const char* method);
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
+bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
 void sleep_ms(int milliseconds);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);

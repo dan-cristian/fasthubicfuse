@@ -8,7 +8,6 @@
 
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
-#define MAX_URL_SIZE (MAX_PATH_SIZE * 3)
 #define USER_AGENT "CloudFuse"
 #define OPTION_SIZE 1024
 #define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL 5
@@ -70,8 +69,8 @@ struct segment_info
   struct dir_entry* de;
 };
 
-long segment_size;//segment file size
-long segment_above;//max size of a file before being segmented
+extern long segment_size;//segment file size
+extern long segment_above;//max size of a file before being segmented
 
 char* override_storage_url;
 char* public_container;
@@ -101,4 +100,5 @@ int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
 int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                              size_t size);
 int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de);
+bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de);
 #endif
