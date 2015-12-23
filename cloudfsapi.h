@@ -61,7 +61,7 @@ struct segment_info
 {
   FILE* fp;
   int part;
-  long size;
+  long size_left;
   long size_copy;
   long size_processed;
   long segment_size;
@@ -100,4 +100,5 @@ int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                            bool sync_first);
 int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                              size_t size);
+int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de);
 #endif

@@ -957,29 +957,42 @@ bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
 }
 
 /*
-  look for file in cache
-  if exists, check md5sum, returns file handle to file in cache
-  if does not exist, create file and return handle
+  returns if file was found in cache and sets open fp pointer
 */
-bool open_file_from_cache(dir_entry* de, FILE** fp, const char* method)
+bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 {
   assert(*fp == NULL);
   char file_path[NAME_MAX] = { 0 };
   get_safe_cache_file_path(de->full_name, file_path, NULL, temp_dir, -1);
   bool file_exist = access(file_path, F_OK) != -1;
-  // todo: check open modes
   *fp = fopen(file_path, method[0] == 'G' ?
               (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
   int err = errno;
   assert(*fp);
-  debugf(DBG_LEVEL_EXTALL, KMAG"open_file_from_cache: open fp=%p", *fp);
   if (file_exist)
   {
-    debugf(DBG_LEVEL_EXTALL, KMAG "open_file_from_cache: found file md5=%s",
+    debugf(DBG_LEVEL_EXTALL, KMAG "open_file_in_cache(%s) ok", file_path);
+    int fno = fileno(*fp);
+    assert(fno != -1);
+  }
+  return file_exist;
+}
+
+/*
+  look for file in cache
+  if exists, check md5sum, returns file handle to file in cache
+  if does not exist, create file and return handle
+*/
+bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
+{
+  bool file_exist = open_file_in_cache(de, fp, method);
+  debugf(DBG_LEVEL_EXTALL, KMAG"open_file_cache_md5: open fp=%p", *fp);
+  if (file_exist)
+  {
+    debugf(DBG_LEVEL_EXTALL, KMAG "open_file_cache_md5: found file md5=%s",
            de->md5sum);
     int fno = fileno(*fp);
     assert(fno != -1);
-    //sleep_ms(1000);
     //check if segment is in cache, with md5sum ok
     if (de->md5sum_local == NULL)
     {
@@ -989,13 +1002,13 @@ bool open_file_from_cache(dir_entry* de, FILE** fp, const char* method)
     }
     else
       debugf(DBG_LEVEL_EXTALL, KMAG
-             "open_file_from_cache: md5sum_local=%s md5sum=%s",
+             "open_file_cache_md5: md5sum_local=%s md5sum=%s",
              de->md5sum_local, de->md5sum);
     bool match = (de && de->md5sum != NULL
                   && (!strcasecmp(de->md5sum_local, de->md5sum)));
     if (!match)
     {
-      debugf(DBG_LEVEL_EXT, "open_file_from_cache: "
+      debugf(DBG_LEVEL_EXT, "open_file_cache_md5: "
              KYEL "no match, md5sum_local=%s md5sum=%s",
              de->md5sum_local, de->md5sum);
       free(de->md5sum_local);

@@ -362,7 +362,8 @@ size_t fwrite2(void* ptr, size_t size, size_t nmemb, FILE* filep)
 }
 
 /*
-   pass data from a file for uploading multiple segments
+   helper for uploading/downloading file
+   detects file end
 */
 static size_t rw_callback(size_t (*rw)(void*, size_t, size_t, FILE*),
                           void* ptr,
@@ -371,25 +372,36 @@ static size_t rw_callback(size_t (*rw)(void*, size_t, size_t, FILE*),
   struct segment_info* info = (struct segment_info*)userp;
   size_t result;
   size_t mem = size * nmemb;
-  if (mem < 1 || info->size < 1)
+  if (mem < 1 || info->size_left < 1)
     result = 0;
   else
   {
-    size_t amt_read = rw(ptr, 1, info->size < mem ? info->size : mem, info->fp);
-    info->size -= amt_read;
+    size_t amt_read = rw(ptr, 1, info->size_left < mem ? info->size_left : mem,
+                         info->fp);
+    info->size_left -= amt_read;
     info->size_processed += amt_read;
     result = amt_read;
   }
-  assert(mem == result);
+  assert((mem == result) || (info->size_processed == info->size_copy));
   return result;
 }
 
+size_t fread2(void* ptr, size_t size, size_t nmemb, FILE* filep)
+{
+  size_t result = fread(ptr, size, nmemb, filep);
+  assert(result == size * nmemb);
+  return result;
+}
 /*
    pass data for uploading multiple segments
 */
 static size_t read_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
-  return rw_callback(fread, ptr, size, nmemb, userp);
+  struct segment_info* info = (struct segment_info*)userp;
+  debugf(DBG_LEVEL_EXT, KMAG
+         "read_callback: progressive=%d size=%lu current=%lu",
+         info->de->is_progressive, size * nmemb, info->size_processed);
+  return rw_callback(fread2, ptr, size, nmemb, userp);
 }
 
 /*
@@ -814,33 +826,32 @@ static int send_request_size(const char* method, const char* path, void* fp,
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_read_callback);
         curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de);
       }
-      else
+      else//not progressive
       {
         curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
         if (fp)
         {
           curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
-          debugf(DBG_LEVEL_EXT,
-                 "send_request_size: standard PUT (%s)", orig_path);
+          debugf(DBG_LEVEL_EXT, "send_request_size: standard PUT (%s)",
+                 orig_path);
           curl_easy_setopt(curl, CURLOPT_READDATA, fp);
+          curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
           //don't add header parsing on PUT as etag is incorrect
           //better run a head (get_meta) right after PUT
-
-          //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
-          //curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)de);
         }
-        else
+        else//no fp
         {
           debugf(DBG_LEVEL_EXT,
-                 "send_request_size: 0 content PUT, for updating meta (%s)", orig_path);
+                 "send_request_size: 0 content PUT, for updating meta (%s)",
+                 orig_path);
           curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
         }
       }
       if (is_segment)
       {
         //fixme: progressive upload not working if file is segmented. conflict on read_callback?
-        debugf(DBG_LEVEL_EXT,
-               "send_request_size(%s): PUT is segmented, "KYEL"readcallback used", orig_path);
+        debugf(DBG_LEVEL_EXT, "send_request_size(%s): PUT is segmented, "
+               KYEL "readcallback used", orig_path);
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
       }
       //get the response for debug purposes.
@@ -894,22 +905,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
           curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
           curl_easy_setopt(curl, CURLOPT_WRITEDATA, info->fp);
         */
-      }/*
-      else if (fp)
-      {
-        info = (struct segment_info*)fp;
-        debugf(DBG_LEVEL_EXT, "send_request_size: GET FP (%s)", orig_path);
-        // make sure the file is ready for a-writin'
-        assert(fseek(info->fp, 0, SEEK_SET) == 0);
-        //rewind(fp);
-        fflush(info->fp);
-        assert(ftruncate(fileno(info->fp), 0) == 0);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, info->fp);
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
-        // header sample by UThreadCurl.cpp, https://bitbucket.org/pamungkas5/bcbcurl/src
-        // and http://www.codeproject.com/Articles/838366/BCBCurl-a-LibCurl-based-download-manager
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)de);
-      }*/
+      }
       else if (xmlctx)
       {
         debugf(DBG_LEVEL_EXT, "send_request_size: GET XML (%s)", orig_path);
@@ -1031,6 +1027,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
   return response;
 }
 
+//if path is encoded cache entry will not be found, need to pass unencoded as well
+//todo: implement use of dir_entry instead of path for performance reasons.
 int send_request(char* method, const char* path, FILE* fp,
                  xmlParserCtxtPtr xmlctx, curl_slist* extra_headers, dir_entry* de_cached_entry,
                  const char* unencoded_path)
@@ -1074,9 +1072,9 @@ void* upload_segment(void* seginfo)
   */
   char* encoded = curl_escape(seg_path, 0);
   debugf(DBG_LEVEL_EXT, KCYN "upload_segment(%s) part=%d size=%d seg_size=%d %s",
-         info->method, info->part, info->size, info->segment_size, seg_path);
+         info->method, info->part, info->size_copy, info->segment_size, seg_path);
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size, 1, NULL, seg_path);
+                                   info->size_copy, 1, NULL, seg_path);
   if (!(response >= 200 && response < 300))
     fprintf(stderr, "Segment %s failed with response %d", seg_path,
             response);
@@ -1101,15 +1099,15 @@ void* upload_segment_progressive(void* seginfo)
   struct segment_info* info = (struct segment_info*)seginfo;
   debugf(DBG_LEVEL_EXT,
          "upload_segment_progressive: started segment part=%d size=%lu",
-         info->part, info->size);
+         info->part, info->size_copy);
   fseek(info->fp, 0, SEEK_SET);
   setvbuf(info->fp, NULL, _IOFBF, DISK_BUFF_SIZE);
   char* encoded = curl_escape(info->seg_base, 0);
   debugf(DBG_LEVEL_EXT, KCYN
          "upload_segment_progressive(%s) part=%d size=%d seg_size=%d %s",
-         info->method, info->part, info->size, info->segment_size, info->seg_base);
+         info->method, info->part, info->size_copy, info->segment_size, info->seg_base);
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size, 1, NULL, info->seg_base);
+                                   info->size_copy, 1, NULL, info->seg_base);
   if (!(response >= 200 && response < 300))
     debugf(DBG_LEVEL_NORM, KRED
            "upload_segment_progressive: Segment %s failed with response %d",
@@ -1149,11 +1147,11 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   info.method = method;
   info.part = job->segment_part;
   info.segment_size = job->de->segment_size;
-  info.size = job->segment_part < job->de->segment_full_count ?
-              job->de->segment_size :
-              job->de->segment_remaining;
+  info.size_left = job->segment_part < job->de->segment_full_count ?
+                   job->de->segment_size :
+                   job->de->segment_remaining;
   //need a copy for resume as info.size will be changed during download
-  info.size_copy = info.size;
+  info.size_copy = info.size_left;
   info.size_processed = 0;
   info.seg_base = seg_base;
   info.de = job->de_seg;
@@ -1215,7 +1213,7 @@ void run_segment_threads(const char* method, int segments, int full_segments,
            info[i].fp);
     info[i].part = i;
     info[i].segment_size = size_of_segments;
-    info[i].size = i < full_segments ? size_of_segments : remaining;
+    info[i].size_left = i < full_segments ? size_of_segments : remaining;
     info[i].seg_base = seg_base;
     info[i].de = de;
     if (full_segments > MAX_SEGMENT_THREADS)
@@ -1554,7 +1552,112 @@ void cloudfs_object_upload_progressive(const char* path)
   //return (response >= 200 && response < 300);
 }
 
-//uploads file to cloud
+/*
+  upload segment to cloud
+*/
+int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
+{
+  assert(de_seg);
+  assert(de);
+  debugf(DBG_LEVEL_EXT, "cloudfs_upload_segment(%s:%s)", de_seg->name, de->name);
+  const char* filemimetype = get_file_mimetype(de->full_name);
+  // delete the previously uploaded segments
+  if (is_segmented(de->full_name))
+  {
+    if (!cloudfs_delete_object(de->full_name))
+      debugf(DBG_LEVEL_NORM, KRED
+             "cloudfs_upload_segment: couldn't delete existing file");
+    else
+      debugf(DBG_LEVEL_EXT, KYEL"cloudfs_upload_segment: deleted existing file");
+  }
+  FILE* fp = NULL;
+  open_file_in_cache(de, &fp, HTTP_PUT);
+  struct timespec now;
+  int response;
+  //check if file is qualified to be segmented
+  if (de->size >= segment_above)
+  {
+    //segmenting file for upload, mark as segmented
+    de->is_segmented = true;
+    int i;
+    long remaining = de->size % segment_size;
+    int full_segments = de->size / segment_size;
+    int segments = full_segments + (remaining > 0);
+    // The best we can do here is to get the current time that way tools that
+    // use the mtime can at least check if the file was changing after now
+    clock_gettime(CLOCK_REALTIME, &now);
+    char string_float[TIME_CHARS];
+    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+    char meta_mtime[TIME_CHARS];
+    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+    char seg_base[MAX_URL_SIZE] = "";
+    char container[MAX_URL_SIZE] = "";
+    char object[MAX_URL_SIZE] = "";
+    split_path(de->full_name, seg_base, container, object);
+    char manifest[MAX_URL_SIZE];
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+    // create the segments container
+    cloudfs_create_directory(manifest);
+    // reusing manifest
+    // TODO: check how addition of meta_mtime in manifest impacts utimens implementation
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
+             container, object, meta_mtime, de->size, segment_size);
+    char tmp[MAX_URL_SIZE];
+    strncpy(tmp, seg_base, MAX_URL_SIZE);
+    snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
+    //uploading all segments in separate threads
+    run_segment_threads(HTTP_PUT, segments, full_segments, remaining, fp,
+                        seg_base, segment_size, de);
+    char* encoded = curl_escape(de->full_name, 0);
+    curl_slist* headers = NULL;
+    add_header(&headers, "x-object-manifest", manifest);
+    //due to utimens changes, not needed anymore
+    //add_header(&headers, "x-object-meta-mtime", meta_mtime);
+    add_header(&headers, "Content-Length", "0");
+    add_header(&headers, "Content-Type", filemimetype);
+    //if path is encoded cache entry will not be found
+    //complete upload (write parent file, 0 size?)
+    response = send_request_size("PUT", encoded, NULL, NULL, headers, 0, 0,
+                                 NULL, de->full_name);
+    curl_slist_free_all(headers);
+    curl_free(encoded);
+    debugf(DBG_LEVEL_EXT,
+           "exit 0: cloudfs_upload_segment(%s) uploaded ok, response=%d",
+           de->name, response);
+  }
+  else
+  {
+    // file is not segmented, upload just one file
+    debugf(DBG_LEVEL_EXT, "cloudfs_upload_segment(%s) non-segmented up", de->name);
+
+    struct segment_info info;
+    info.method = HTTP_PUT;
+    info.part = -1;
+    info.segment_size = -1;
+    info.size_left = de->size;
+    info.size_copy = de->size;
+    info.fp = fp;
+    info.de = de;
+    info.size_processed = 0;
+    info.de->is_progressive = false;
+    info.de->is_single_thread = true;
+    assert(fseek(info.fp, 0, SEEK_SET) == 0);
+    char* encoded = curl_escape(de->full_name, 0);
+    response = send_request_size(HTTP_PUT, encoded, &info, NULL, NULL,
+                                 info.size_copy, 0, NULL, de->full_name);
+    update_direntry_md5sum(de->md5sum_local, fp);
+    get_file_metadata(de);
+    curl_free(encoded);
+    debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_upload_segment(%s)", de->name);
+  }
+  fclose(fp);
+  return (response >= 200 && response < 300);
+}
+
+
+/*
+  uploads file to cloud
+*/
 int cloudfs_object_read_fp(const char* path, FILE* fp)
 {
   debugf(DBG_LEVEL_EXT, "cloudfs_object_read_fp(%s)", path);
@@ -1637,7 +1740,7 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
   rewind(fp);
   char* encoded = curl_escape(path, 0);
 
-  //if path is encoded cache entry will not be found
+
   int response = send_request(HTTP_PUT, encoded, fp, NULL, NULL, NULL, path);
   get_file_metadata(de);
   curl_free(encoded);
@@ -1858,12 +1961,12 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   info.part = de_seg->segment_part;
   info.segment_size = de->segment_size;
   if (de->is_segmented)
-    info.size = de_seg->segment_part < de->segment_full_count ?
-                de->segment_size : de->segment_remaining;
+    info.size_left = de_seg->segment_part < de->segment_full_count ?
+                     de->segment_size : de->segment_remaining;
   else
-    info.size = de->size;
+    info.size_left = de->size;
   //need a copy for resume as info.size will be changed during download
-  info.size_copy = info.size;
+  info.size_copy = de->size;
 
   //get existing segment size on disk for resume ops
   struct stat st;
@@ -1882,7 +1985,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   setvbuf(info.fp, NULL, _IOFBF, DISK_BUFF_SIZE);
   char* encoded = curl_escape(info.seg_base, 0);
   int response = send_request_size(info.method, encoded, &info, NULL, NULL,
-                                   info.size, de_seg->is_segmented, NULL,
+                                   info.size_copy, de_seg->is_segmented, NULL,
                                    info.seg_base);
   if (!(response >= 200 && response < 300))
     debugf(DBG_LEVEL_NORM, KRED

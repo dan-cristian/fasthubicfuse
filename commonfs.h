@@ -188,7 +188,8 @@ extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
 bool open_segment_from_cache(dir_entry* de, dir_entry* de_seg,
                              FILE** fp_segment, const char* method);
-bool open_file_from_cache(dir_entry* de, FILE** fp, const char* method);
+bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
+bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 void sleep_ms(int milliseconds);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);

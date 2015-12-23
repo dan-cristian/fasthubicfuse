@@ -135,31 +135,30 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
                         struct fuse_file_info* info)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_fgetattr(%s)", path);
-  openfile* of = (openfile*)(uintptr_t)info->fh;
-  if (of)
+
+  //openfile* of = (openfile*)(uintptr_t)info->fh;
+  //if (of)
+  //{
+  //get file. if not in cache will be downloaded.
+  dir_entry* de = path_info(path);
+  if (!de)
   {
-    //get file. if not in cache will be downloaded.
-    dir_entry* de = path_info(path);
-    if (!de)
-    {
-      debug_list_cache_content();
-      debugf(DBG_LEVEL_NORM, KBLU"exit 1: cfs_fgetattr(%s) "KYEL"not-in-cache/cloud",
-             path);
-      return -ENOENT;
-    }
-    int default_mode_file;
-    if (option_enable_chmod)
-      default_mode_file = de->chmod;
-    else
-      default_mode_file = 0666;
-    stbuf->st_size = cloudfs_file_size(of->fd);
-    stbuf->st_mode = S_IFREG | default_mode_file;
-    stbuf->st_nlink = 1;
-    debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_fgetattr(%s)", path);
-    return 0;
+    debug_list_cache_content();
+    debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_fgetattr(%s) "
+           KYEL "not-in-cache/cloud", path);
+    return -ENOENT;
   }
-  debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_fgetattr(%s)", path);
-  return -ENOENT;
+  int default_mode_file;
+  if (option_enable_chmod)
+    default_mode_file = de->chmod;
+  else
+    default_mode_file = 0666;
+  stbuf->st_size = de->size;//cloudfs_file_size(of->fd);
+  stbuf->st_mode = S_IFREG | default_mode_file;
+  stbuf->st_nlink = 1;
+  debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_fgetattr(%s)", path);
+  return 0;
+  //}
 }
 
 static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
@@ -659,13 +658,13 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     FILE* fp_file = NULL;
     while (result <= 0)
     {
-      in_cache = open_file_from_cache(de, &fp_file, HTTP_GET);
+      in_cache = open_file_cache_md5(de, &fp_file, HTTP_GET);
       if (!in_cache)
       {
         cloudfs_download_segment(de, de, fp_file, de->size);
         fclose(fp_file);
         fp_file = NULL;
-        in_cache = open_file_from_cache(de, &fp_file, HTTP_GET);
+        in_cache = open_file_cache_md5(de, &fp_file, HTTP_GET);
         if (!in_cache)
           debugf(DBG_LEVEL_EXT, KYEL
                  "cfs_read: download failed file=%s", de->name);
@@ -803,11 +802,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     if (/*file_changed_time(de) || */file_changed_md5(de))
     {
       debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content changed", de->name);
-      FILE* fp = NULL;
-      open_file_from_cache(de, &fp, HTTP_PUT);
-      cloudfs_object_read_fp(path, fp);
-      update_direntry_md5sum(de->md5sum_local, fp);
-      fclose(fp);
+      //FILE* fp = NULL;
+      //open_file_from_cache(de, &fp, HTTP_PUT);
+      //cloudfs_object_read_fp(path, fp);
+      cloudfs_upload_segment(de, de);
     }
     else
       debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content not changed", de->name);
@@ -973,7 +971,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   else//not progressive
   {
     FILE* fp = NULL;
-    bool in_cache = open_file_from_cache(de, &fp, HTTP_PUT);
+    bool in_cache = open_file_in_cache(de, &fp, HTTP_PUT);
     int fno = fileno(fp);
     assert(fno != -1);
     result = pwrite(fno, buf, length, offset);
