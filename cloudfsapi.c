@@ -607,9 +607,10 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
                                         void* userp)
 {
   dir_entry* de = (dir_entry*)userp;
+  assert(de);
   struct progressive_data_buf* upload_buf = &de->upload_buf;
   assert(upload_buf);
-  debugf(DBG_LEVEL_EXTALL,
+  debugf(DBG_LEVEL_EXT,
          "progressive_read_callback: entering for path(%s) size=%lu nmemb=%lu",
          de->full_name, size, nmemb);
   if (size * nmemb < 1)
@@ -770,7 +771,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
     else
     {
       // add headers to save utimens attribs only on upload
-      if (!strcasecmp(method, HTTP_PUT) || !strcasecmp(method, "MKDIR"))
+      if (!strcasecmp(method, HTTP_PUT) || !strcasecmp(method, "MKDIR")
+          || !strcasecmp(method, HTTP_POST))
       {
         debugf(DBG_LEVEL_EXTALL, "send_request_size: Saving utimens for file %s",
                orig_path);
@@ -792,6 +794,13 @@ static int send_request_size(const char* method, const char* path, void* fp,
       curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
       add_header(&headers, "Content-Type", "application/directory");
     }
+    else if (!strcasecmp(method, HTTP_POST))
+    {
+      debugf(DBG_LEVEL_EXT, "send_request_size: POST (%s)", orig_path);
+      curl_easy_setopt(curl, CURLOPT_POST, 1L);
+      curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
+      //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
+    }
     else if (!strcasecmp(method, "MKLINK") && fp)
     {
       rewind(fp);
@@ -805,12 +814,13 @@ static int send_request_size(const char* method, const char* path, void* fp,
       is_upload = true;
       //todo: read response headers and update file meta (etag & last-modified)
       //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
-      debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu", orig_path,
-             file_size);
+      debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu de=%p", orig_path,
+             file_size, de);
       //don't do progressive on file creation, when size=0
       //http://curl.haxx.se/libcurl/c/post-callback.html
       if (option_enable_progressive_upload && file_size > 0)
       {
+        assert(de);
         curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
         debugf(DBG_LEVEL_EXT, "send_request_size: progressive PUT (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_read_callback);
@@ -1335,7 +1345,8 @@ int is_segmented(const char* path)
   populates parent file with link to segment list
 */
 int format_segments(const char* path, char* seg_base,  long* segments,
-                    long* full_segments, long* remaining, long* size_of_segments, long* total_size)
+                    long* full_segments, long* remaining, long* size_of_segments,
+                    long* total_size)
 {
   debugf(DBG_LEVEL_EXT, "format_segments(%s) seg_base(%s)", path, seg_base);
   char container[MAX_URL_SIZE] = "";
@@ -1531,16 +1542,17 @@ const char* get_file_mimetype ( const char* path )
   progressive upload to cloud, works only for not segmented files
   todo: how to return upload status
 */
-void cloudfs_object_upload_progressive(const char* path)
+int cloudfs_object_upload_progressive(dir_entry* de)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_object_upload_progressive(%s)", path);
-  char* encoded = curl_escape(path, 0);
+  debugf(DBG_LEVEL_EXT, "cloudfs_object_upload_progressive(%s)", de->name);
+  char* encoded = curl_escape(de->full_name, 0);
   //mark file size = 1 to signal we have some data coming in
-  int response = send_request_size("PUT", encoded, NULL, NULL, NULL, 1, 0, NULL,
-                                   path);
+  int response = send_request_size(HTTP_PUT, encoded, NULL, NULL, NULL,
+                                   1, 0, NULL, de->full_name);
   curl_free(encoded);
-  debugf(DBG_LEVEL_EXT, "exit: cloudfs_object_upload_progressive(%s)", path);
-  //return (response >= 200 && response < 300);
+  debugf(DBG_LEVEL_EXT, "exit: cloudfs_object_upload_progressive(%s)",
+         de->name);
+  return (response >= 200 && response < 300);
 }
 
 
@@ -1572,36 +1584,20 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   long remaining = de->size % segment_size;
   int full_segments = de->size / segment_size;
   int segments = full_segments + (remaining > 0);
-  // The best we can do here is to get the current time that way tools that
-  // use the mtime can at least check if the file was changing after now
-  clock_gettime(CLOCK_REALTIME, &now);
-  char string_float[TIME_CHARS];
-  snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-  char meta_mtime[TIME_CHARS];
-  snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-  char seg_base[MAX_URL_SIZE] = "";
-  char container[MAX_URL_SIZE] = "";
-  char object[MAX_URL_SIZE] = "";
-  split_path(de->full_name, seg_base, container, object);
-  char manifest[MAX_URL_SIZE];
-  snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
-
   if (de_seg->segment_part == 0)
   {
     // create the segments container
-    cloudfs_create_directory(manifest);
+    response = cloudfs_create_directory(de->manifest);
+    if (!response)
+      return response;
   }
-  snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
-           container, object, meta_mtime, de->size, segment_size);
-  char tmp[MAX_URL_SIZE];
-  strncpy(tmp, seg_base, MAX_URL_SIZE);
-  snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
   //launch upload for this segment
+  response = cloudfs_object_upload_progressive(de_seg);
   //todo: but how to get full file size?
   debugf(DBG_LEVEL_EXT,
          "exit 0: cloudfs_create_segment(%s:%s) created ok, response=%d",
          de_seg->full_name, de_seg->name, response);
-  return (response >= 200 && response < 300);
+  return response;
 }
 
 /*
@@ -2402,7 +2398,7 @@ int cloudfs_copy_object(const char* src, const char* dst)
     debugf(DBG_LEVEL_NORM,
            KRED"status cloudfs_copy_object(%s, %s): src file NOT found", src, dst);
   //pass src metadata so that PUT will set time attributes of the src file
-  int response = send_request("PUT", dst_encoded, NULL, NULL, headers, de_src,
+  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, de_src,
                               dst);
   curl_free(dst_encoded);
   curl_free(src_encoded);
@@ -2412,10 +2408,37 @@ int cloudfs_copy_object(const char* src, const char* dst)
   return (response >= 200 && response < 300);
 }
 
-// http://developer.openstack.org/api-ref-objectstorage-v1.html#updateObjectMeta
+int cloudfs_post_object(const dir_entry* de)
+{
+  debugf(DBG_LEVEL_EXT, "cloudfs_post_object(%s) ", de->name);
+  char* encoded = curl_escape(de->full_name, 0);
+  curl_slist* headers = NULL;
+  add_header(&headers, "Content-Length", "0");
+  int response = send_request_size(HTTP_POST, encoded, NULL, NULL, headers,
+                                   de->size, de->is_segmented, NULL, de->full_name);
+  curl_free(encoded);
+  curl_slist_free_all(headers);
+  debugf(DBG_LEVEL_EXT, "exit: cloudfs_post_object(%s) response=%d", de->name,
+         response);
+  return (response >= 200 && response < 300);
+}
+
+
+/*
+  update an existing file metadata on cloud.
+  ca be done with COPY (slow) or with POST
+  http://developer.openstack.org/api-ref-objectstorage-v1.html#updateObjectMeta
+  http://www.17od.com/2012/12/19/ten-useful-openstack-swift-features/
+*/
 int cloudfs_update_meta(dir_entry* de)
 {
-  int response = cloudfs_copy_object(de->full_name, de->full_name);
+  //copy version
+  /*
+    int response = cloudfs_copy_object(de->full_name, de->full_name);
+    return response;
+  */
+  //POST version
+  int response = cloudfs_post_object(de);
   return response;
 }
 

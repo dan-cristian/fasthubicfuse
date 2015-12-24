@@ -463,38 +463,73 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
 /*
   returns the segment.
   if does not exist then a new empty segment is created, used when writing new files.
+  NOTE!: sets de->manifest field
 */
 dir_entry* get_create_segment(dir_entry* de, int segment_index)
 {
-  dir_entry* de_seg = get_segment(de, segment_index);
-  if (!de_seg)
+  int de_segment;
+  dir_entry* de_seg;
+
+  if (!de->segments)
   {
-    de_seg = init_dir_entry();
-    de_seg->segment_part = segment_index;
-    struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
-    char string_float[TIME_CHARS];
-    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-    char meta_mtime[TIME_CHARS];
-    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-    char seg_base[MAX_URL_SIZE] = "";
-    char container[MAX_URL_SIZE] = "";
-    char object[MAX_URL_SIZE] = "";
-    split_path(de->full_name, seg_base, container, object);
-    char manifest[MAX_URL_SIZE];
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
-             container, object, meta_mtime, /* how to get this? de->size*/, segment_size);
-    char tmp[MAX_URL_SIZE];
-    strncpy(tmp, seg_base, MAX_URL_SIZE);
-    snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
-    char seg_name[8 + 1] = { 0 };
-    snprintf(seg_name, 8 + 1, "%08i", segment_index);
-    de_seg->name = strdup(seg_name);
-    char seg_path[MAX_URL_SIZE] = { 0 };
-    snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, segment_index);
-    de_seg->full_name = strdup(seg_path);
+    de->segments = init_dir_entry();
+    de_seg = de->segments;
   }
+  else
+  {
+    int de_segment;
+    de_seg = de->segments;
+    while (de_seg)
+    {
+      de_segment = atoi(de_seg->name);
+      if (de_segment == segment_index)
+      {
+        if (de_seg->segment_part != segment_index)
+          de_seg->segment_part = segment_index;
+        return de_seg;
+      }
+      if (!de_seg->next)
+      {
+        de_seg->next = init_dir_entry();
+        de_seg = de_seg->next;
+        break;
+      }
+      else
+        de_seg = de_seg->next;
+    }
+  }
+  assert(de_seg);
+  de_seg->segment_part = segment_index;
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  char string_float[TIME_CHARS];
+  snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+  char meta_mtime[TIME_CHARS];
+  snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+  char seg_base[MAX_URL_SIZE] = "";
+  char container[MAX_URL_SIZE] = "";
+  char object[MAX_URL_SIZE] = "";
+  split_path(de->full_name, seg_base, container, object);
+  char manifest[MAX_URL_SIZE];
+  snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+  if (!de->manifest)
+    de->manifest = strdup(manifest);
+  //fixme: how to get full file size so early?
+  snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
+           container, object, meta_mtime, /* how to get this?*/ 0,
+           segment_size);
+  char tmp[MAX_URL_SIZE];
+  strncpy(tmp, seg_base, MAX_URL_SIZE);
+  snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
+
+  char seg_name[8 + 1] = { 0 };
+  snprintf(seg_name, 8 + 1, "%08i", segment_index);
+  de_seg->name = strdup(seg_name);
+
+  char seg_path[MAX_URL_SIZE] = { 0 };
+  snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, segment_index);
+  de_seg->full_name = strdup(seg_path);
+
   return de_seg;
 }
 
@@ -652,6 +687,7 @@ dir_entry* init_dir_entry()
   de->next = NULL;
   de->md5sum = NULL;
   de->md5sum_local = NULL;
+  de->manifest = NULL;
   de->accessed_in_cache = time(NULL);
   de->last_modified = time(NULL);
   de->mtime.tv_sec = time(NULL);

@@ -37,6 +37,7 @@ typedef enum { false, true } bool;
 #define TEMP_SEGMENT_FORMAT "_segments/%d"
 #define HTTP_GET "GET"
 #define HTTP_PUT "PUT"
+#define HTTP_POST "POST"
 
 #define KNRM  "\x1B[0m"
 #define KRED  "\x1B[31m"
@@ -89,6 +90,7 @@ typedef struct dir_entry
   char* full_name;
   char* full_name_hash;//md5 hash for uniqueness purposes (e.g. semaphore unique id)
   char* content_type;
+  char* manifest;
   off_t size;//size of the file, might not match the size in cloud if is segmented
   off_t size_on_cloud;//size of the file in cloud, should be 0 for segmented files
   time_t last_modified;

@@ -953,33 +953,45 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   else
   {
     dir_entry* de_seg;
+    int seg_index = 0;
     int sem_val_full, sem_val_empty;
-    de->upload_buf.offset = offset;
-    de->upload_buf.readptr = buf;
-    de->upload_buf.work_buf_size = length;
-    de->size = offset + length;
     if (option_enable_progressive_upload)// && de->size > segment_above)
     {
-      int seg_index = offset / segment_size;
+      seg_index = offset / segment_size;
       de_seg = get_create_segment(de, seg_index);
+      assert(get_segment(de, seg_index));
+      //alter offset for segmented uploads
+      de_seg->upload_buf.offset = offset - (seg_index * segment_size);
+      de_seg->upload_buf.readptr = buf;
+      //todo: alter size for segmented to avoid going above segment_size
+      de_seg->upload_buf.work_buf_size = length;
     }
+    else
+    {
+      de->upload_buf.offset = offset;
+      de->upload_buf.readptr = buf;
+      de->upload_buf.work_buf_size = length;
+    }
+    de->size = offset + length;
+
     if (offset == 0)
     {
+      de->is_segmented = true;
       init_semaphores(&de->upload_buf, de, "upload");
       //progressive for large (segmented files)
       if (option_enable_progressive_upload)// && de->size > segment_above)
       {
-        bool folder_ok = cloudfs_create_segment(de_seg, de);
-        assert(folder_ok);
+        bool op_ok = cloudfs_create_segment(de_seg, de);
+        assert(op_ok);
         ;
       }
       else //progressive for non-segmented files
       {
         //start file upload with a new thread
-        debugf(DBG_LEVEL_NORM, KBLU"cfs_write(%s) start upload thread buf_len=%lu",
+        debugf(DBG_LEVEL_NORM, KBLU "cfs_write(%s) start upload thread buf_len=%lu",
                path, length);
         pthread_create(&de->upload_buf.thread, NULL,
-                       (void*)cloudfs_object_upload_progressive, de->full_name);
+                       (void*)cloudfs_object_upload_progressive, de);
       }
     }
     //signal there is data available in buffer for upload
