@@ -957,6 +957,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     int sem_val_full, sem_val_empty;
     if (option_enable_progressive_upload)// && de->size > segment_above)
     {
+      //creates the segment to be uploaded as dir_entry and sets minimum required fields
       seg_index = offset / segment_size;
       de_seg = get_create_segment(de, seg_index);
       assert(get_segment(de, seg_index));

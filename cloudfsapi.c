@@ -1557,7 +1557,7 @@ int cloudfs_object_upload_progressive(dir_entry* de)
 
 
 /*
-  create a new segment folder in cloud
+  uploads a new segment folder in cloud
   NOTE!: it alters de_seg fields
 */
 bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
@@ -1586,7 +1586,7 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   int segments = full_segments + (remaining > 0);
   if (de_seg->segment_part == 0)
   {
-    // create the segments container
+    // create the segments container before uploading first segment
     response = cloudfs_create_directory(de->manifest);
     if (!response)
       return response;
