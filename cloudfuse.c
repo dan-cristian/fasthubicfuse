@@ -844,7 +844,8 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
 static int cfs_rmdir(const char* path)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_rmdir(%s)", path);
-  int success = cloudfs_delete_object(path);
+  dir_entry* de = check_path_info(path);
+  int success = cloudfs_delete_object(de);
   if (success == -1)
   {
     debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_rmdir(%s)", path);
@@ -1010,7 +1011,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
 static int cfs_unlink(const char* path)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_unlink(%s)", path);
-  int success = cloudfs_delete_object(path);
+  dir_entry* de = check_path_info(path);
+  int success = cloudfs_delete_object(de);
   if (success == -1)
   {
     debugf(DBG_LEVEL_NORM, KRED "exit 0: cfs_unlink(%s)", path);
@@ -1039,7 +1041,7 @@ static int cfs_truncate(const char* path, off_t size)
   dir_entry* de = check_path_info(path);
   assert(de);
   clock_gettime(CLOCK_REALTIME, &de->ctime_local);
-  cloudfs_object_truncate(path, size);
+  cloudfs_object_truncate(de, size);
   debugf(DBG_LEVEL_NORM, "exit: cfs_truncate(%s)", path);
   return 0;
 }
@@ -1120,7 +1122,7 @@ static int cfs_rename(const char* src, const char* dst)
            src, dst);
     return -EISDIR;
   }
-  if (cloudfs_copy_object(src, dst))
+  if (cloudfs_copy_object(src_de, dst))
   {
     /* FIXME this isn't quite right as doesn't preserve last modified */
     //fix done in cloudfs_copy_object()
@@ -1146,7 +1148,8 @@ static int cfs_rename(const char* src, const char* dst)
 static int cfs_symlink(const char* src, const char* dst)
 {
   debugf(DBG_LEVEL_NORM, KBLU"cfs_symlink(%s, %s)", src, dst);
-  if (cloudfs_create_symlink(src, dst))
+  dir_entry* de = check_path_info(src);
+  if (cloudfs_create_symlink(de, dst))
   {
     update_dir_cache(dst, 1, 0, 1);
     debugf(DBG_LEVEL_NORM, KBLU"exit0: cfs_symlink(%s, %s)", src, dst);
@@ -1159,10 +1162,11 @@ static int cfs_symlink(const char* src, const char* dst)
 static int cfs_readlink(const char* path, char* buf, size_t size)
 {
   debugf(DBG_LEVEL_NORM, KBLU"cfs_readlink(%s)", path);
+  dir_entry* de = check_path_info(path);
   //fixme: use temp file specified in config
   FILE* temp_file = tmpfile();
   int ret = 0;
-  if (!cloudfs_object_write_fp(path, temp_file))
+  if (!cloudfs_object_write_fp(de, temp_file))
   {
     debugf(DBG_LEVEL_NORM, KRED"exit 1: cfs_readlink(%s) not found", path);
     ret = -ENOENT;

@@ -418,53 +418,57 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
          KMAG"write_callback_progrs: http_size=%lu rnd=%d", http_size, rnd);
   sleep_ms(rnd);
   struct segment_info* info = (struct segment_info*)userp;
+  dir_entry* de;
+  if (info->de->is_segmented)
+    de = info->de_seg;
+  else de = info->de;
   //todo: in case of progressive ops signal we have data to cfs_read
   debugf(DBG_LEVEL_EXT,
          KMAG"write_callback_progrs: http buffer full, fuse_size=%lu, wait empty",
-         info->de->downld_buf.fuse_read_size);
+         de->downld_buf.fuse_read_size);
   size_t data_copy_size;
   size_t http_ptr_index = 0;
   const void* src;
   const void* dest;
   int sem_val;
 
-  sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
+  sem_wait(de->downld_buf.sem_list[SEM_EMPTY]);
 
   //copy data to fuse buffer until is full OR until no data left to copy in http buf
-  while (info->de->downld_buf.work_buf_size < info->de->downld_buf.fuse_read_size
+  while (de->downld_buf.work_buf_size < de->downld_buf.fuse_read_size
          && (http_size - http_ptr_index > 0))
   {
     //data left needed
-    data_copy_size = min(info->de->downld_buf.fuse_read_size -
-                         info->de->downld_buf.work_buf_size,
+    data_copy_size = min(de->downld_buf.fuse_read_size -
+                         de->downld_buf.work_buf_size,
                          http_size - http_ptr_index);
     src = ptr + http_ptr_index;
-    dest = info->de->downld_buf.readptr + info->de->downld_buf.work_buf_size;
+    dest = de->downld_buf.readptr + de->downld_buf.work_buf_size;
     memcpy((void*)dest, src, data_copy_size);
-    info->de->downld_buf.work_buf_size += data_copy_size;
+    de->downld_buf.work_buf_size += data_copy_size;
     http_ptr_index += data_copy_size;
     debugf(DBG_LEVEL_EXT, KCYN
            "write_callback_progrs: data_copy_size=%lu ptr=%lu src=%lu dest=%lu wrksize=%lu lefthttp=%lu",
-           data_copy_size, ptr, src, dest, info->de->downld_buf.work_buf_size,
+           data_copy_size, ptr, src, dest, de->downld_buf.work_buf_size,
            http_size - http_ptr_index);
 
-    if ((info->de->downld_buf.work_buf_size == info->de->downld_buf.fuse_read_size)
+    if ((de->downld_buf.work_buf_size == de->downld_buf.fuse_read_size)
         && (http_size != http_ptr_index))
     {
-      sem_getvalue(info->de->downld_buf.sem_list[SEM_FULL], &sem_val);
+      sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
       //fuse buffer full, http data remains
       debugf(DBG_LEVEL_EXT, KMAG
              "write_callback_progrs: copied, post full, some http data left=%lu sem=%d",
              http_size - http_ptr_index, sem_val);
-      sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
-      sem_getvalue(info->de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
+      sem_post(de->downld_buf.sem_list[SEM_FULL]);
+      sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
       debugf(DBG_LEVEL_EXT, KMAG
              "write_callback_progrs: wait [1] fuse buffer empty, sem=%d", sem_val);
-      sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
+      sem_wait(de->downld_buf.sem_list[SEM_EMPTY]);
       //after this work_buf_size = 0, set by cfs_read
       debugf(DBG_LEVEL_EXT, KMAG
              "write_callback_progrs: done wait empty [1] work_buf=%lu",
-             info->de->downld_buf.work_buf_size);
+             de->downld_buf.work_buf_size);
     }
 
     if (data_copy_size == http_size)
@@ -479,30 +483,30 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
   //exit here if http buffer was fully copied
 
   //fuse buffer full
-  if (info->de->downld_buf.work_buf_size == info->de->downld_buf.fuse_read_size)
+  if (de->downld_buf.work_buf_size == de->downld_buf.fuse_read_size)
   {
-    sem_getvalue(info->de->downld_buf.sem_list[SEM_FULL], &sem_val);
+    sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
     //fuse buffer is full, http fully copied, signal cfs_read to return it in user space
     debugf(DBG_LEVEL_EXT, KMAG"write_callback_progrs: post full sem=%d",
            sem_val);
-    sem_post(info->de->downld_buf.sem_list[SEM_FULL]);
-    sem_getvalue(info->de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
+    sem_post(de->downld_buf.sem_list[SEM_FULL]);
+    sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
     debugf(DBG_LEVEL_EXT, KMAG
            "write_callback_progrs: wait [2] fuse buffer to get empty sem=%d", sem_val);
-    sem_wait(info->de->downld_buf.sem_list[SEM_EMPTY]);
+    sem_wait(de->downld_buf.sem_list[SEM_EMPTY]);
     debugf(DBG_LEVEL_EXT, KMAG
            "write_callback_progrs: done wait empty [2] work_buf=%lu",
-           info->de->downld_buf.work_buf_size);
+           de->downld_buf.work_buf_size);
     //post to avoid being stuck on this callback
-    sem_post(info->de->downld_buf.sem_list[SEM_EMPTY]);
+    sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
   }
   else
   {
     debugf(DBG_LEVEL_EXT, KMAG
            "write_callback_progrs: incomplete fuse_buf, need more http data work_buf=%lu",
-           info->de->downld_buf.work_buf_size);
+           de->downld_buf.work_buf_size);
     //post to avoid being stuck on this callback
-    sem_post(info->de->downld_buf.sem_list[SEM_EMPTY]);
+    sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
   }
 
   debugf(DBG_LEVEL_EXT, KMAG"exit: write_callback_progrs result=%lu", result);
@@ -704,10 +708,11 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
 static int send_request_size(const char* method, const char* path, void* fp,
                              xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
                              off_t file_size, int is_segment,
-                             dir_entry* de_cached_entry, const char* unencoded_path)
+                             dir_entry* de, dir_entry* de_seg)
 {
-  debugf(DBG_LEVEL_NORM, "send_request_size(%s) size=%lu seg=%d (%s:%s)",
-         method, file_size, is_segment, path, unencoded_path);
+  debugf(DBG_LEVEL_NORM,
+         "send_request_size(%s) size=%lu is_seg=%d (%s) de=%p seg_de=%p",
+         method, file_size, is_segment, path, de, de_seg);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -754,40 +759,25 @@ static int send_request_size(const char* method, const char* path, void* fp,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, option_curl_verbose ? 1 : 0);
     add_header(&headers, "X-Auth-Token", storage_token);
-    dir_entry* de;
-    if (de_cached_entry == NULL)
-      de = check_path_info(unencoded_path);
-    else
+
+    // add headers to save utimens attribs only on upload
+    if (!strcasecmp(method, HTTP_PUT) || !strcasecmp(method, "MKDIR")
+        || !strcasecmp(method, HTTP_POST))
     {
-      // updating metadata on a file to be added to cache
-      de = de_cached_entry;
-      debugf(DBG_LEVEL_EXTALL, "send_request_size: using param dir_entry(%s)",
+      debugf(DBG_LEVEL_EXTALL, "send_request_size: Saving utimens for file %s",
              orig_path);
-    }
-    if (!de)
+      //debugf(DBG_LEVEL_NORM, "File found in cache, path=%s", de->full_name);
       debugf(DBG_LEVEL_EXTALL,
-             "send_request_size: file not in cache (%s)(%s)"KYEL"(%s)", orig_path, path,
-             unencoded_path);
-    else
-    {
-      // add headers to save utimens attribs only on upload
-      if (!strcasecmp(method, HTTP_PUT) || !strcasecmp(method, "MKDIR")
-          || !strcasecmp(method, HTTP_POST))
-      {
-        debugf(DBG_LEVEL_EXTALL, "send_request_size: Saving utimens for file %s",
-               orig_path);
-        //debugf(DBG_LEVEL_NORM, "File found in cache, path=%s", de->full_name);
-        debugf(DBG_LEVEL_EXTALL,
-               "send_request_size: Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
-               orig_path,
-               de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
-               de->atime.tv_sec, de->atime.tv_nsec);
-        set_direntry_headers(de, headers);
-      }
-      else
-        debugf(DBG_LEVEL_EXTALL, "send_request_size: not setting utimes (%s)",
-               orig_path);
+             "send_request_size: Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
+             orig_path,
+             de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
+             de->atime.tv_sec, de->atime.tv_nsec);
+      set_direntry_headers(de, headers);
     }
+    else
+      debugf(DBG_LEVEL_EXTALL, "send_request_size: not setting utimes (%s)",
+             orig_path);
+
     if (!strcasecmp(method, "MKDIR"))
     {
       curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
@@ -816,15 +806,16 @@ static int send_request_size(const char* method, const char* path, void* fp,
       //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
       debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu de=%p", orig_path,
              file_size, de);
-      //don't do progressive on file creation, when size=0
+      //don't do progressive on file creation, when size=0 (why?)
       //http://curl.haxx.se/libcurl/c/post-callback.html
       if (option_enable_progressive_upload && file_size > 0)
       {
         assert(de);
+        assert(de_seg);
         curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
         debugf(DBG_LEVEL_EXT, "send_request_size: progressive PUT (%s)", orig_path);
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_read_callback);
-        curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de);
+        curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de_seg);
       }
       else//not progressive
       {
@@ -1031,8 +1022,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
 //if path is encoded cache entry will not be found, need to pass unencoded as well
 //todo: implement use of dir_entry instead of path for performance reasons.
 int send_request(char* method, const char* path, FILE* fp,
-                 xmlParserCtxtPtr xmlctx, curl_slist* extra_headers, dir_entry* de_cached_entry,
-                 const char* unencoded_path)
+                 xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
+                 dir_entry* de_cached_entry, dir_entry* de_seg)
 {
   long flen = 0;
   if (fp)
@@ -1042,7 +1033,7 @@ int send_request(char* method, const char* path, FILE* fp,
     flen = cloudfs_file_size(fileno(fp));
   }
   return send_request_size(method, path, fp, xmlctx, extra_headers, flen, 0,
-                           de_cached_entry, unencoded_path);
+                           de_cached_entry, de_seg);
 }
 
 //thread that downloads or uploads large file segments
@@ -1075,7 +1066,7 @@ void* upload_segment(void* seginfo)
   debugf(DBG_LEVEL_EXT, KCYN "upload_segment(%s) part=%d size=%d seg_size=%d %s",
          info->method, info->part, info->size_copy, info->segment_size, seg_path);
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size_copy, 1, NULL, seg_path);
+                                   info->size_copy, 1, info->de, NULL);
   if (!(response >= 200 && response < 300))
     fprintf(stderr, "Segment %s failed with response %d", seg_path,
             response);
@@ -1108,7 +1099,7 @@ void* upload_segment_progressive(void* seginfo)
          "upload_segment_progressive(%s) part=%d size=%d seg_size=%d %s",
          info->method, info->part, info->size_copy, info->segment_size, info->seg_base);
   int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size_copy, 1, NULL, info->seg_base);
+                                   info->size_copy, 1, info->de, info->de_seg);//, info->seg_base);
   if (!(response >= 200 && response < 300))
     debugf(DBG_LEVEL_NORM, KRED
            "upload_segment_progressive: Segment %s failed with response %d",
@@ -1120,7 +1111,7 @@ void* upload_segment_progressive(void* seginfo)
          info->part, response);
   fflush(info->fp);
   // exit only when this is a child thread started on a segmented file
-  if (!info->de->is_single_thread)
+  if (!info->de->is_single_thread)//fixme: not thread safe
   {
     debugf(DBG_LEVEL_NORM,
            KMAG"upload_segment_progressive: closing thread part=%d, http response=%d",
@@ -1155,7 +1146,9 @@ void run_segment_threads_progressive(const char* method, char* seg_base,
   info.size_copy = info.size_left;
   info.size_processed = 0;
   info.seg_base = seg_base;
-  info.de = job->de_seg;
+  //info.de = job->de_seg;
+  info.de = job->de;
+  info.de_seg = job->de_seg;
   if (job->de->is_segmented)
   {
     info.fp = job->de_seg->downld_buf.local_cache_file;
@@ -1548,7 +1541,7 @@ int cloudfs_object_upload_progressive(dir_entry* de)
   char* encoded = curl_escape(de->full_name, 0);
   //mark file size = 1 to signal we have some data coming in
   int response = send_request_size(HTTP_PUT, encoded, NULL, NULL, NULL,
-                                   1, 0, NULL, de->full_name);
+                                   1, 0, de, NULL);
   curl_free(encoded);
   debugf(DBG_LEVEL_EXT, "exit: cloudfs_object_upload_progressive(%s)",
          de->name);
@@ -1569,7 +1562,7 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   // delete the previously uploaded segments
   if (is_segmented(de->full_name))
   {
-    if (!cloudfs_delete_object(de->full_name))
+    if (!cloudfs_delete_object(de))
       debugf(DBG_LEVEL_NORM, KRED
              "cloudfs_create_segment: couldn't delete existing file");
     else
@@ -1612,7 +1605,7 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
   // delete the previously uploaded segments
   if (is_segmented(de->full_name))
   {
-    if (!cloudfs_delete_object(de->full_name))
+    if (!cloudfs_delete_object(de))
       debugf(DBG_LEVEL_NORM, KRED
              "cloudfs_upload_segment: couldn't delete existing file");
     else
@@ -1666,7 +1659,7 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     //if path is encoded cache entry will not be found
     //complete upload (write parent file, 0 size?)
     response = send_request_size("PUT", encoded, NULL, NULL, headers, 0, 0,
-                                 NULL, de->full_name);
+                                 de, de_seg);
     curl_slist_free_all(headers);
     curl_free(encoded);
     debugf(DBG_LEVEL_EXT,
@@ -1686,13 +1679,14 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     info.size_copy = de->size;
     info.fp = fp;
     info.de = de;
+    info.de_seg = de_seg;
     info.size_processed = 0;
     info.de->is_progressive = false;
     info.de->is_single_thread = true;
     assert(fseek(info.fp, 0, SEEK_SET) == 0);
     char* encoded = curl_escape(de->full_name, 0);
     response = send_request_size(HTTP_PUT, encoded, &info, NULL, NULL,
-                                 info.size_copy, 0, NULL, de->full_name);
+                                 info.size_copy, 0, de, de_seg);
     update_direntry_md5sum(de->md5sum_local, fp);
     get_file_metadata(de);
     curl_free(encoded);
@@ -1706,28 +1700,25 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
 /*
   uploads file to cloud
 */
-int cloudfs_object_read_fp(const char* path, FILE* fp)
+int cloudfs_object_read_fp(dir_entry* de, FILE* fp)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_object_read_fp(%s)", path);
+  debugf(DBG_LEVEL_EXT, "cloudfs_object_read_fp(%s)", de->name);
   long flen;
   fflush(fp);
-  const char* filemimetype = get_file_mimetype( path );
+  const char* filemimetype = get_file_mimetype(de->full_name);
   // determine the size of the file and segment if it is above the threshhold
   fseek(fp, 0, SEEK_END);
   flen = ftell(fp);
   // delete the previously uploaded segments
-  if (is_segmented(path))
+  if (is_segmented(de->full_name))
   {
-    if (!cloudfs_delete_object(path))
+    if (!cloudfs_delete_object(de))
       debugf(DBG_LEVEL_NORM,
              KRED"cloudfs_object_read_fp: couldn't delete existing file");
     else
       debugf(DBG_LEVEL_EXT, KYEL"cloudfs_object_read_fp: deleted existing file");
   }
   struct timespec now;
-  dir_entry* de = path_info(path);
-  if (!de)
-    debugf(DBG_LEVEL_EXT, "cloudfs_object_read_fp(%s) "KYEL"not in cache", path);
   //check if file is qualified to be segmented
   if (flen >= segment_above)
   {
@@ -1748,7 +1739,7 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
     char seg_base[MAX_URL_SIZE] = "";
     char container[MAX_URL_SIZE] = "";
     char object[MAX_URL_SIZE] = "";
-    split_path(path, seg_base, container, object);
+    split_path(de->full_name, seg_base, container, object);
     char manifest[MAX_URL_SIZE];
     snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
     // create the segments container
@@ -1763,7 +1754,7 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
     //uploading all segments in separate threads
     run_segment_threads("PUT", segments, full_segments, remaining, fp,
                         seg_base, segment_size, de);
-    char* encoded = curl_escape(path, 0);
+    char* encoded = curl_escape(de->full_name, 0);
     curl_slist* headers = NULL;
     add_header(&headers, "x-object-manifest", manifest);
     //due to utimens changes, not needed anymore
@@ -1772,44 +1763,46 @@ int cloudfs_object_read_fp(const char* path, FILE* fp)
     add_header(&headers, "Content-Type", filemimetype);
     //if path is encoded cache entry will not be found
     //complete upload (write parent file, 0 size?)
-    int response = send_request_size("PUT", encoded, NULL, NULL, headers, 0, 0,
-                                     NULL, path);
+    int response = send_request_size(HTTP_PUT, encoded, NULL, NULL, headers, 0, 0,
+                                     de, NULL);
     curl_slist_free_all(headers);
     curl_free(encoded);
     debugf(DBG_LEVEL_EXT,
-           "exit 0: cloudfs_object_read_fp(%s) uploaded ok, response=%d", path, response);
+           "exit 0: cloudfs_object_read_fp(%s) uploaded ok, response=%d",
+           de->name, response);
     return (response >= 200 && response < 300);
   }
   else
   {
     // assume enters here when file is composed of only one segment (small files)
-    debugf(DBG_LEVEL_EXT, "cloudfs_object_read_fp(%s) non-segmented up", path);
+    debugf(DBG_LEVEL_EXT, "cloudfs_object_read_fp(%s) non-segmented up", de->name);
   }
   rewind(fp);
-  char* encoded = curl_escape(path, 0);
-  int response = send_request(HTTP_PUT, encoded, fp, NULL, NULL, NULL, path);
+  char* encoded = curl_escape(de->full_name, 0);
+  int response = send_request(HTTP_PUT, encoded, fp, NULL, NULL, de, NULL);
   get_file_metadata(de);
   curl_free(encoded);
-  debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_object_read_fp(%s)", path);
+  debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_object_read_fp(%s)", de->name);
   return (response >= 200 && response < 300);
 }
 
 /*
    download file from cloud and write to local file
 */
-int cloudfs_object_write_fp(const char* path, FILE* fp)
+int cloudfs_object_write_fp(dir_entry* de, FILE* fp)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_object_write_fp(%s) fp=%p", path, fp);
-  char* encoded = curl_escape(path, 0);
+  debugf(DBG_LEVEL_EXT, "cloudfs_object_write_fp(%s) fp=%p", de->name, fp);
+  char* encoded = curl_escape(de->full_name, 0);
   char seg_base[MAX_URL_SIZE] = "";
   long segments;
   long full_segments;
   long remaining;
   long size_of_segments;
   long total_size;
+
   //checks if this file is a segmented one
-  if (format_segments(path, seg_base, &segments, &full_segments, &remaining,
-                      &size_of_segments, &total_size))
+  if (format_segments(de->full_name, seg_base, &segments, &full_segments,
+                      &remaining, &size_of_segments, &total_size))
   {
     rewind(fp);
     fflush(fp);
@@ -1819,26 +1812,26 @@ int cloudfs_object_write_fp(const char* path, FILE* fp)
              "cloudfs_object_write_fp: ftruncate failed, aborting!");
       abort();
     }
-    dir_entry* de = check_path_info(path);
+
     //download all segments from cloud to local file, wait until completed
     run_segment_threads("GET", segments, full_segments, remaining, fp,
                         seg_base, size_of_segments, de);
-    debugf(DBG_LEVEL_EXT, "exit 0: cloudfs_object_write_fp(%s)", path);
+    debugf(DBG_LEVEL_EXT, "exit 0: cloudfs_object_write_fp(%s)", de->name);
     return 1;
   }
 
   //get not segmented file
-  int response = send_request("GET", encoded, fp, NULL, NULL, NULL, path);
+  int response = send_request("GET", encoded, fp, NULL, NULL, de, NULL);
   curl_free(encoded);
   fflush(fp);
   if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
   {
-    debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_object_write_fp(%s)", path);
+    debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_object_write_fp(%s)", de->name);
     return 1;
   }
   rewind(fp);
   debugf(DBG_LEVEL_EXT, "exit 2: cloudfs_object_write_fp(%s) " KRED" error",
-         path);
+         de->name);
   return 0;
 }
 
@@ -1879,7 +1872,7 @@ void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
     //get an un-segmented file
     int response = send_request(HTTP_GET, encoded,
                                 job->de->downld_buf.local_cache_file,
-                                NULL, NULL, NULL, job->de->full_name);
+                                NULL, NULL, job->de, job->de_seg);
     curl_free(encoded);
     fflush(job->de->downld_buf.local_cache_file);
     if ((response >= 200 && response < 300) ||
@@ -2022,7 +2015,8 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   info.size_processed = st.st_size;
 
   info.seg_base = de_seg->full_name;
-  info.de = de_seg;
+  info.de_seg = de_seg;
+  info.de = de;
   info.fp = fp;
   info.de->is_progressive = false;
   info.de->is_single_thread = true;
@@ -2031,8 +2025,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   setvbuf(info.fp, NULL, _IOFBF, DISK_BUFF_SIZE);
   char* encoded = curl_escape(info.seg_base, 0);
   int response = send_request_size(info.method, encoded, &info, NULL, NULL,
-                                   info.size_copy, de->is_segmented, NULL,
-                                   info.seg_base);
+                                   info.size_copy, de->is_segmented, de, de_seg);
   if (!(response >= 200 && response < 300))
     debugf(DBG_LEVEL_NORM, KRED
            "cloudfs_download_segment: %s failed resp=%d proc=%lu",
@@ -2067,20 +2060,21 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   return true;
 }
 
-int cloudfs_object_truncate(const char* path, off_t size)
+int cloudfs_object_truncate(dir_entry* de, off_t size)
 {
-  char* encoded = curl_escape(path, 0);
+  char* encoded = curl_escape(de->full_name, 0);
   int response;
+
   if (size == 0)
   {
     FILE* fp = fopen("/dev/null", "r");
-    response = send_request("PUT", encoded, fp, NULL, NULL, NULL, path);
+    response = send_request("PUT", encoded, fp, NULL, NULL, de, NULL);
     fclose(fp);
   }
   else
   {
     //TODO: this is busted
-    response = send_request("GET", encoded, NULL, NULL, NULL, NULL, path);
+    response = send_request("GET", encoded, NULL, NULL, NULL, de, NULL);
   }
   curl_free(encoded);
   return (response >= 200 && response < 300);
@@ -2123,8 +2117,7 @@ void get_file_metadata(dir_entry* de)
            de->full_name, de->size_on_cloud);
     //retrieve additional file metadata with a quick HEAD query
     char* encoded = curl_escape(de->full_name, 0);
-    int response = send_request("GET", encoded, NULL, NULL, NULL, de,
-                                de->full_name);
+    int response = send_request("GET", encoded, NULL, NULL, NULL, de, NULL);
     de->metadata_downloaded = true;
     curl_free(encoded);
     debugf(DBG_LEVEL_EXT, KCYN "exit: get_file_metadata(%s) hash=%s",
@@ -2178,7 +2171,7 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   else
   {
     // this was generating 404 err on non segmented files (small files)
-    response = send_request("GET", container, NULL, xmlctx, NULL, NULL, path);
+    response = send_request("GET", container, NULL, xmlctx, NULL, NULL, NULL);
   }
   if (response >= 200 && response < 300)
     xmlParseChunk(xmlctx, "", 0, 1);
@@ -2327,17 +2320,17 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
 }
 
 
-int cloudfs_delete_object(const char* path)
+int cloudfs_delete_object(dir_entry* de)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_delete_object(%s)", path);
+  debugf(DBG_LEVEL_EXT, "cloudfs_delete_object(%s)", de->name);
   char seg_base[MAX_URL_SIZE] = "";
   long segments;
   long full_segments;
   long remaining;
   long size_of_segments;
   long total_size;
-  if (format_segments(path, seg_base, &segments, &full_segments, &remaining,
-                      &size_of_segments, &total_size))
+  if (format_segments(de->full_name, seg_base, &segments, &full_segments,
+                      &remaining, &size_of_segments, &total_size))
   {
     int response;
     int i;
@@ -2346,24 +2339,25 @@ int cloudfs_delete_object(const char* path)
     {
       snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, i);
       char* encoded = curl_escape(seg_path, 0);
-      response = send_request("DELETE", encoded, NULL, NULL, NULL, NULL, seg_path);
+      response = send_request("DELETE", encoded, NULL, NULL, NULL, de, NULL);
       if (response < 200 || response >= 300)
       {
-        debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_delete_object(%s) response=%d", path,
-               response);
+        debugf(DBG_LEVEL_EXT, "exit 1: cloudfs_delete_object(%s) response=%d",
+               de->full_name, response);
         return 0;
       }
     }
   }
-  char* encoded = curl_escape(path, 0);
-  int response = send_request("DELETE", encoded, NULL, NULL, NULL, NULL, path);
+  char* encoded = curl_escape(de->full_name, 0);
+  int response = send_request("DELETE", encoded, NULL, NULL, NULL, de, NULL);
   curl_free(encoded);
   int ret = (response >= 200 && response < 300);
-  debugf(DBG_LEVEL_EXT, "status: cloudfs_delete_object(%s) response=%d", path,
-         response);
+  debugf(DBG_LEVEL_EXT, "status: cloudfs_delete_object(%s) response=%d",
+         de->full_name, response);
   if (response == 409)
   {
-    debugf(DBG_LEVEL_EXT, "status: cloudfs_delete_object(%s) NOT EMPTY", path);
+    debugf(DBG_LEVEL_EXT, "status: cloudfs_delete_object(%s) NOT EMPTY",
+           de->full_name);
     ret = -1;
   }
   return ret;
@@ -2372,12 +2366,11 @@ int cloudfs_delete_object(const char* path)
 //fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
 // https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/
 // this operation also causes an HTTP 400 error if X-Object-Meta-FilePath value is larger than 256 chars
-int cloudfs_copy_object(const char* src, const char* dst)
+int cloudfs_copy_object(dir_entry* de, const char* dst)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s, %s) lensrc=%d, lendst=%d", src,
-         dst, strlen(src), strlen(dst));
+  debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s, %s)", de->name, dst);
   char* dst_encoded = curl_escape(dst, 0);
-  char* src_encoded = curl_escape(src, 0);
+  char* src_encoded = curl_escape(de->full_name, 0);
   //convert encoded string (slashes are encoded as well) to encoded string with slashes
   char* slash;
   while ((slash = strstr(src_encoded, "%2F"))
@@ -2389,33 +2382,27 @@ int cloudfs_copy_object(const char* src, const char* dst)
   curl_slist* headers = NULL;
   add_header(&headers, "X-Copy-From", src_encoded);
   add_header(&headers, "Content-Length", "0");
-  //get source file entry
-  dir_entry* de_src = check_path_info(src);
-  if (de_src)
-    debugf(DBG_LEVEL_EXT, "status cloudfs_copy_object(%s, %s): src file found",
-           src, dst);
-  else
-    debugf(DBG_LEVEL_NORM,
-           KRED"status cloudfs_copy_object(%s, %s): src file NOT found", src, dst);
+
   //pass src metadata so that PUT will set time attributes of the src file
-  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, de_src,
-                              dst);
+  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, de,
+                              NULL);
   curl_free(dst_encoded);
   curl_free(src_encoded);
   curl_slist_free_all(headers);
-  debugf(DBG_LEVEL_EXT, "exit: cloudfs_copy_object(%s,%s) response=%d", src, dst,
+  debugf(DBG_LEVEL_EXT, "exit: cloudfs_copy_object(%s,%s) response=%d", de->name,
+         dst,
          response);
   return (response >= 200 && response < 300);
 }
 
-int cloudfs_post_object(const dir_entry* de)
+int cloudfs_post_object(dir_entry* de)
 {
   debugf(DBG_LEVEL_EXT, "cloudfs_post_object(%s) ", de->name);
   char* encoded = curl_escape(de->full_name, 0);
   curl_slist* headers = NULL;
   add_header(&headers, "Content-Length", "0");
   int response = send_request_size(HTTP_POST, encoded, NULL, NULL, headers,
-                                   de->size, de->is_segmented, NULL, de->full_name);
+                                   de->size, de->is_segmented, de, NULL);
   curl_free(encoded);
   curl_slist_free_all(headers);
   debugf(DBG_LEVEL_EXT, "exit: cloudfs_post_object(%s) response=%d", de->name,
@@ -2450,7 +2437,7 @@ int cloudfs_statfs(const char* path, struct statvfs* stat)
   if (lapsed > option_cache_statfs_timeout)
   {
     //todo: check why stat head request is always set to /, why not path?
-    int response = send_request("HEAD", "/", NULL, NULL, NULL, NULL, "/");
+    int response = send_request("HEAD", "/", NULL, NULL, NULL, NULL, NULL);
     *stat = statcache;
     debugf(DBG_LEVEL_EXT,
            "exit: cloudfs_statfs (new recent values, was cached since %d seconds)",
@@ -2466,25 +2453,25 @@ int cloudfs_statfs(const char* path, struct statvfs* stat)
   }
 }
 
-int cloudfs_create_symlink(const char* src, const char* dst)
+int cloudfs_create_symlink(dir_entry* de, const char* dst)
 {
   char* dst_encoded = curl_escape(dst, 0);
   FILE* lnk = tmpfile();
-  fwrite(src, 1, strlen(src), lnk);
+  fwrite(de->full_name, 1, strlen(de->full_name), lnk);
   fwrite("\0", 1, 1, lnk);
-  int response = send_request("MKLINK", dst_encoded, lnk, NULL, NULL, NULL, dst);
+  int response = send_request("MKLINK", dst_encoded, lnk, NULL, NULL, de, NULL);
   curl_free(dst_encoded);
   fclose(lnk);
   return (response >= 200 && response < 300);
 }
 
-int cloudfs_create_directory(const char* path)
+int cloudfs_create_directory(const char* label)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s)", path);
-  char* encoded = curl_escape(path, 0);
-  int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL, path);
+  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s)", label);
+  char* encoded = curl_escape(label, 0);
+  int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL, NULL);
   curl_free(encoded);
-  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s) response=%d", path,
+  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s) response=%d", label,
          response);
   return (response >= 200 && response < 300);
 }

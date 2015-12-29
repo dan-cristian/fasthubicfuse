@@ -67,6 +67,7 @@ struct segment_info
   char* seg_base;
   const char* method;
   struct dir_entry* de;
+  struct dir_entry* de_seg;
 };
 
 extern long segment_size;//segment file size
@@ -76,16 +77,16 @@ char* override_storage_url;
 char* public_container;
 
 int file_is_readable(const char* fname);
-const char* get_file_mimetype ( const char* filename );
+const char* get_file_mimetype (const char* filename);
 
-int cloudfs_object_read_fp(const char* path, FILE* fp);
-int cloudfs_object_write_fp(const char* path, FILE* fp);
+int cloudfs_object_read_fp(dir_entry* de, FILE* fp);
+int cloudfs_object_write_fp(dir_entry* de, FILE* fp);
 int cloudfs_list_directory(const char* path, dir_entry**);
-int cloudfs_delete_object(const char* path);
-int cloudfs_copy_object(const char* src, const char* dst);
-int cloudfs_create_symlink(const char* src, const char* dst);
+int cloudfs_delete_object(dir_entry* de);
+int cloudfs_copy_object(dir_entry* de, const char* dst);
+int cloudfs_create_symlink(dir_entry* de, const char* dst);
 int cloudfs_create_directory(const char* label);
-int cloudfs_object_truncate(const char* path, off_t size);
+int cloudfs_object_truncate(dir_entry* de, off_t size);
 off_t cloudfs_file_size(int fd);
 int cloudfs_statfs(const char* path, struct statvfs* stat);
 void cloudfs_verify_ssl(int dbg);
