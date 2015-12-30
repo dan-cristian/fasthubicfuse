@@ -761,7 +761,7 @@ static int send_request_size(const char* method, const char* path, void* fp,
     add_header(&headers, "X-Auth-Token", storage_token);
 
     // add headers to save utimens attribs only on upload
-    if (!strcasecmp(method, HTTP_PUT) || !strcasecmp(method, "MKDIR")
+    if (!strcasecmp(method, HTTP_PUT) //|| !strcasecmp(method, "MKDIR")
         || !strcasecmp(method, HTTP_POST))
     {
       debugf(DBG_LEVEL_EXTALL, "send_request_size: Saving utimens for file %s",
@@ -2465,14 +2465,18 @@ int cloudfs_create_symlink(dir_entry* de, const char* dst)
   return (response >= 200 && response < 300);
 }
 
-int cloudfs_create_directory(const char* label)
+int cloudfs_create_directory(const char* path)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s)", label);
-  char* encoded = curl_escape(label, 0);
-  int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL, NULL);
+  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s)", path);
+  dir_entry* de_tmp = init_dir_entry();
+  de_tmp->full_name = strdup(path);
+  de_tmp->isdir = 1;
+  char* encoded = curl_escape(path, 0);
+  int response = send_request("MKDIR", encoded, NULL, NULL, NULL, de_tmp, NULL);
+  cloudfs_free_dir_list(de_tmp);
   curl_free(encoded);
-  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s) response=%d", label,
-         response);
+  debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s) response=%d",
+         path, response);
   return (response >= 200 && response < 300);
 }
 

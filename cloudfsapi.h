@@ -85,7 +85,7 @@ int cloudfs_list_directory(const char* path, dir_entry**);
 int cloudfs_delete_object(dir_entry* de);
 int cloudfs_copy_object(dir_entry* de, const char* dst);
 int cloudfs_create_symlink(dir_entry* de, const char* dst);
-int cloudfs_create_directory(const char* label);
+int cloudfs_create_directory(const char* path);
 int cloudfs_object_truncate(dir_entry* de, off_t size);
 off_t cloudfs_file_size(int fd);
 int cloudfs_statfs(const char* path, struct statvfs* stat);

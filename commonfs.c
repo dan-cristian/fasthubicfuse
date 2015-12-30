@@ -683,7 +683,12 @@ dir_entry* init_dir_entry()
 {
   dir_entry* de = (dir_entry*)malloc(sizeof(dir_entry));
   de->metadata_downloaded = false;
+  de->name = NULL;
+  de->full_name = NULL;
+  de->content_type = NULL;
   de->size = 0;
+  de->isdir = 0;
+  de->islink = 0;
   de->next = NULL;
   de->md5sum = NULL;
   de->md5sum_local = NULL;
