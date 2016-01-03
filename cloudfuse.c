@@ -895,6 +895,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     de = check_path_info(path);
   }
   assert(de);
+  //force seg_size as this dir_entry might be already initialised?
+  de->segment_size = segment_size;
+  de->segment_remaining = segment_size;
+  assert(de->segment_size == segment_size);
   /*
     if (de->is_segmented)
     {
@@ -926,10 +930,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     }
 
   */
-  //if (!de->is_segmented)
-  //{
-  //todo: prior check of md5sum file content not done here,
-  //upload optimisation not functional
+
   if (!option_enable_progressive_upload)
   {
     //regular upload, copy first in cache, upload at flush, no progress
@@ -956,54 +957,85 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     dir_entry* de_seg;
     int seg_index = 0;
     int sem_val_full, sem_val_empty;
-    if (option_enable_progressive_upload)// && de->size > segment_above)
+    off_t ptr_offset = 0;
+    if (option_enable_progressive_upload)
     {
-      //creates the segment to be uploaded as dir_entry and sets minimum required fields
+      //delete here to avoid overwrite of de_seg due to list
+      if (offset == 0)
+        cloudfs_delete_object(de);
+
+      //creates the segment to be uploaded as dir_entry
+      //and sets minimum required fields
       seg_index = offset / segment_size;
       de_seg = get_create_segment(de, seg_index);
       assert(get_segment(de, seg_index));
-      //alter offset for segmented uploads
+      assert(de->manifest);
+      //alter offset for segmented uploads (do I need this?)
       de_seg->upload_buf.offset = offset - (seg_index * segment_size);
-      de_seg->upload_buf.readptr = buf;
-      //todo: alter size for segmented to avoid going above segment_size
       de_seg->upload_buf.work_buf_size = length;
+
+      //unblock previous segment from data wait
+      //fixme: expensive call, use dbl linked list?
+      if (seg_index > 0)
+      {
+        dir_entry* prev_seg = get_segment(de, seg_index - 1);
+        assert(prev_seg);
+        if (prev_seg->upload_buf.sem_list[SEM_FULL])
+          sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
+      }
     }
-    else
+    else //not progressive-segmented
     {
       de->upload_buf.offset = offset;
       de->upload_buf.readptr = buf;
       de->upload_buf.work_buf_size = length;
     }
     de->size = offset + length;
-
-    if (offset == 0)
+    //loop until entire buffer was uploaded
+    while (de_seg->upload_buf.work_buf_size > 0)
     {
-      de->is_segmented = true;
-      init_semaphores(&de->upload_buf, de, "upload");
-      //progressive for large (segmented files)
-      if (option_enable_progressive_upload)// && de->size > segment_above)
+      //index in buffer to resume upload in a new segment
+      //(when buffer did not fit in the current segment)
+      ptr_offset = length - de_seg->upload_buf.work_buf_size;
+      de_seg->upload_buf.readptr = buf + ptr_offset;
+
+      //start a new segment upload thread if needed
+      if (option_enable_progressive_upload &&
+          (de_seg->upload_buf.size_processed == 0
+           || de_seg->upload_buf.size_processed == de_seg->size))
       {
+        //de->is_segmented = true; //set when offset=0
+        assert(de->manifest);
         bool op_ok = cloudfs_create_segment(de_seg, de);
         assert(op_ok);
-        ;
       }
-      else //progressive for non-segmented files
+
+      //this will happen for a progressive/segmented upload
+      if (de->is_segmented)
       {
-        //start file upload with a new thread
-        debugf(DBG_LEVEL_NORM, KBLU "cfs_write(%s) start upload thread buf_len=%lu",
-               path, length);
-        pthread_create(&de->upload_buf.thread, NULL,
-                       (void*)cloudfs_object_upload_progressive, de);
+        //signal there is data available in buffer for upload
+        sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+        //only wait if there is data to avoid segfault on sem free
+        if (de_seg->upload_buf.work_buf_size > 0)
+        {
+          //wait until previous buffer data is uploaded
+          sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
+        }
+        //there might be data left not uploaded
+        debugf(DBG_LEVEL_EXT, KMAG
+               "cfs_write(%s): buffer for upload, work_size=%lu", path,
+               de_seg->upload_buf.work_buf_size);
+      }
+      else//only progressive, not segmented
+      {
+        //signal there is data available in buffer for upload
+        sem_post(de->upload_buf.sem_list[SEM_FULL]);
+        //wait until previous buffer data is uploaded
+        sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+        sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
       }
     }
-    //signal there is data available in buffer for upload
-    sem_post(de->upload_buf.sem_list[SEM_FULL]);//isfull_semaphore);
-    //wait until previous buffer data is uploaded
-    sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);//isempty_semaphore);
-    sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
-    debugf(DBG_LEVEL_EXTALL, KMAG
-           "cfs_write(%s): buffer for upload, sem_val_full=%d", path,
-           sem_val_full);
+
     return length;//?
   }
 }

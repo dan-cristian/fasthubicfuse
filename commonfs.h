@@ -70,6 +70,7 @@ typedef struct progressive_data_buf
   const char* readptr;
   size_t work_buf_size;
   off_t offset;
+  size_t size_processed;
   //bool upload_completed;
   //bool write_completed;
   bool file_is_in_cache;

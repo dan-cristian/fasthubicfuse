@@ -529,6 +529,9 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   char seg_path[MAX_URL_SIZE] = { 0 };
   snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, segment_index);
   de_seg->full_name = strdup(seg_path);
+  if (de_seg->segment_part < de->segment_full_count)
+    de_seg->size = de->segment_size;
+  else de_seg->size = de->segment_remaining;
 
   return de_seg;
 }
@@ -722,6 +725,7 @@ dir_entry* init_dir_entry()
   de->upload_buf.sem_list[SEM_FULL] = NULL;
   de->upload_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_name_list[SEM_FULL] = NULL;
+  de->upload_buf.size_processed = 0;
   de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
   de->is_segmented = false;

@@ -94,7 +94,7 @@ void cloudfs_option_get_extended_metadata(int option);
 void cloudfs_option_curl_verbose(int option);
 void get_file_metadata(dir_entry* de);
 int cloudfs_update_meta(dir_entry* de);
-int cloudfs_object_upload_progressive(dir_entry* de);
+//int cloudfs_object_upload_progressive(dir_entry* de, dir_entry* de_seg);
 void* cloudfs_object_downld_progressive(void* path);
 int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                            bool sync_first);

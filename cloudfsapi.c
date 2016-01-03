@@ -607,32 +607,28 @@ size_t writefunc_callback(void* contents, size_t size, size_t nmemb,
 }
 
 // provides progressive data on upload for PUT/POST
-static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
-                                        void* userp)
+static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
+    void* userp)
 {
   dir_entry* de = (dir_entry*)userp;
   assert(de);
+  size_t http_buf_size = size * nmemb;
   struct progressive_data_buf* upload_buf = &de->upload_buf;
   assert(upload_buf);
   debugf(DBG_LEVEL_EXT,
-         "progressive_read_callback: entering for path(%s) size=%lu nmemb=%lu",
+         "progressive_upload_callback: entering for path(%s) size=%lu nmemb=%lu",
          de->full_name, size, nmemb);
-  if (size * nmemb < 1)
+  if (http_buf_size < 1)
   {
     debugf(DBG_LEVEL_EXT,
-           "progressive_read_callback: "KYEL"exit as size*nmemb < 1");
+           "progressive_upload_callback: "KYEL"exit as size*nmemb < 1");
     return 0;
   }
-
-
   size_t max_size_to_upload;
   int sem_val_empty, sem_val_full;
 
-  //upload_buf->upload_completed = false;
-
-  if (upload_buf->offset == 0 && upload_buf->work_buf_size != 0)
-  {
-    /*
+  /*if (upload_buf->offset == 0 && upload_buf->work_buf_size != 0)
+    {
       //opening semaphores might not be needed - same process?
       if ((de->upload_buf.isempty_semaphore = sem_open(
         de->upload_buf.isempty_semaphore_name, O_CREAT, 0644, 0)) == SEM_FAILED)
@@ -655,49 +651,46 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
       }
       else
       debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: isfull_semaphore opened");
-    */
-  }
+
+    }
+  */
+
   sem_getvalue(de->upload_buf.sem_list[SEM_EMPTY], &sem_val_empty);
   sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
-  debugf(DBG_LEVEL_EXTALL,
-         "progressive_read_callback: prep to process, sizeleft=%lu, sem_val_empty=%d, sem_val_full=%d bufaddr=%lu",
+  debugf(DBG_LEVEL_EXT,
+         "progressive_upload_callback: prep to process, sizeleft=%lu, sem_val_empty=%d, sem_val_full=%d bufaddr=%p",
          upload_buf->work_buf_size, sem_val_empty, sem_val_full, upload_buf->readptr);
+
+  //wait to get fuse buffer data
   sem_wait(de->upload_buf.sem_list[SEM_FULL]);
-  max_size_to_upload = min(size * nmemb, de->upload_buf.work_buf_size);
-  if (upload_buf->work_buf_size > 0)
+
+  //ensure we upload no more than fuse buf available
+  max_size_to_upload = min(http_buf_size, de->upload_buf.work_buf_size);
+  //ensure we upload up to max segment size
+  max_size_to_upload = min(max_size_to_upload,
+                           de->size - de->upload_buf.size_processed);
+
+  if (max_size_to_upload > 0)
   {
-    //todo: check if this mem copy can be removed
+    //todo: check if this mem copy can be optimised
     //http://sourceforge.net/p/fuse/mailman/message/29119987/
     memcpy(ptr, upload_buf->readptr, max_size_to_upload);
     upload_buf->readptr += max_size_to_upload;
     upload_buf->work_buf_size -= max_size_to_upload;
-    debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: "
+    upload_buf->size_processed += max_size_to_upload;
+    debugf(DBG_LEVEL_EXT, "progressive_upload_callback: "
            KMAG "feed for upload data size=%lu", max_size_to_upload);
-    if (upload_buf->work_buf_size == 0)
-      sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
-    else abort();
-    //debugf(DBG_LEVEL_NORM,
-    //       "progressive_read_callback: "KRED"chunked buffer sizeleft=%lu",
-    //       upload_buf->work_buf_size);
+    sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
     return max_size_to_upload;
   }
-  sem_getvalue(de->upload_buf.sem_list[SEM_EMPTY], &sem_val_empty);
-  sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
-  /*if (!upload_buf->write_completed)
-    {
-    debugf(DBG_LEVEL_NORM,
-           "progressive_read_callback: " KRED
-           "unexpected upload done on write in progress, sem_val_empty=%d, sem_val_full=%d",
-           sem_val_empty, sem_val_full);
-    }*/
+
   //all data uploaded and write completed, exit
   debugf(DBG_LEVEL_EXT, KMAG
-         "progressive_read_callback: full file upload completed");
-  sem_post(de->upload_buf.sem_list[SEM_EMPTY]);//.isempty_semaphore);
-  //upload_buf->upload_completed = true;
+         "progressive_upload_callback: segment upload completed");
+  sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
   free_semaphores(&de->upload_buf, SEM_EMPTY);
   free_semaphores(&de->upload_buf, SEM_FULL);
-  return 0; //no more data left to deliver
+  return 0;
 }
 
 /*
@@ -705,14 +698,15 @@ static size_t progressive_read_callback(void* ptr, size_t size, size_t nmemb,
    otherwise point to a new dir_entry that will be added
    to the cache (usually happens on first dir load)
 */
-static int send_request_size(const char* method, const char* path, void* fp,
+static int send_request_size(const char* method, const char* encoded_path,
+                             void* fp,
                              xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
                              off_t file_size, int is_segment,
                              dir_entry* de, dir_entry* de_seg)
 {
   debugf(DBG_LEVEL_NORM,
          "send_request_size(%s) size=%lu is_seg=%d (%s) de=%p seg_de=%p",
-         method, file_size, is_segment, path, de, de_seg);
+         method, file_size, is_segment, encoded_path, de, de_seg);
   char url[MAX_URL_SIZE];
   char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
@@ -725,10 +719,18 @@ static int send_request_size(const char* method, const char* path, void* fp,
   double size_downloaded = 0;
   double size_uploaded = 0;
   struct segment_info* info = NULL;
-
   //needed to keep the response data, for debug purposes
   struct MemoryStruct chunk;
   assert(storage_url[0]);
+
+  char* path;
+  if (de_seg != NULL)
+    path = curl_escape(de_seg->full_name, 0);
+  else if (de != NULL)
+    path = curl_escape(de->full_name, 0);
+  else
+    path = (char*)encoded_path;
+
   while ((slash = strstr(path, "%2F")) || (slash = strstr(path, "%2f")))
   {
     *slash = '/';
@@ -804,17 +806,18 @@ static int send_request_size(const char* method, const char* path, void* fp,
       is_upload = true;
       //todo: read response headers and update file meta (etag & last-modified)
       //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
-      debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu de=%p", orig_path,
-             file_size, de);
+      debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu de=%p",
+             orig_path, file_size, de);
       //don't do progressive on file creation, when size=0 (why?)
       //http://curl.haxx.se/libcurl/c/post-callback.html
       if (option_enable_progressive_upload && file_size > 0)
       {
         assert(de);
-        assert(de_seg);
+        if (de->is_segmented)
+          assert(de_seg);
         curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
         debugf(DBG_LEVEL_EXT, "send_request_size: progressive PUT (%s)", orig_path);
-        curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_read_callback);
+        curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_upload_callback);
         curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de_seg);
       }
       else//not progressive
@@ -956,6 +959,8 @@ static int send_request_size(const char* method, const char* path, void* fp,
     curl_slist_free_all(headers);
     curl_easy_reset(curl);
     return_connection(curl);
+    if (encoded_path == NULL)
+      curl_free(path);
     if (response != 404 && (response >= 400 || response < 200))
     {
       /*
@@ -1420,7 +1425,8 @@ int format_segments(const char* path, char* seg_base,  long* segments,
           de_segment = atoi(new_seg->name);
           old_seg = get_segment(de, de_segment);
           //check if segments are identical, if not replace de with new segment list
-          if (!old_seg || strcasecmp(old_seg->md5sum, new_seg->md5sum))
+          if (!old_seg //|| !old_seg->md5sum
+              || strcasecmp(old_seg->md5sum, new_seg->md5sum))
           {
             debugf(DBG_LEVEL_EXT, KMAG
                    "format_segments: modified segment list for (%s)", de->full_name);
@@ -1532,20 +1538,28 @@ const char* get_file_mimetype ( const char* path )
 }
 
 /*
-  progressive upload to cloud, works only for not segmented files
-  todo: how to return upload status
+  progressive segment upload to cloud
 */
-int cloudfs_object_upload_progressive(dir_entry* de)
+void internal_upload_segment_progressive(void* arg)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_object_upload_progressive(%s)", de->name);
-  char* encoded = curl_escape(de->full_name, 0);
+  struct thread_job* job = arg;
+  debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s)",
+         job->de->name);
+  char* encoded = curl_escape(job->de->full_name, 0);
   //mark file size = 1 to signal we have some data coming in
+  curl_slist* headers = NULL;
+  const char* filemimetype = get_file_mimetype(job->de->full_name);
+  add_header(&headers, "x-object-manifest", job->de->manifest);
+  add_header(&headers, "Content-Length", "0");
+  add_header(&headers, "Content-Type", filemimetype);
   int response = send_request_size(HTTP_PUT, encoded, NULL, NULL, NULL,
-                                   1, 0, de, NULL);
+                                   1, 0, job->de, job->de_seg);
+  curl_slist_free_all(headers);
   curl_free(encoded);
-  debugf(DBG_LEVEL_EXT, "exit: cloudfs_object_upload_progressive(%s)",
-         de->name);
-  return (response >= 200 && response < 300);
+  debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
+         job->de->name);
+  free(job->self_reference);
+  pthread_exit(NULL);
 }
 
 
@@ -1558,17 +1572,16 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   assert(de_seg);
   assert(de);
   debugf(DBG_LEVEL_EXT, "cloudfs_create_segment(%s:%s)", de_seg->name, de->name);
-  const char* filemimetype = get_file_mimetype(de->full_name);
   // delete the previously uploaded segments
-  if (is_segmented(de->full_name))
-  {
+  /* if (is_segmented(de->full_name))
+    //{
     if (!cloudfs_delete_object(de))
       debugf(DBG_LEVEL_NORM, KRED
              "cloudfs_create_segment: couldn't delete existing file");
     else
       debugf(DBG_LEVEL_EXT, KYEL "cloudfs_create_segment: deleted existing file");
-  }
-
+    //}
+  */
   struct timespec now;
   int response;
   //segmenting file for upload, mark as segmented
@@ -1581,16 +1594,24 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   {
     // create the segments container before uploading first segment
     response = cloudfs_create_directory(de->manifest);
+    //exit if error
     if (!response)
       return response;
   }
   //launch upload for this segment
-  response = cloudfs_object_upload_progressive(de_seg);
+  init_semaphores(&de_seg->upload_buf, de_seg, "upload");
+  //upload async.
+  struct thread_job* job = malloc(sizeof(struct thread_job));
+  job->de = de;
+  job->de_seg = de_seg;
+  job->self_reference = job;//todo: free this
+  pthread_create(&job->thread, NULL,
+                 (void*)internal_upload_segment_progressive, job);
   //todo: but how to get full file size?
   debugf(DBG_LEVEL_EXT,
-         "exit 0: cloudfs_create_segment(%s:%s) created ok, response=%d",
-         de_seg->full_name, de_seg->name, response);
-  return response;
+         "exit 0: cloudfs_create_segment(%s:%s) upload started ok",
+         de_seg->full_name, de_seg->name);
+  return true;
 }
 
 /*
@@ -1649,7 +1670,7 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     //uploading all segments in separate threads
     run_segment_threads(HTTP_PUT, segments, full_segments, remaining, fp,
                         seg_base, segment_size, de);
-    char* encoded = curl_escape(de->full_name, 0);
+    //char* encoded = curl_escape(de->full_name, 0);
     curl_slist* headers = NULL;
     add_header(&headers, "x-object-manifest", manifest);
     //due to utimens changes, not needed anymore
@@ -1658,10 +1679,10 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     add_header(&headers, "Content-Type", filemimetype);
     //if path is encoded cache entry will not be found
     //complete upload (write parent file, 0 size?)
-    response = send_request_size("PUT", encoded, NULL, NULL, headers, 0, 0,
+    response = send_request_size("PUT", NULL, NULL, NULL, headers, 0, 0,
                                  de, de_seg);
     curl_slist_free_all(headers);
-    curl_free(encoded);
+    //curl_free(encoded);
     debugf(DBG_LEVEL_EXT,
            "exit 0: cloudfs_upload_segment(%s) uploaded ok, response=%d",
            de->name, response);
@@ -1935,6 +1956,7 @@ int download_ahead_segment_thread(void* arg)
          job->de->name, segindex, seg_read_ahead_count);
   job->de->downld_buf.ahead_thread_count--;
   free(job->self_reference);
+  pthread_exit(NULL);
 }
 
 /*
@@ -2468,12 +2490,13 @@ int cloudfs_create_symlink(dir_entry* de, const char* dst)
 int cloudfs_create_directory(const char* path)
 {
   debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s)", path);
-  dir_entry* de_tmp = init_dir_entry();
-  de_tmp->full_name = strdup(path);
-  de_tmp->isdir = 1;
+  assert(path);
+  //dir_entry* de_tmp = init_dir_entry();
+  //de_tmp->full_name = strdup(path);
+  //de_tmp->isdir = 1;
   char* encoded = curl_escape(path, 0);
-  int response = send_request("MKDIR", encoded, NULL, NULL, NULL, de_tmp, NULL);
-  cloudfs_free_dir_list(de_tmp);
+  int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL, NULL);
+  //cloudfs_free_dir_list(de_tmp);
   curl_free(encoded);
   debugf(DBG_LEVEL_EXT, "cloudfs_create_directory(%s) response=%d",
          path, response);

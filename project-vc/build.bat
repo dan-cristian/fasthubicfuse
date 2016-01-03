@@ -1,13 +1,34 @@
-echo Current directory is:
+echo|set /p="Current directory = "
 cd
 
-echo Listing remote folder content
-set TD=\\10.255.255.1\private\Development\fasthubicfuse-run\
-dir %TD%
+ping -n 1 nas > nul
+IF ERRORLEVEL 0 GOTO set_local
 
+ping -n 1 10.255.255.1 > nul
+IF ERRORLEVEL 0 GOTO set_remote
+
+echo No test environment is available to deploy source files
+pause
+
+GOTO end
+
+:copy_files
 xcopy "..\..\cloudfsapi.c" %TD% /Y /D
-xcopy  "..\..\cloudfuse.c" %TD% /Y /D
-xcopy  "..\..\commonfs.c" %TD% /Y /D
-xcopy  "..\..\cloudfsapi.h" %TD% /Y /D
-xcopy "..\..\commonfs.h" %TD% /Y /D
+xcopy  "..\..\cloudfuse.c" %TD% /Y /D 
+xcopy  "..\..\commonfs.c" %TD% /Y /D 
+xcopy  "..\..\cloudfsapi.h" %TD% /Y /D 
+xcopy "..\..\commonfs.h" %TD% /Y /D 
 xcopy "..\..\test\test.sh" %TD% /Y /D
+GOTO end
+
+:set_remote
+echo Deploying remotely
+SET TD=\\10.255.255.1\private\Development\fasthubicfuse-run\
+goto copy_files
+
+:set_local
+echo Deploying locally
+SET TD=\\nas\private\Development\fasthubicfuse-run\
+goto copy_files
+
+:end
