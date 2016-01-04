@@ -486,7 +486,8 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
       {
         if (de_seg->segment_part != segment_index)
           de_seg->segment_part = segment_index;
-        return de_seg;
+        //return de_seg;
+        break;
       }
       if (!de_seg->next)
       {
@@ -500,24 +501,31 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   }
   assert(de_seg);
   de_seg->segment_part = segment_index;
-  struct timespec now;
-  clock_gettime(CLOCK_REALTIME, &now);
-  char string_float[TIME_CHARS];
-  snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-  char meta_mtime[TIME_CHARS];
-  snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+
   char seg_base[MAX_URL_SIZE] = "";
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
-  split_path(de->full_name, seg_base, container, object);
   char manifest[MAX_URL_SIZE];
-  snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
-  if (!de->manifest)
-    de->manifest = strdup(manifest);
-  //fixme: how to get full file size so early?
-  snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
-           container, object, meta_mtime, /* how to get this?*/ 0,
-           segment_size);
+  split_path(de->full_name, seg_base, container, object);
+
+  if (!de->manifest_seg)
+  {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    char string_float[TIME_CHARS];
+    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+    char meta_mtime[TIME_CHARS];
+    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+    de->manifest_seg = strdup(manifest);
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s",
+             container, object, meta_mtime);
+    de->manifest_time = strdup(manifest);
+  }
+  //at this stage file size is not known so we set it to 0
+  //segment size is set equal for all segments, remaining size is not known
+  snprintf(manifest, MAX_URL_SIZE, "%s/%ld/%ld/", de->manifest_time,
+           0, segment_size);
   char tmp[MAX_URL_SIZE];
   strncpy(tmp, seg_base, MAX_URL_SIZE);
   snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
@@ -695,7 +703,8 @@ dir_entry* init_dir_entry()
   de->next = NULL;
   de->md5sum = NULL;
   de->md5sum_local = NULL;
-  de->manifest = NULL;
+  de->manifest_seg = NULL;
+  de->manifest_time = NULL;
   de->accessed_in_cache = time(NULL);
   de->last_modified = time(NULL);
   de->mtime.tv_sec = time(NULL);
@@ -707,12 +716,8 @@ dir_entry* init_dir_entry()
   de->chmod = 0;
   de->gid = 0;
   de->uid = 0;
-  //de->upload_buf.upload_completed = false;
-  //de->upload_buf.write_completed = false;
   de->upload_buf.local_cache_file = NULL;
-  //de->downld_buf.download_started = false;
   de->downld_buf.local_cache_file = NULL;
-  //de->downld_buf.reading_ahead = false;
   de->downld_buf.fuse_read_size = -1;
   de->downld_buf.work_buf_size = -1;
   de->downld_buf.offset = -1;
@@ -726,6 +731,7 @@ dir_entry* init_dir_entry()
   de->upload_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_name_list[SEM_FULL] = NULL;
   de->upload_buf.size_processed = 0;
+  de->upload_buf.fuse_buf_size = 0;
   de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
   de->is_segmented = false;

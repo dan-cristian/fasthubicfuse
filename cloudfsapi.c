@@ -687,28 +687,29 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   //all data uploaded and write completed, exit
   debugf(DBG_LEVEL_EXT, KMAG
          "progressive_upload_callback: segment upload completed");
+
+  pthread_mutex_lock(&de->upload_buf.mutex);
   sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
   free_semaphores(&de->upload_buf, SEM_EMPTY);
   free_semaphores(&de->upload_buf, SEM_FULL);
+  pthread_mutex_unlock(&de->upload_buf.mutex);
+
   return 0;
 }
 
 /*
-   de_cached_entry must be NULL when the file is already in global cache
-   otherwise point to a new dir_entry that will be added
-   to the cache (usually happens on first dir load)
+   if de_seg != null assumes this sends a segment request
 */
 static int send_request_size(const char* method, const char* encoded_path,
-                             void* fp,
-                             xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
-                             off_t file_size, int is_segment,
-                             dir_entry* de, dir_entry* de_seg)
+                             void* fp, xmlParserCtxtPtr xmlctx,
+                             curl_slist* extra_headers, off_t file_size,
+                             int is_segment, dir_entry* de, dir_entry* de_seg)
 {
   debugf(DBG_LEVEL_NORM,
          "send_request_size(%s) size=%lu is_seg=%d (%s) de=%p seg_de=%p",
          method, file_size, is_segment, encoded_path, de, de_seg);
   char url[MAX_URL_SIZE];
-  char orig_path[MAX_URL_SIZE];
+  //char orig_path[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
   char* slash;
   long response = -1;
@@ -723,7 +724,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   struct MemoryStruct chunk;
   assert(storage_url[0]);
 
-  char* path;
+  char* path, *orig_path;
   if (de_seg != NULL)
     path = curl_escape(de_seg->full_name, 0);
   else if (de != NULL)
@@ -731,6 +732,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   else
     path = (char*)encoded_path;
 
+  orig_path = path; //copy to be freed ok as path ptr will change
   while ((slash = strstr(path, "%2F")) || (slash = strstr(path, "%2f")))
   {
     *slash = '/';
@@ -739,7 +741,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   while (*path == '/')
     path++;
   snprintf(url, sizeof(url), "%s/%s", storage_url, path);
-  snprintf(orig_path, sizeof(orig_path), "/%s", path);
+  //snprintf(orig_path, sizeof(orig_path), "/%s", path);
   // retry on HTTP failures
   for (tries = 0; tries < REQUEST_RETRIES; tries++)
   {
@@ -960,7 +962,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     curl_easy_reset(curl);
     return_connection(curl);
     if (encoded_path == NULL)
-      curl_free(path);
+      curl_free(orig_path);
     if (response != 404 && (response >= 400 || response < 200))
     {
       /*
@@ -1395,8 +1397,19 @@ int format_segments(const char* path, char* seg_base,  long* segments,
       debugf(DBG_LEVEL_EXTALL, "exit 3: format_segments(%s)", path);
       return 0;
     }
+    else
+    {
+      //most reliable way to get true size is to add all segments
+      //as size from folder name is 0 on progressive uploads
+      *total_size = 0;
+      while (seg_dir)
+      {
+        *total_size += seg_dir->size;
+        seg_dir = seg_dir->next;
+      }
+    }
 
-    *total_size = strtoll(str_size, NULL, 10);
+    //*total_size = strtoll(str_size, NULL, 10);
     *size_of_segments = strtoll(str_segment, NULL, 10);
     *remaining = *total_size % *size_of_segments;
     *full_segments = *total_size / *size_of_segments;
@@ -1440,7 +1453,8 @@ int format_segments(const char* path, char* seg_base,  long* segments,
         }
       }
     }
-
+    else
+      debugf(DBG_LEVEL_EXT, KYEL "format_segments: de(%s) not found!", path);
 
     char tmp[MAX_URL_SIZE];
     strncpy(tmp, seg_base, MAX_URL_SIZE);
@@ -1545,17 +1559,23 @@ void internal_upload_segment_progressive(void* arg)
   struct thread_job* job = arg;
   debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s)",
          job->de->name);
-  char* encoded = curl_escape(job->de->full_name, 0);
+  //char* encoded = curl_escape(job->de->full_name, 0);
   //mark file size = 1 to signal we have some data coming in
-  curl_slist* headers = NULL;
-  const char* filemimetype = get_file_mimetype(job->de->full_name);
-  add_header(&headers, "x-object-manifest", job->de->manifest);
-  add_header(&headers, "Content-Length", "0");
-  add_header(&headers, "Content-Type", filemimetype);
-  int response = send_request_size(HTTP_PUT, encoded, NULL, NULL, NULL,
+  int response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL,
                                    1, 0, job->de, job->de_seg);
-  curl_slist_free_all(headers);
-  curl_free(encoded);
+  //curl_free(encoded);
+  //if this is the last segment, upload the zero size parent file
+  if (job->de_seg->segment_part == job->de->segment_count - 1)
+  {
+    curl_slist* headers = NULL;
+    const char* filemimetype = get_file_mimetype(job->de->full_name);
+    add_header(&headers, "x-object-manifest", job->de->manifest_seg);
+    add_header(&headers, "Content-Length", "0");
+    add_header(&headers, "Content-Type", filemimetype);
+    response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL,
+                                 0, 0, job->de, NULL);
+    curl_slist_free_all(headers);
+  }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
          job->de->name);
   free(job->self_reference);
@@ -1593,7 +1613,14 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   if (de_seg->segment_part == 0)
   {
     // create the segments container before uploading first segment
-    response = cloudfs_create_directory(de->manifest);
+    char manifest[MAX_URL_SIZE];
+    char seg_base[MAX_URL_SIZE] = "";
+    char container[MAX_URL_SIZE] = "";
+    char object[MAX_URL_SIZE] = "";
+    split_path(de->full_name, seg_base, container, object);
+    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+
+    response = cloudfs_create_directory(manifest);
     //exit if error
     if (!response)
       return response;
@@ -2130,9 +2157,9 @@ void get_file_metadata(dir_entry* de)
       de->segment_remaining = remaining;
     }
   }
-  else debugf(DBG_LEVEL_EXT,
-                KCYN "get_file_metadata(%s) not looking for segments, size_cloud=%lu",
-                de->full_name, de->size_on_cloud);
+  else debugf(DBG_LEVEL_EXT, KCYN
+                "get_file_metadata(%s) skip seg_downld, size_cloud=%lu meta_down=%d",
+                de->full_name, de->size_on_cloud, de->metadata_downloaded);
   if (option_get_extended_metadata && !de->isdir)
   {
     debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",

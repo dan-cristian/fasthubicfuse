@@ -82,6 +82,7 @@ typedef struct progressive_data_buf
   char* sem_name_list[2];
   size_t fuse_read_size;
   FILE* local_cache_file;
+  size_t fuse_buf_size;
 } progressive_data_buf;
 
 //linked list with files in a directory
@@ -91,7 +92,8 @@ typedef struct dir_entry
   char* full_name;
   char* full_name_hash;//md5 hash for uniqueness purposes (e.g. semaphore unique id)
   char* content_type;
-  char* manifest;
+  char* manifest_time;
+  char* manifest_seg;
   off_t size;//size of the file, might not match the size in cloud if is segmented
   off_t size_on_cloud;//size of the file in cloud, should be 0 for segmented files
   time_t last_modified;

@@ -798,6 +798,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   //else //fh == -1
   //{
 
+
   if (option_enable_progressive_upload && de->size > 0)
   {
     debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
@@ -885,7 +886,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     debugf(DBG_LEVEL_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
   else
-    debugf(DBG_LEVEL_EXTALL, KBLU
+    debugf(DBG_LEVEL_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
   int result, errsv;
   dir_entry* de = check_path_info(path);
@@ -969,13 +970,18 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       seg_index = offset / segment_size;
       de_seg = get_create_segment(de, seg_index);
       assert(get_segment(de, seg_index));
-      assert(de->manifest);
+      assert(de->manifest_seg);
+      if (!de_seg->upload_buf.mutex_initialised)
+      {
+        pthread_mutex_init(&de_seg->upload_buf.mutex, &segment_mutex_attr);
+        de_seg->upload_buf.mutex_initialised = true;
+      }
       //alter offset for segmented uploads (do I need this?)
       de_seg->upload_buf.offset = offset - (seg_index * segment_size);
       de_seg->upload_buf.work_buf_size = length;
 
       //unblock previous segment from data wait
-      //fixme: expensive call, use dbl linked list?
+      //fixme: expensive as get_segment is called, use dbl linked list?
       if (seg_index > 0)
       {
         dir_entry* prev_seg = get_segment(de, seg_index - 1);
@@ -1005,7 +1011,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
            || de_seg->upload_buf.size_processed == de_seg->size))
       {
         //de->is_segmented = true; //set when offset=0
-        assert(de->manifest);
+        assert(de->manifest_seg);
         bool op_ok = cloudfs_create_segment(de_seg, de);
         assert(op_ok);
       }
@@ -1013,15 +1019,16 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       //this will happen for a progressive/segmented upload
       if (de->is_segmented)
       {
+        pthread_mutex_lock(&de_seg->upload_buf.mutex);
         //signal there is data available in buffer for upload
-        sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
-        //only wait if there is data to avoid segfault on sem free
-        if (de_seg->upload_buf.work_buf_size > 0)
-        {
-          //wait until previous buffer data is uploaded
+        if (de_seg->upload_buf.sem_list[SEM_FULL])
+          sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+
+        //wait until previous buffer data is uploaded
+        if (de_seg->upload_buf.sem_list[SEM_EMPTY])
           sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
-        }
-        //there might be data left not uploaded
+        pthread_mutex_unlock(&de_seg->upload_buf.mutex);
+
         debugf(DBG_LEVEL_EXT, KMAG
                "cfs_write(%s): buffer for upload, work_size=%lu", path,
                de_seg->upload_buf.work_buf_size);
@@ -1035,8 +1042,25 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
       }
     }
+    if (option_enable_progressive_upload && de->is_segmented)
+    {
+      if (de_seg->upload_buf.fuse_buf_size != 0
+          && de_seg->upload_buf.fuse_buf_size != length)
+      {
+        //assume this is the last write as buf size is different than previous
+        de->segment_count = seg_index + 1;
 
-    return length;//?
+        //unblock the last segment wait in http callback
+        if (de_seg->upload_buf.sem_list[SEM_FULL])
+          sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+        //write zero size file
+
+      }
+      de_seg->upload_buf.fuse_buf_size = length;
+    }
+    debugf(DBG_LEVEL_EXT, KMAG "cfs_write(%s): exit, work_size=%lu",
+           path, de_seg->upload_buf.work_buf_size);
+    return length;
   }
 }
 
