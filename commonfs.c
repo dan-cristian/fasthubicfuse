@@ -713,15 +713,16 @@ dir_entry* init_dir_entry()
   de->mtime.tv_nsec = 0;
   de->atime.tv_nsec = 0;
   de->ctime.tv_nsec = 0;
-  de->chmod = 0;
-  de->gid = 0;
-  de->uid = 0;
+  de->chmod = -1;
+  de->gid = -1;
+  de->uid = -1;
   de->upload_buf.local_cache_file = NULL;
   de->downld_buf.local_cache_file = NULL;
   de->downld_buf.fuse_read_size = -1;
   de->downld_buf.work_buf_size = -1;
   de->downld_buf.offset = -1;
   de->downld_buf.mutex_initialised = false;
+  de->upload_buf.mutex_initialised = false;
   de->downld_buf.sem_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_list[SEM_FULL] = NULL;
   de->downld_buf.sem_name_list[SEM_EMPTY] = NULL;
@@ -1053,7 +1054,7 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
       debugf(DBG_LEVEL_EXTALL, KMAG
              "open_segment_from_cache: segment md5sum_local=%s md5sum=%s",
              de_seg->md5sum_local, de_seg->md5sum);
-    bool match = (de && de->md5sum != NULL
+    bool match = (de_seg && de_seg->md5sum != NULL
                   && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
     if (!match)
     {

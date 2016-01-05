@@ -56,7 +56,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
     debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_getattr(%s)", path);
     return 0;
   }
-  //get file. if not in cache will be downloaded.
+  //get file. if not in cache will be added
   dir_entry* de = path_info(path);
   if (!de)
   {
@@ -68,7 +68,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   //lazzy download of file metadata, only when really needed
   if (option_get_extended_metadata && !de->metadata_downloaded)
     get_file_metadata(de);
-  if (option_enable_chown)
+  if (option_enable_chown && de->uid != -1 && de->gid != -1)
   {
     stbuf->st_uid = de->uid;
     stbuf->st_gid = de->gid;
@@ -93,7 +93,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
   debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: ctime=[%s]", time_str);
   int default_mode_dir, default_mode_file;
-  if (option_enable_chmod)
+  if (option_enable_chmod & de->chmod != -1)
   {
     default_mode_dir = de->chmod;
     default_mode_file = de->chmod;
@@ -149,7 +149,7 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
     return -ENOENT;
   }
   int default_mode_file;
-  if (option_enable_chmod)
+  if (option_enable_chmod && de->chmod != -1)
     default_mode_file = de->chmod;
   else
     default_mode_file = 0666;
@@ -1019,6 +1019,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       //this will happen for a progressive/segmented upload
       if (de->is_segmented)
       {
+        assert(de_seg->upload_buf.mutex_initialised);
         pthread_mutex_lock(&de_seg->upload_buf.mutex);
         //signal there is data available in buffer for upload
         if (de_seg->upload_buf.sem_list[SEM_FULL])

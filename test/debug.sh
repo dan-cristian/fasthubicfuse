@@ -10,6 +10,7 @@ sudo umount -l /mnt/hubic2 > /dev/null 2>&1
 sudo make install
 if [ "$?" == "0" ]; then
 	touch newbuild
+	rm -Rf /mnt/hubic2/*
 	gdb --eval-command=run --args hubicfuse /mnt/hubic2 -o noauto_cache,sync_read,allow_other,big_writes,large_read -f
 else
 	echo error make

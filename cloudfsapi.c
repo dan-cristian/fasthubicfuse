@@ -725,12 +725,22 @@ static int send_request_size(const char* method, const char* encoded_path,
   assert(storage_url[0]);
 
   char* path, *orig_path;
+  const char* print_path;
   if (de_seg != NULL)
+  {
     path = curl_escape(de_seg->full_name, 0);
+    print_path = de_seg->full_name;
+  }
   else if (de != NULL)
+  {
     path = curl_escape(de->full_name, 0);
+    print_path = de->full_name;
+  }
   else
+  {
     path = (char*)encoded_path;
+    print_path = encoded_path;
+  }
 
   orig_path = path; //copy to be freed ok as path ptr will change
   while ((slash = strstr(path, "%2F")) || (slash = strstr(path, "%2f")))
@@ -808,7 +818,7 @@ static int send_request_size(const char* method, const char* encoded_path,
       is_upload = true;
       //todo: read response headers and update file meta (etag & last-modified)
       //http://blog.chmouel.com/2012/02/06/anatomy-of-a-swift-put-query-to-object-server/
-      debugf(DBG_LEVEL_EXT, "send_request_size: PUT (%s) size=%lu de=%p",
+      debugf(DBG_LEVEL_EXT, "send_request_size: enter PUT (%s) size=%lu de=%p",
              orig_path, file_size, de);
       //don't do progressive on file creation, when size=0 (why?)
       //http://curl.haxx.se/libcurl/c/post-callback.html
@@ -869,13 +879,19 @@ static int send_request_size(const char* method, const char* encoded_path,
         is_download = true;
         info = (struct segment_info*)fp;
         if (is_segment)
+        {
           debugf(DBG_LEVEL_EXT,
                  "send_request_size: GET SEGMENT (%s) fp=%p part=%d proc=%lu",
                  orig_path, fp, info->part, info->size_processed);
+          curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)info->de_seg);
+        }
         else
+        {
           debugf(DBG_LEVEL_EXT,
                  "send_request_size: GET FILE (%s) fp=%p proc=%lu de=%p",
                  orig_path, fp, info->size_processed, de);
+          curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)info->de);
+        }
         /**/
         //download via callback
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -895,7 +911,7 @@ static int send_request_size(const char* method, const char* encoded_path,
         }
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
         //de is null on segments
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)info->de);//de);
+
         /**/
         /*
           //download directly to file
@@ -972,7 +988,7 @@ static int send_request_size(const char* method, const char* encoded_path,
       //printf("%lu bytes retrieved\n", (long)chunk.size);
       debugf(DBG_LEVEL_NORM, KRED
              "send_request_size: error, resp=%d , size=%lu, [HTTP %d] (%s)(%s)",
-             response, (long)chunk.size, response, method, path);
+             response, (long)chunk.size, response, method, print_path);
       debugf(DBG_LEVEL_NORM, KRED"send_request_size: error message=[%s]",
              chunk.memory);
     }
@@ -990,8 +1006,8 @@ static int send_request_size(const char* method, const char* encoded_path,
     {
       debugf(DBG_LEVEL_NORM,
              "exit 0: send_request_size(%s) speed=%.1f sec res=%d dwn=%.0f upld=%.0f"
-             KCYN "(%s) "KGRN"[HTTP OK]",
-             orig_path, total_time, response, size_downloaded, size_uploaded, method);
+             KCYN "(%s) "KGRN"[HTTP OK]", print_path, total_time, response, size_downloaded,
+             size_uploaded, method);
       return response;
     }
     //handle cases when file is not found, no point in retrying, should exit
@@ -999,14 +1015,14 @@ static int send_request_size(const char* method, const char* encoded_path,
     {
       debugf(DBG_LEVEL_NORM,
              "send_request_size: not found error for (%s)(%s), ignored "KYEL"[HTTP 404]",
-             method, path);
+             method, print_path);
       return response;
     }
     else
     {
       debugf(DBG_LEVEL_NORM,
              "send_request_size: httpcode=%d (%s)(%s), retrying "KRED"[HTTP ERR]", response,
-             method, path);
+             method, print_path);
       //todo: try to list response content for debug purposes
       if (response != 417)//skip pause on slow speed errors
         sleep(8 << tries); // backoff
@@ -1014,7 +1030,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
     {
       debugf(DBG_LEVEL_NORM, KYEL"exit 1: send_request_size(%s) (%s) [HTTP REAUTH]",
-             path, method);
+             print_path, method);
       return response;
     }
     if (xmlctx)
@@ -1022,7 +1038,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   }//end for
   debugf(DBG_LEVEL_NORM,
          "exit 2: send_request_size(%s)"KCYN"(%s) response=%d total_time=%.1f seconds",
-         path, method, response, total_time);
+         print_path, method, response, total_time);
   return response;
 }
 
@@ -1402,10 +1418,12 @@ int format_segments(const char* path, char* seg_base,  long* segments,
       //most reliable way to get true size is to add all segments
       //as size from folder name is 0 on progressive uploads
       *total_size = 0;
-      while (seg_dir)
+      dir_entry* tmp_de;
+      tmp_de = seg_dir;
+      while (tmp_de)
       {
-        *total_size += seg_dir->size;
-        seg_dir = seg_dir->next;
+        *total_size += tmp_de->size;
+        tmp_de = tmp_de->next;
       }
     }
 
@@ -1418,12 +1436,14 @@ int format_segments(const char* path, char* seg_base,  long* segments,
              container, object, timestamp, str_size, str_segment);
 
     //save segments dir list into parent file entry
-    //fixme: unsafe as it get's overwritten and data is lost
+    //fixme: potentially unsafe as it get's overwritten and data is lost
     dir_entry* de = check_path_info(path);
     if (de)
     {
       if (!de->segments)
       {
+        debugf(DBG_LEVEL_EXT, KMAG
+               "format_segments: adding segment list to (%s)", de->full_name);
         de->segments = seg_dir;
         de->segment_count = *segments;
       }
@@ -1433,16 +1453,18 @@ int format_segments(const char* path, char* seg_base,  long* segments,
         dir_entry* new_seg = seg_dir;
         dir_entry* old_seg;
         int de_segment;
+        debugf(DBG_LEVEL_EXT, KMAG
+               "format_segments: checking seglist changes (%s)", de->full_name);
         while (new_seg)
         {
           de_segment = atoi(new_seg->name);
           old_seg = get_segment(de, de_segment);
-          //check if segments are identical, if not replace de with new segment list
-          if (!old_seg //|| !old_seg->md5sum
-              || strcasecmp(old_seg->md5sum, new_seg->md5sum))
+          //check if segments are identical
+          //if not replace de with new segment list
+          if (!old_seg || strcasecmp(old_seg->md5sum, new_seg->md5sum))
           {
             debugf(DBG_LEVEL_EXT, KMAG
-                   "format_segments: modified segment list for (%s)", de->full_name);
+                   "format_segments: modifing segment list for (%s)", de->full_name);
             //todo: what if there are download segmented ops in progress?
             cloudfs_free_dir_list(de->segments);
             de->segments = seg_dir;
@@ -1559,22 +1581,25 @@ void internal_upload_segment_progressive(void* arg)
   struct thread_job* job = arg;
   debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s)",
          job->de->name);
-  //char* encoded = curl_escape(job->de->full_name, 0);
   //mark file size = 1 to signal we have some data coming in
   int response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL,
                                    1, 0, job->de, job->de_seg);
-  //curl_free(encoded);
   //if this is the last segment, upload the zero size parent file
   if (job->de_seg->segment_part == job->de->segment_count - 1)
   {
+    debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s): manifest=%s",
+           job->de->name, job->de->manifest_seg);
     curl_slist* headers = NULL;
     const char* filemimetype = get_file_mimetype(job->de->full_name);
-    add_header(&headers, "x-object-manifest", job->de->manifest_seg);
+    add_header(&headers, "X-Object-Manifest", job->de->manifest_seg);
     add_header(&headers, "Content-Length", "0");
     add_header(&headers, "Content-Type", filemimetype);
-    response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL,
+    response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                  0, 0, job->de, NULL);
     curl_slist_free_all(headers);
+
+    //todo: remove older segments after succesfull upload
+    abort();
   }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
          job->de->name);
@@ -2053,7 +2078,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                      de->segment_size : de->segment_remaining;
   else
     info.size_left = de->size;
-  //need a copy for resume as info.size will be changed during download
+  //need a copy for resume as info.size_left will be changed during download
   info.size_copy = info.size_left;
 
   //get existing segment size on disk for resume ops
@@ -2165,10 +2190,8 @@ void get_file_metadata(dir_entry* de)
     debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",
            de->full_name, de->size_on_cloud);
     //retrieve additional file metadata with a quick HEAD query
-    char* encoded = curl_escape(de->full_name, 0);
-    int response = send_request("GET", encoded, NULL, NULL, NULL, de, NULL);
+    int response = send_request("GET", NULL, NULL, NULL, NULL, de, NULL);
     de->metadata_downloaded = true;
-    curl_free(encoded);
     debugf(DBG_LEVEL_EXT, KCYN "exit: get_file_metadata(%s) hash=%s",
            de->full_name, de->md5sum);
   }
