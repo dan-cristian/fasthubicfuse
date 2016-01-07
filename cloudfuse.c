@@ -962,8 +962,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     if (option_enable_progressive_upload)
     {
       //delete here to avoid overwrite of de_seg due to list
-      if (offset == 0)
-        cloudfs_delete_object(de);
+      //if (offset == 0)
+      //  cloudfs_delete_object(de);
 
       //creates the segment to be uploaded as dir_entry
       //and sets minimum required fields

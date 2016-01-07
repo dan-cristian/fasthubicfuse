@@ -418,6 +418,7 @@ dir_cache* new_cache(const char* path)
 //is made on a folder that has an operation in progress
 void cloudfs_free_dir_list(dir_entry* dir_list)
 {
+  assert(dir_list);
   //check for NULL as dir might be already removed from cache by other thread
   debugf(DBG_LEVEL_NORM, "cloudfs_free_dir_list(%s)", dir_list->full_name);
   while (dir_list)

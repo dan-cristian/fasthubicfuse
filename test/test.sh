@@ -64,8 +64,11 @@ function main(){
 	if test "create test folder" "mkdir $HUB"; then return; fi
 
 	if test "upload non-segmented file" "cp $SRC/$SMALL $HUB/"; then return; fi
+	return
 	if test "download uploaded file" "cp $HUB/$SMALL $TMP/"; then return; fi
 	if test_md5 "$TMP/$SMALL" "$SMALL_MD5"; then return; fi
+
+	if test "re upload non-segmented file" "cp $SRC/$SMALL $HUB/"; then return; fi
 	
 	if test "download file" "cp $HUB_NOCACHE/$TINY $TMP/"; then return; fi
 	if test_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi

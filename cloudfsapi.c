@@ -743,6 +743,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   }
 
   orig_path = path; //copy to be freed ok as path ptr will change
+
   while ((slash = strstr(path, "%2F")) || (slash = strstr(path, "%2f")))
   {
     *slash = '/';
@@ -934,10 +935,15 @@ static int send_request_size(const char* method, const char* encoded_path,
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
       }
     }
+    else if (!strcasecmp(method, "DELETE"))
+    {
+      debugf(DBG_LEVEL_EXT, "send_request_size: DELETE (%s)", print_path);
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+    }
     else
     {
       debugf(DBG_LEVEL_EXT, "send_request_size: catch_all (%s)");
-      // this posts an HEAD request (e.g. for statfs)
+      // HEAD request (e.g. for statfs)
       curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
       curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
     }
@@ -977,8 +983,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     curl_slist_free_all(headers);
     curl_easy_reset(curl);
     return_connection(curl);
-    if (encoded_path == NULL)
-      curl_free(orig_path);
+
     if (response != 404 && (response >= 400 || response < 200))
     {
       /*
@@ -1008,7 +1013,7 @@ static int send_request_size(const char* method, const char* encoded_path,
              "exit 0: send_request_size(%s) speed=%.1f sec res=%d dwn=%.0f upld=%.0f"
              KCYN "(%s) "KGRN"[HTTP OK]", print_path, total_time, response, size_downloaded,
              size_uploaded, method);
-      return response;
+      break;
     }
     //handle cases when file is not found, no point in retrying, should exit
     if (response == 404)
@@ -1016,7 +1021,7 @@ static int send_request_size(const char* method, const char* encoded_path,
       debugf(DBG_LEVEL_NORM,
              "send_request_size: not found error for (%s)(%s), ignored "KYEL"[HTTP 404]",
              method, print_path);
-      return response;
+      break;
     }
     else
     {
@@ -1025,17 +1030,20 @@ static int send_request_size(const char* method, const char* encoded_path,
              method, print_path);
       //todo: try to list response content for debug purposes
       if (response != 417)//skip pause on slow speed errors
-        sleep(8 << tries); // backoff
+        //sleep(8 << tries); // backoff
+        sleep(1);
     }
     if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
     {
       debugf(DBG_LEVEL_NORM, KYEL"exit 1: send_request_size(%s) (%s) [HTTP REAUTH]",
              print_path, method);
-      return response;
+      break;
     }
     if (xmlctx)
       xmlCtxtResetPush(xmlctx, NULL, 0, NULL, NULL);
   }//end for
+  if (encoded_path == NULL)
+    curl_free(orig_path);
   debugf(DBG_LEVEL_NORM,
          "exit 2: send_request_size(%s)"KCYN"(%s) response=%d total_time=%.1f seconds",
          print_path, method, response, total_time);
@@ -1046,7 +1054,7 @@ static int send_request_size(const char* method, const char* encoded_path,
 //todo: implement use of dir_entry instead of path for performance reasons.
 int send_request(char* method, const char* path, FILE* fp,
                  xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
-                 dir_entry* de_cached_entry, dir_entry* de_seg)
+                 dir_entry* de, dir_entry* de_seg)
 {
   long flen = 0;
   if (fp)
@@ -1055,8 +1063,8 @@ int send_request(char* method, const char* path, FILE* fp,
     fflush(fp);
     flen = cloudfs_file_size(fileno(fp));
   }
-  return send_request_size(method, path, fp, xmlctx, extra_headers, flen, 0,
-                           de_cached_entry, de_seg);
+  return send_request_size(method, path, fp, xmlctx, extra_headers, flen, 0, de,
+                           de_seg);
 }
 
 //thread that downloads or uploads large file segments
@@ -1389,12 +1397,14 @@ int format_segments(const char* path, char* seg_base,  long* segments,
     char* timestamp = seg_dir->name;
     snprintf(seg_path, MAX_URL_SIZE, "%s/%s", manifest, timestamp);
     debugf(DBG_LEVEL_EXTALL, "format_segments seg_path(%s)", seg_path);
-    if (!cloudfs_list_directory(seg_path, &seg_dir))
+
+    //fix as sometimes seg_dir is null
+    if (!cloudfs_list_directory(seg_path, &seg_dir) || !seg_dir)
     {
-      debugf(DBG_LEVEL_EXTALL, "exit 1: format_segments(%s)", path);
+      debugf(DBG_LEVEL_EXT, "exit 1: format_segments(%s)", path);
       return 0;
     }
-    char* str_size = seg_dir->name;//fixme: sometimes seg_dir is null
+    char* str_size = seg_dir->name;
     snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, str_size);
     debugf(DBG_LEVEL_EXTALL, KMAG"format_segments manifest2(%s) size=%s", manifest,
            str_size);
@@ -1461,7 +1471,8 @@ int format_segments(const char* path, char* seg_base,  long* segments,
           old_seg = get_segment(de, de_segment);
           //check if segments are identical
           //if not replace de with new segment list
-          if (!old_seg || strcasecmp(old_seg->md5sum, new_seg->md5sum))
+          if (!old_seg || !old_seg->md5sum
+              || strcasecmp(old_seg->md5sum, new_seg->md5sum))
           {
             debugf(DBG_LEVEL_EXT, KMAG
                    "format_segments: modifing segment list for (%s)", de->full_name);
@@ -1579,16 +1590,17 @@ const char* get_file_mimetype ( const char* path )
 void internal_upload_segment_progressive(void* arg)
 {
   struct thread_job* job = arg;
-  debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s)",
-         job->de->name);
+  debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s): seg=%s",
+         job->de->name, job->de_seg->full_name);
   //mark file size = 1 to signal we have some data coming in
   int response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL,
                                    1, 0, job->de, job->de_seg);
   //if this is the last segment, upload the zero size parent file
   if (job->de_seg->segment_part == job->de->segment_count - 1)
   {
-    debugf(DBG_LEVEL_EXT, "internal_upload_segment_progressive(%s): manifest=%s",
-           job->de->name, job->de->manifest_seg);
+    debugf(DBG_LEVEL_EXT,
+           "internal_upload_segment_progressive(%s): manifest=%s de_seg=%s",
+           job->de->name, job->de->manifest_seg, job->de_seg->full_name);
     curl_slist* headers = NULL;
     const char* filemimetype = get_file_mimetype(job->de->full_name);
     add_header(&headers, "X-Object-Manifest", job->de->manifest_seg);
@@ -1597,9 +1609,33 @@ void internal_upload_segment_progressive(void* arg)
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                  0, 0, job->de, NULL);
     curl_slist_free_all(headers);
-
     //todo: remove older segments after succesfull upload
-    abort();
+    dir_entry* de_versions, *de_tmp;
+    char manifest_root[MAX_URL_SIZE] = "";
+    snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
+             job->de->manifest_seg, job->de->name);
+    debugf(DBG_LEVEL_EXT, KCYN "internal_upload: get file versions manif=%s",
+           manifest_root);
+    if (cloudfs_list_directory(manifest_root, &de_versions))
+    {
+      de_tmp = de_versions;
+      while (de_tmp)
+      {
+        //usually first entry is the just uploaded segment folder
+        //ensure is not deleted
+        if (de_tmp &&
+            strcasecmp(de_tmp->full_name + 1, job->de->manifest_time))
+          //+1 as manifest does not have starting slash "/"
+        {
+          //delete current folder/subfolders as there is a newer version available
+          cloudfs_delete_folder(de_tmp);
+        }
+        de_tmp = de_tmp->next;
+      }
+    }
+    else
+      abort();
+    cloudfs_free_dir_list(de_versions);
   }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
          job->de->name);
@@ -1617,16 +1653,6 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   assert(de_seg);
   assert(de);
   debugf(DBG_LEVEL_EXT, "cloudfs_create_segment(%s:%s)", de_seg->name, de->name);
-  // delete the previously uploaded segments
-  /* if (is_segmented(de->full_name))
-    //{
-    if (!cloudfs_delete_object(de))
-      debugf(DBG_LEVEL_NORM, KRED
-             "cloudfs_create_segment: couldn't delete existing file");
-    else
-      debugf(DBG_LEVEL_EXT, KYEL "cloudfs_create_segment: deleted existing file");
-    //}
-  */
   struct timespec now;
   int response;
   //segmenting file for upload, mark as segmented
@@ -1638,7 +1664,7 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   if (de_seg->segment_part == 0)
   {
     // create the segments container before uploading first segment
-    char manifest[MAX_URL_SIZE];
+    char manifest[MAX_URL_SIZE] = "";
     char seg_base[MAX_URL_SIZE] = "";
     char container[MAX_URL_SIZE] = "";
     char object[MAX_URL_SIZE] = "";
@@ -1650,16 +1676,14 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
     if (!response)
       return response;
   }
-  //launch upload for this segment
+  //launch async upload for this segment
   init_semaphores(&de_seg->upload_buf, de_seg, "upload");
-  //upload async.
   struct thread_job* job = malloc(sizeof(struct thread_job));
   job->de = de;
   job->de_seg = de_seg;
-  job->self_reference = job;//todo: free this
+  job->self_reference = job;//freed in internal_upload_segment_progressive
   pthread_create(&job->thread, NULL,
                  (void*)internal_upload_segment_progressive, job);
-  //todo: but how to get full file size?
   debugf(DBG_LEVEL_EXT,
          "exit 0: cloudfs_create_segment(%s:%s) upload started ok",
          de_seg->full_name, de_seg->name);
@@ -1722,11 +1746,9 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     //uploading all segments in separate threads
     run_segment_threads(HTTP_PUT, segments, full_segments, remaining, fp,
                         seg_base, segment_size, de);
-    //char* encoded = curl_escape(de->full_name, 0);
     curl_slist* headers = NULL;
     add_header(&headers, "x-object-manifest", manifest);
     //due to utimens changes, not needed anymore
-    //add_header(&headers, "x-object-meta-mtime", meta_mtime);
     add_header(&headers, "Content-Length", "0");
     add_header(&headers, "Content-Type", filemimetype);
     //if path is encoded cache entry will not be found
@@ -1734,7 +1756,6 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     response = send_request_size("PUT", NULL, NULL, NULL, headers, 0, 0,
                                  de, de_seg);
     curl_slist_free_all(headers);
-    //curl_free(encoded);
     debugf(DBG_LEVEL_EXT,
            "exit 0: cloudfs_upload_segment(%s) uploaded ok, response=%d",
            de->name, response);
@@ -2066,6 +2087,14 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
     pthread_mutex_unlock(&de_seg->downld_buf.mutex);
     return true;
   }
+  else
+  {
+    debugf(DBG_LEVEL_EXT, KMAG
+           "cloudfs_download_segment: cache NOT ok after lock %s part=%lu",
+           de->name, de_seg->segment_part);
+    if (de_seg->segment_part == 6)
+      sleep_ms(1);
+  }
 
   init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
   de_seg->downld_buf.fuse_read_size = size;
@@ -2097,14 +2126,14 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   assert(info.fp);
   assert(fseek(info.fp, info.size_processed, SEEK_SET) == 0);
   setvbuf(info.fp, NULL, _IOFBF, DISK_BUFF_SIZE);
-  char* encoded = curl_escape(info.seg_base, 0);
-  int response = send_request_size(info.method, encoded, &info, NULL, NULL,
+  //char* encoded = curl_escape(info.seg_base, 0);
+  int response = send_request_size(info.method, NULL, &info, NULL, NULL,
                                    info.size_copy, de->is_segmented, de, de_seg);
   if (!(response >= 200 && response < 300))
     debugf(DBG_LEVEL_NORM, KRED
            "cloudfs_download_segment: %s failed resp=%d proc=%lu",
            info.seg_base, response, info.size_processed);
-  curl_free(encoded);
+  //curl_free(encoded);
   fflush(info.fp);
   //compute md5sum after each seg download
   assert(!de_seg->md5sum_local);
@@ -2279,8 +2308,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
               //debugf(DBG_LEVEL_NORM, "List dir anode=%s", (const char *)anode->name);
             }
           }
-          debugf(DBG_LEVEL_EXTALL, KCYN"cloudfs_list_directory(%s): anode [%s]=[%s]",
-                 path,
+          debugf(DBG_LEVEL_EXTALL, KCYN
+                 "cloudfs_list_directory(%s): anode [%s]=[%s]", path,
                  (const char*)anode->name, content);
           if (!strcasecmp((const char*)anode->name, "name"))
           {
@@ -2334,14 +2363,13 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
                      ((strstr(de->content_type, "application/link") != NULL));
         if (de->isdir)
         {
-          //i guess this will remove a dir_entry from cache if is there already?
+          //removes a dir_entry from cache if is an older version?
           if (!strncasecmp(de->name, last_subdir, sizeof(last_subdir)))
           {
             //not sure when / why this is called, seems to generate many missed delete ops.
             //cloudfs_free_dir_list(de);
-            debugf(DBG_LEVEL_EXT,
-                   "cloudfs_list_directory: "KYEL"ignore "KNRM"cloudfs_free_dir_list(%s) command",
-                   de->name);
+            debugf(DBG_LEVEL_EXT, "cloudfs_list_directory: " KYEL
+                   "ignore "KNRM"cloudfs_free_dir_list(%s) command", de->name);
             continue;
           }
           strncpy(last_subdir, de->name, sizeof(last_subdir));
@@ -2354,9 +2382,6 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
                KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s] md5=%s",
                de->full_name, de->size, de->content_type, de->isdir, de->islink, time_str,
                de->md5sum);
-        //attempt to read extended attributes on each dir entry
-        //commented out as lazzy metadata read is implemented in cfs_getattr()
-        //get_file_metadata(de);
       }
       else
         debugf(DBG_LEVEL_EXT, "unknown element: %s", onode->name);
@@ -2391,6 +2416,34 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   return retval;
 }
 
+/*
+  remove folder and it's subfolders & files recursively
+*/
+int cloudfs_delete_folder(dir_entry* de)
+{
+  debugf(DBG_LEVEL_EXT, "cloudfs_delete_folder(%s)", de->full_name);
+  int response = -1;
+  dir_entry* de_content, *de_tmp;
+  char manifest_root[MAX_URL_SIZE] = "";
+  if (cloudfs_list_directory(de->full_name, &de_content))
+  {
+    de_tmp = de_content;
+    while (de_tmp)
+    {
+      if (de_tmp->isdir)
+        cloudfs_delete_folder(de_tmp);
+      else
+        response = send_request("DELETE", NULL, NULL, NULL, NULL, de_tmp, NULL);
+      de_tmp = de_tmp->next;
+    }
+  }
+  //delete this folder. it might throw 404 errors, not sure why
+  response = send_request("DELETE", NULL, NULL, NULL, NULL, de, NULL);
+  if (de_content)
+    cloudfs_free_dir_list(de_content);
+  debugf(DBG_LEVEL_EXT, "cloudfs_delete_folder(%s): exit response=%d",
+         de->full_name, response);
+}
 
 int cloudfs_delete_object(dir_entry* de)
 {
