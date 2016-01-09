@@ -440,56 +440,23 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
     of->flags = info->flags;
   */
   //info->fh = (uintptr_t)of;
-  info->fh = -1;
+
+  info->fh = -1;//((uint64_t)de);//save de for quick access later
   info->direct_io = 1;
   //non seek must be set to 0 to enable
   // video players work via samba (as they perform a seek to file end)
   info->nonseekable = 0;
 
-  /*
-    //launch download as thread if progressive is enabled and file not in cache
-    if (!file_cache_ok && option_enable_progressive_download)
-    {
-    //if (de->downld_buf.download_started)
-    //  debugf(DBG_LEVEL_NORM, "cfs_open(%s): " KYEL
-    //         "local file already opened, op. in progress",
-    //         path);
-    //else
-    //{
-    de->downld_buf.local_cache_file = fdopen(dup(fileno(temp_file)), "w+b");
-    errsv = errno;
-    if (de->downld_buf.local_cache_file != NULL)
-    {
-      de->downld_buf.work_buf_size = 0;
-      //put something different that work_buf_size to avoid wait by http
-      de->downld_buf.fuse_read_size = 0;
-      de->downld_buf.file_is_in_cache = false;
-      //save de on current thread stack
-      //thread_de_read = de;
-    }
-    else
-    {
-      debugf(DBG_LEVEL_NORM, KRED
-             "cfs_open(%s): exit 6, failed opening temp_file err=%s",
-             path, strerror(errno));
-      fclose(temp_file);
-      return -ENOENT;
-    }
-    //}
-    }
-    else
-    {
-    debugf(DBG_LEVEL_NORM, KMAG"exit 7: cfs_open(%s) "KGRN"FILE in CACHE", path);
-    //signal file should be in cache at cfs_read
-    de->downld_buf.file_is_in_cache = true;
-    }
-    fclose(temp_file);
-  */
+
   debugf(DBG_LEVEL_NORM, KBLU "exit 8: cfs_open(%s)", path);
   return 0;
   //return ((openfile*)(uintptr_t)info->fh)->fd;
 }
 
+/*
+  download file from cloud
+  http://docs.openstack.org/developer/swift/api/large_objects.html
+*/
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* info)
 {
@@ -505,6 +472,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   file_buffer_size = size;
   debug_print_descriptor(info);
   bool in_cache = false;
+
   dir_entry* de = check_path_info(path);
 
   if (de && de->is_segmented)
@@ -799,17 +767,34 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   //{
 
 
-  if (option_enable_progressive_upload && de->size > 0)
+  if (option_enable_progressive_upload)
   {
     debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
            path, de->size);
-    //signal completion of read/write operation
-    //de->upload_buf.write_completed = true;
-    //signal last data available in buffer for upload
-    if (de->upload_buf.sem_list[SEM_FULL])
-      sem_post(de->upload_buf.sem_list[SEM_FULL]);
-    //if (de->upload_buf.sem_list[SEM_EMPTY])
-    //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+    if (de->is_segmented)
+    {
+      dir_entry* de_seg = get_segment(de, de->segment_count - 1);
+      assert(de_seg);
+      //will be blocked until http upload trully terminates
+      debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): seg_count=%d",
+             de->name, de->segment_count);
+      //unblock the last segment wait in http callback
+      if (de_seg->upload_buf.sem_list[SEM_FULL])
+      {
+        debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): finishing upload operation",
+               de->name);
+        sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+      }
+    }
+    else
+    {
+      //signal completion of read/write operation
+      //signal last data available in buffer for upload
+      if (de->upload_buf.sem_list[SEM_FULL])
+        sem_post(de->upload_buf.sem_list[SEM_FULL]);
+      //if (de->upload_buf.sem_list[SEM_EMPTY])
+      //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+    }
     errsv = 0;
   }
 
@@ -878,16 +863,20 @@ static int cfs_ftruncate(const char* path, off_t size,
 
 /*
   upload file to cloud
+  http://docs.openstack.org/developer/swift/api/large_objects.html
+
+  todo: implement versioning?
+  https://docs.hpcloud.com/publiccloud/api/swift-api.html
 */
 static int cfs_write(const char* path, const char* buf, size_t length,
                      off_t offset, struct fuse_file_info* info)
 {
   if (offset == 0)//avoid clutter
     debugf(DBG_LEVEL_EXT, KBLU
-           "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
+           "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   else
     debugf(DBG_LEVEL_EXT, KBLU
-           "cfs_write(%s) blen=%lu off=%lu *buf=%lu", path, length, offset, buf);
+           "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   int result, errsv;
   dir_entry* de = check_path_info(path);
   if (!de)
@@ -899,7 +888,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
   de->segment_remaining = segment_size;
-  assert(de->segment_size == segment_size);
+
   /*
     if (de->is_segmented)
     {
@@ -961,10 +950,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     off_t ptr_offset = 0;
     if (option_enable_progressive_upload)
     {
-      //delete here to avoid overwrite of de_seg due to list
-      //if (offset == 0)
-      //  cloudfs_delete_object(de);
-
       //creates the segment to be uploaded as dir_entry
       //and sets minimum required fields
       seg_index = offset / segment_size;
@@ -1044,23 +1029,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       }
     }
     if (option_enable_progressive_upload && de->is_segmented)
-    {
-      if (de_seg->upload_buf.fuse_buf_size != 0
-          && de_seg->upload_buf.fuse_buf_size != length)
-      {
-        //assume this is the last write as buf size is different than previous
-        de->segment_count = seg_index + 1;
-
-        //unblock the last segment wait in http callback
-        if (de_seg->upload_buf.sem_list[SEM_FULL])
-          sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
-        //write zero size file
-
-      }
       de_seg->upload_buf.fuse_buf_size = length;
-    }
-    debugf(DBG_LEVEL_EXT, KMAG "cfs_write(%s): exit, work_size=%lu",
-           path, de_seg->upload_buf.work_buf_size);
+
+    debugf(DBG_LEVEL_EXT, KMAG "cfs_write(%s): exit, work_size=%lu, seg_count=%d",
+           path, de_seg->upload_buf.work_buf_size, de->segment_count);
     return length;
   }
 }

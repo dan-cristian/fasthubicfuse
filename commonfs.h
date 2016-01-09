@@ -17,6 +17,9 @@ typedef enum { false, true } bool;
 #define INT_CHAR_LEN 16
 #define MD5_DIGEST_HEXA_STRING_LEN  (2 * MD5_DIGEST_LENGTH + 1)
 #define MAX_SEGMENT_THREADS 5
+#define APP_ID "FastHubicFuse_v0_1"
+
+
 
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
@@ -31,13 +34,19 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_FILEPATH "X-Object-Meta-FilePath"
 #define HEADER_TEXT_MD5HASH "Etag"
 #define HEADER_TEXT_IS_SEGMENTED "X-Object-Meta-Is-Segmented"
+#define HEADER_TEXT_PRODUCED_BY "X-Object-Meta-Produced-By"
+#define HEADER_TEXT_MANIFEST "X-Object-Manifest"
+#define HEADER_TEXT_SEGMENT_SIZE "X-Object-Segment-Size"
+
 #define TEMP_FILE_NAME_FORMAT "%s/cloudfuse_%s_"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
+#define HUBIC_SEGMENT_STORAGE_ROOT "default_fuse_segments"
 #define TEMP_SEGMENT_DIR_SUFFIX "_segments"
 #define TEMP_SEGMENT_FORMAT "_segments/%d"
 #define HTTP_GET "GET"
 #define HTTP_PUT "PUT"
 #define HTTP_POST "POST"
+#define HTTP_DELETE "DELETE"
 
 #define KNRM  "\x1B[0m"
 #define KRED  "\x1B[31m"
@@ -94,6 +103,7 @@ typedef struct dir_entry
   char* content_type;
   char* manifest_time;
   char* manifest_seg;
+  char* manifest_cloud;
   off_t size;//size of the file, might not match the size in cloud if is segmented
   off_t size_on_cloud;//size of the file in cloud, should be 0 for segmented files
   time_t last_modified;
@@ -165,6 +175,11 @@ int file_md5(FILE* file_handle, char* md5_file_str);
 int file_md5_by_name(const char* file_name_str, char* md5_file_str);
 void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
+bool valid_http_response(int response);
+void decode_path(char* path);
+void split_path(const char* path, char* seg_base, char* container,
+                char* object);
+void get_manifest_path(dir_entry* de, char* manifest_path);
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
                              const int segment_part);
@@ -173,6 +188,8 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
 long random_at_most(long max);
 dir_entry* init_dir_entry();
+void free_de_before_get(dir_entry* de);
+void free_de_before_head(dir_entry* de);
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);

@@ -251,6 +251,13 @@ void removeSubstr(char* string, char* sub)
   }
 }
 
+/*
+  check if http response code means the operation completed ok
+*/
+bool valid_http_response(int response)
+{
+  return (response >= 200 && response < 300);
+}
 /*compose a unique cache file path within max name bounds
   temp_dir = file folder prefix
   parent_dir_path_safe = returns parent dir, optional, set to null if not needed
@@ -434,6 +441,9 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
     free(de->md5sum);
     free(de->md5sum_local);
     free(de->full_name_hash);
+    free(de->manifest_cloud);
+    free(de->manifest_seg);
+    free(de->manifest_time);
     //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
     free(de);
   }
@@ -441,15 +451,16 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
 
 /*
   return a segment entry from dir_entry
+  it assumes segments are stored in sorted ascending order
   NOTE!: it also sets the segment_part field
 */
 dir_entry* get_segment(dir_entry* de, int segment_index)
 {
-  int de_segment;
+  int de_segment = 0;
   dir_entry* des = de->segments;
   while (des)
   {
-    de_segment = atoi(des->name);
+    //de_segment = atoi(des->name);
     if (de_segment == segment_index)
     {
       if (des->segment_part != segment_index)
@@ -457,8 +468,59 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
       return des;
     }
     des = des->next;
+    de_segment++;
   }
   return des;//this will be NULL
+}
+
+/*
+  unencode string, convert %2f to /
+*/
+void decode_path(char* path)
+{
+  char* slash;
+  while ((slash = strstr(path, "%2F")) || (slash = strstr(path, "%2f")))
+  {
+    *slash = '/';
+    memmove(slash + 1, slash + 3, strlen(slash + 3) + 1);
+  }
+}
+
+void split_path(const char* path, char* seg_base, char* container,
+                char* object)
+{
+  char* string = strdup(path);
+  snprintf(seg_base, MAX_URL_SIZE, "%s", strsep(&string, "/"));
+  strncat(container, strsep(&string, "/"),
+          MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
+  char* _object = strsep(&string, "/");
+  char* remstr;
+  while (remstr = strsep(&string, "/"))
+  {
+    strncat(container, "/",
+            MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
+    strncat(container, _object,
+            MAX_URL_SIZE - strnlen(container, MAX_URL_SIZE));
+    _object = remstr;
+  }
+  //fixme: when removing root folders this will generate a segfault, issue #83, https://github.com/TurboGit/hubicfuse/issues/83
+  if (_object == NULL)
+    _object = object;
+  else
+    strncpy(object, _object, MAX_URL_SIZE);
+  free(string);
+}
+
+/*
+  get manifest path using main file mane
+*/
+void get_manifest_path(dir_entry* de, char* manifest_path)
+{
+  char seg_base[MAX_URL_SIZE] = "";
+  char container[MAX_URL_SIZE] = "";
+  char object[MAX_URL_SIZE] = "";
+  split_path(de->full_name, seg_base, container, object);
+  snprintf(manifest_path, MAX_URL_SIZE, "%s_segments", container);
 }
 
 /*
@@ -508,7 +570,6 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   char object[MAX_URL_SIZE] = "";
   char manifest[MAX_URL_SIZE];
   split_path(de->full_name, seg_base, container, object);
-
   if (!de->manifest_seg)
   {
     struct timespec now;
@@ -517,16 +578,18 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
     snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
     char meta_mtime[TIME_CHARS];
     snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+    //snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
+    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
+             HUBIC_SEGMENT_STORAGE_ROOT, container);
     de->manifest_seg = strdup(manifest);
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s",
-             container, object, meta_mtime);
+    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
+             HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
     de->manifest_time = strdup(manifest);
   }
   //at this stage file size is not known so we set it to 0
   //segment size is set equal for all segments, remaining size is not known
-  snprintf(manifest, MAX_URL_SIZE, "%s/%ld/%ld/", de->manifest_time,
-           0, segment_size);
+  //snprintf(manifest, MAX_URL_SIZE, "%s/%ld/", de->manifest_time, segment_size);
+  snprintf(manifest, MAX_URL_SIZE, "%s/", de->manifest_time);
   char tmp[MAX_URL_SIZE];
   strncpy(tmp, seg_base, MAX_URL_SIZE);
   snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
@@ -698,6 +761,9 @@ dir_entry* init_dir_entry()
   de->name = NULL;
   de->full_name = NULL;
   de->content_type = NULL;
+  de->manifest_cloud = NULL;
+  de->manifest_time = NULL;
+  de->manifest_seg = NULL;
   de->size = 0;
   de->isdir = 0;
   de->islink = 0;
@@ -741,6 +807,20 @@ dir_entry* init_dir_entry()
   de->segment_count = 0;
   de->segment_part = -1;
   return de;
+}
+
+void free_de_before_get(dir_entry* de)
+{
+  free(de->md5sum_local);
+  de->md5sum_local = NULL;
+  free_de_before_head(de);
+}
+
+void free_de_before_head(dir_entry* de)
+{
+  //assumes a file might change from segmented to none
+  free(de->manifest_cloud);
+  de->manifest_cloud = NULL;
 }
 
 void copy_dir_entry(dir_entry* src, dir_entry* dst)
