@@ -802,13 +802,16 @@ static int send_request_size(const char* method, const char* encoded_path,
     {
       debugf(DBG_LEVEL_EXTALL, "send_request_size: Saving utimens for file %s",
              orig_path);
-      //debugf(DBG_LEVEL_NORM, "File found in cache, path=%s", de->full_name);
-      debugf(DBG_LEVEL_EXTALL,
-             "send_request_size: Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
-             orig_path,
-             de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
-             de->atime.tv_sec, de->atime.tv_nsec);
-      set_direntry_headers(de, headers);
+      //on rename de is null
+      if (de)
+      {
+        debugf(DBG_LEVEL_EXTALL,
+               "send_request_size: Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
+               orig_path,
+               de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
+               de->atime.tv_sec, de->atime.tv_nsec);
+        set_direntry_headers(de, headers);
+      }
     }
     else
       debugf(DBG_LEVEL_EXTALL, "send_request_size: not setting utimes (%s)",
@@ -2664,7 +2667,7 @@ int cloudfs_copy_object(dir_entry* de, const char* dst)
   add_header(&headers, "Content-Length", "0");
 
   //pass src metadata so that PUT will set time attributes of the src file
-  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, de,
+  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, NULL,
                               NULL);
   curl_free(dst_encoded);
   curl_free(src_encoded);

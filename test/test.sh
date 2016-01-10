@@ -59,7 +59,7 @@ function test_not(){
 }
 
 # $1=file name, $2=target md5sum
-function test_md5(){
+function check_md5(){
 	echo -n "Testing: md5sum check" $1 "..."
 	md5=$(md5sum $1)
 	if [[ "$md5" == *"$2"* ]]; then
@@ -73,9 +73,9 @@ function test_md5(){
 }
 
 # $1=file name, $2=target chmod
-function test_chmod(){
+function check_chmod(){
 	echo -n "Testing: chmod check" $1 "..."
-	chmod=$(stat -c %a %1)
+	chmod=$(stat -c %a $1)
 	if [[ "$chmod" == *"$2"* ]]; then
 		echo -e $PASSED_MSG
 		return 1
@@ -123,7 +123,7 @@ function setup_test(){
 function cache_reset()
 {
 	echo "Clearing fuse driver cache and reloading config (equivalent of restart?)..."
-	stat $CACHE_RESET_CMD
+	stat $CACHE_RESET_CMD > /dev/null 2>&1
 }
 
 function test_upload_small(){
@@ -141,9 +141,9 @@ function test_upload_large(){
 function test_download_small(){
 	echo "Testing copy operations, download"
 	if test "download tiny file" "$COPY_CMD $HUB_NOCACHE/$TINY $TMP/"; then return; fi
-	if test_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi
+	if check_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi
 	if test "download small file" "$COPY_CMD $HUB/$SMALL $TMP/"; then return; fi
-	if test_md5 "$TMP/$SMALL" "$SMALL_MD5"; then return; fi
+	if check_md5 "$TMP/$SMALL" "$SMALL_MD5"; then return; fi
 	echo Test completed!
 	echo ---------------
 }
@@ -151,17 +151,17 @@ function test_download_small(){
 function test_copy_huge()
 {
 	echo "Testing copy operations, download"
-	if test "download large file" "$COPY_CMD $HUB_NOCACHE/$LARGE $TMP/"; then return; fi
-	if test_md5 "$TMP/$LARGE" "$LARGE_MD5"; then return; fi
-	if test "download huge segmented file" "$COPY_CMD $HUB_NOCACHE/$HUGE $TMP/"; then return; fi
-	if test_md5 "$TMP/$HUGE" "$HUGE_MD5"; then return; fi
+	if test "download large file" "$COPY_CMD $HUB/$LARGE $TMP/"; then return; fi
+	if check_md5 "$TMP/$LARGE" "$LARGE_MD5"; then return; fi
+	if test "download huge segmented file" "$COPY_CMD $HUB/$HUGE $TMP/"; then return; fi
+	if check_md5 "$TMP/$HUGE" "$HUGE_MD5"; then return; fi
 }
 
 function test_chmod(){
 	echo "Testing chmod..."
-	if test "chmod set" "chmod 765 $HUB_NOCACHE/$TINY"; then return 0; fi
+	if test "chmod set" "chmod 765 $HUB/$TINY"; then return 0; fi
 	cache_reset
-	if test_chmod "$HUB_NOCACHE/$TINY" "765"; then return 0; fi
+	if check_chmod "$HUB/$TINY" "765"; then return 0; fi
 	return 1
 }
 
@@ -189,17 +189,14 @@ while true; do
 	
 	if [ -f $BUILD_FILE ]; then
 		echo New build detected!
-		rm $BUILD_FILE
 		sleep 5
 		setup_test
 		
 		test_upload_small
-		if test_chmod; then exit; fi
 		if test_rename; then exit; fi
+		if test_chmod; then exit; fi
 		
 		test_upload_small
-		
-		
 		
 		test_download_small
 		test_download_small
@@ -210,6 +207,7 @@ while true; do
 		
 		echo ===============
 		echo
+		rm $BUILD_FILE
 		echo Waiting for a new build...
 	fi
 done

@@ -1470,6 +1470,7 @@ int main(int argc, char** argv)
 #warning Compiling without libssl, will run single-threaded.
   fuse_opt_add_arg(&args, "-s");
 #endif
+//https://www.cs.hmc.edu/~geoff/classes/hmc.cs135.201001/homework/fuse/fuse_doc.html
   struct fuse_operations cfs_oper =
   {
     .readdir = cfs_readdir,
@@ -1501,6 +1502,12 @@ int main(int argc, char** argv)
     .listxattr = cfs_listxattr,
     .removexattr = cfs_removexattr,
 //#endif
+//    .fsyncdir    = cfs_fsyncdir,
+//.lock = prefix_lock,
+//.bmap = prefix_bmap,
+//.ioctl = prefix_ioctl,
+//.poll = prefix_poll,
+
   };
   pthread_mutexattr_init(&mutex_attr);
   pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
