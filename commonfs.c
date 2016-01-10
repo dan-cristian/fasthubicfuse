@@ -394,7 +394,7 @@ int delete_file(char* path)
   char file_path_safe[NAME_MAX] = "";
   get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
   int result = unlink(file_path_safe);
-  debugf(DBG_LEVEL_EXT, KYEL"delete_file(%s) (%s) result=%s", path,
+  debugf(DBG_LEVEL_EXT, KYEL "delete_file(%s): local=%s, result=%s", path,
          file_path_safe, strerror(result));
   return result;
 }
@@ -601,6 +601,8 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   char seg_path[MAX_URL_SIZE] = { 0 };
   snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, segment_index);
   de_seg->full_name = strdup(seg_path);
+  de_seg->full_name_hash = strdup(str2md5(de_seg->full_name,
+                                          strlen(de_seg->full_name)));;
   if (de_seg->segment_part < de->segment_full_count)
     de_seg->size = de->segment_size;
   else de_seg->size = de->segment_remaining;
@@ -665,9 +667,8 @@ void dir_decache(const char* path)
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix)
 {
-  debugf(DBG_LEVEL_EXTALL, "init_semaphores(%s): prefix=%s len=%d",
-         de->full_name,
-         prefix, strlen(prefix));
+  debugf(DBG_LEVEL_EXT, "init_semaphores(%s): prefix=%s len=%d",
+         de->full_name, prefix, strlen(prefix));
   char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + 20] = "\0";
   int errsv, sem_val, i;
   char* sem_name;
@@ -689,6 +690,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
              "init_semaphores(%s): " KRED "unknown semaphore type=%d", de->full_name, i);
       return 0;
     }
+    assert(de->full_name_hash);
     snprintf(semaphore_name, sizeof(semaphore_name), "/%s_%s_%s", prefix, sem_name,
              de->full_name_hash);
     debugf(DBG_LEVEL_EXTALL, "init_semaphores(%s): sem_name=%s", de->full_name,
@@ -702,15 +704,15 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                                           O_CREAT | O_EXCL, 0644, 0)) == SEM_FAILED)
     {
       errsv = errno;
-      debugf(DBG_LEVEL_NORM,
-             KRED"init_semaphores(%s): cannot init isempty semaphore for progressive upload, err=%s",
+      debugf(DBG_LEVEL_NORM, KRED
+             "init_semaphores(%s): cannot init isempty semaphore for progressive upload, err=%s",
              de->full_name, strerror(errsv));
       exit(1);
     }
     else
     {
       sem_getvalue(data_buf->sem_list[i], &sem_val);
-      debugf(DBG_LEVEL_EXTALL,
+      debugf(DBG_LEVEL_EXT, KCYN
              "init_semaphores(%s): semaphore[%s] created, size_left=%lu, sem_val=%d",
              de->full_name, data_buf->sem_name_list[i], data_buf->work_buf_size, sem_val);
     }
@@ -720,6 +722,9 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
 {
+  assert(data_buf->sem_list[sem_index]);
+  debugf(DBG_LEVEL_EXT, KCYN "free_semaphores: %s-%d",
+         data_buf->sem_name_list[sem_index], sem_index);
   if (data_buf->sem_list[sem_index])
   {
     sem_post(data_buf->sem_list[sem_index]);
@@ -806,6 +811,7 @@ dir_entry* init_dir_entry()
   de->segments = NULL;
   de->segment_count = 0;
   de->segment_part = -1;
+  de->segment_size = 0;
   return de;
 }
 
@@ -1258,6 +1264,44 @@ void cloudfs_debug(int dbg)
   debug = dbg;
 }
 
+//allows memory leaks inspections
+void interrupt_handler(int sig)
+{
+  debugf(DBG_LEVEL_NORM, "Got interrupt signal %d, cleaning memory", sig);
+  //TODO: clean memory allocations
+  //http://www.cprogramming.com/debugging/valgrind.html
+  cloudfs_free();
+  //TODO: clear dir cache
+  dir_decache("");
+  pthread_mutex_destroy(&dcachemut);
+  exit(0);
+}
+
+void clear_full_cache()
+{
+  dir_decache("");
+}
+
+void print_options()
+{
+  fprintf(stderr, "verify_ssl = %lu\n", verify_ssl);
+  fprintf(stderr, "curl_progress_state = %lu\n", option_curl_progress_state);
+  fprintf(stderr, "segment_size = %lu\n", segment_size);
+  fprintf(stderr, "segment_above = %lu\n", segment_above);
+  fprintf(stderr, "debug_level = %d\n", option_debug_level);
+  fprintf(stderr, "get_extended_metadata = %d\n", option_get_extended_metadata);
+  fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
+  fprintf(stderr, "enable_chmod = %d\n", option_enable_chmod);
+  fprintf(stderr, "enable_chown = %d\n", option_enable_chown);
+  fprintf(stderr, "enable_progressive_download = %d\n",
+          option_enable_progressive_download);
+  fprintf(stderr, "enable_progressive_upload = %d\n",
+          option_enable_progressive_upload);
+  fprintf(stderr, "min_speed_limit_progressive = %d\n",
+          option_min_speed_limit_progressive);
+  fprintf(stderr, "min_speed_timeout = %d\n", option_min_speed_timeout);
+  fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
+}
 void debugf(int level, char* fmt, ...)
 {
   if (debug)

@@ -42,9 +42,158 @@ extern long option_min_speed_limit_progressive;
 extern long option_min_speed_timeout;
 extern long option_read_ahead;
 
+FuseOptions options =
+{
+  .cache_timeout = "600",
+  .verify_ssl = "true",
+  .segment_size = "1073741824",
+  .segment_above = "2147483647",
+  .storage_url = "",
+  .container = "",
+  //.temp_dir = "/tmp/",
+  .temp_dir = "",
+  .client_id = "",
+  .client_secret = "",
+  .refresh_token = ""
+};
+
+ExtraFuseOptions extra_options =
+{
+  .get_extended_metadata = "false",
+  .curl_verbose = "false",
+  .cache_statfs_timeout = 0,
+  .debug_level = 0,
+  .curl_progress_state = "false",
+  .enable_chown = "false",
+  .enable_chmod = "false",
+  .enable_progressive_upload = "false",
+  .enable_progressive_download = "false",
+  .min_speed_limit_progressive = "0",
+  .min_speed_timeout = "3",
+  .read_ahead = "0"
+};
+
+bool initialise_options(struct fuse_args args)
+{
+  char settings_filename[MAX_PATH_SIZE] = "";
+  FILE* settings;
+  snprintf(settings_filename, sizeof(settings_filename), "%s/.hubicfuse",
+           get_home_dir());
+  if ((settings = fopen(settings_filename, "r")))
+  {
+    char line[OPTION_SIZE];
+    while (fgets(line, sizeof(line), settings))
+      parse_option(NULL, line, -1, &args);
+    fclose(settings);
+  }
+
+  cache_timeout = atoi(options.cache_timeout);
+  segment_size = atoll(options.segment_size);
+  segment_above = atoll(options.segment_above);
+  // this is ok since main is on the stack during the entire execution
+  override_storage_url = options.storage_url;
+  public_container = options.container;
+  temp_dir = options.temp_dir;
+
+  if (*options.verify_ssl)
+    verify_ssl = !strcasecmp(options.verify_ssl, "true") ? 2 : 0;
+
+  if (*extra_options.get_extended_metadata)
+    option_get_extended_metadata = !strcasecmp(extra_options.get_extended_metadata,
+                                   "true");
+  if (*extra_options.curl_verbose)
+    option_curl_verbose = !strcasecmp(extra_options.curl_verbose,
+                                      "true");
+  if (*extra_options.debug_level)
+    option_debug_level = atoi(extra_options.debug_level);
+  if (*extra_options.cache_statfs_timeout)
+    option_cache_statfs_timeout = atoi(extra_options.cache_statfs_timeout);
+  if (*extra_options.curl_progress_state)
+    option_curl_progress_state = !strcasecmp(extra_options.curl_progress_state,
+                                 "true");
+  if (*extra_options.enable_chmod)
+    option_enable_chmod = !strcasecmp(extra_options.enable_chmod, "true");
+  if (*extra_options.enable_chown)
+    option_enable_chown = !strcasecmp(extra_options.enable_chown, "true");
+  if (*extra_options.enable_progressive_download)
+    option_enable_progressive_download = !strcasecmp(
+                                           extra_options.enable_progressive_download, "true");
+  if (*extra_options.enable_progressive_upload)
+    option_enable_progressive_upload = !strcasecmp(
+                                         extra_options.enable_progressive_upload, "true");
+  if (*extra_options.min_speed_limit_progressive)
+    option_min_speed_limit_progressive = atoll(
+                                           extra_options.min_speed_limit_progressive);
+  if (*extra_options.read_ahead)
+    option_read_ahead = atoll(extra_options.read_ahead);
+  if (*extra_options.min_speed_timeout)
+    option_min_speed_timeout = atoll(extra_options.min_speed_timeout);
+
+  if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
+  {
+    fprintf(stderr,
+            "Unable to determine client_id, client_secret or refresh_token.\n\n");
+    fprintf(stderr, "These can be set either as mount options or in "
+            "a file named %s\n\n", settings_filename);
+    fprintf(stderr, "  client_id=[App's id]\n");
+    fprintf(stderr, "  client_secret=[App's secret]\n");
+    fprintf(stderr, "  refresh_token=[Get it running hubic_token]\n");
+    fprintf(stderr, "The following settings are optional:\n\n");
+    fprintf(stderr,
+            "  cache_timeout=[Seconds for directory caching, default 600]\n");
+    fprintf(stderr, "  verify_ssl=[false to disable SSL cert verification]\n");
+    fprintf(stderr,
+            "  segment_size=[Size to use when creating DLOs, default 1073741824]\n");
+    fprintf(stderr,
+            "  segment_above=[File size at which to use segments, defult 2147483648]\n");
+    fprintf(stderr,
+            "  storage_url=[Storage URL for other tenant to view container]\n");
+    fprintf(stderr,
+            "  container=[Public container to view of tenant specified by storage_url]\n");
+    fprintf(stderr, "  temp_dir=[Directory to store temp files]\n");
+    fprintf(stderr,
+            "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
+    fprintf(stderr,
+            "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
+    fprintf(stderr,
+            "  curl_progress_state=[true to enable progress callback enabled. Mostly used for debugging]\n");
+    fprintf(stderr,
+            "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
+    fprintf(stderr,
+            "  debug_level=[0 to 2, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
+    fprintf(stderr, "  enable_chmod=[true to enable chmod support on fuse]\n");
+    fprintf(stderr, "  enable_chown=[true to enable chown support on fuse]\n");
+    fprintf(stderr,
+            "  enable_progressive_download=[true to enable progressive operation support]\n");
+    fprintf(stderr,
+            "  enable_progressive_upload=[true to enable progressive operation support]\n");
+    fprintf(stderr,
+            "  min_speed_limit_progressive=[0 to disable, or = number of transferred bytes per second limit under which operation will be aborted and resumed]\n");
+    fprintf(stderr,
+            "  min_speed_timeout=[number of seconds after which slow operation will be aborted and resumed]\n");
+    fprintf(stderr,
+            "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
+    return false;
+  }
+  return true;
+}
+
+
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_getattr(%s)", path);
+  if (debug > 0)
+  {
+    if (!strcasecmp(path, "/debug-decache"))
+    {
+      debugf(DBG_LEVEL_NORM, KRED "DEBUG COMMAND: Cache Reset!", path);
+      clear_full_cache();
+      struct fuse_args args;
+      initialise_options(args);
+      print_options();
+      return -ENOENT;
+    }
+  }
   //return standard values for root folder
   if (!strcmp(path, "/"))
   {
@@ -464,7 +613,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   off_t offset_seg;
   int sem_val, err;
   int rnd = random_at_most(50);
-  if (offset == 0)//avoid clutter, list only once
+  if (offset % 100000 == 0)//avoid clutter
     debugf(DBG_LEVEL_EXT, KBLU
            "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
   //sleep_ms(rnd);
@@ -536,8 +685,9 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           {
             result = pread(fno, buf, size, offset_seg);
             err = errno;
-            debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s) fno=%d fp=%p p=%d err=%s",
-                   de_seg->name, fno, fp_segment, segment_part, strerror(err));
+            if (offset % 100000 == 0)
+              debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s) fno=%d fp=%p part=%d res=%lu",
+                     de_seg->name, fno, fp_segment, segment_part, result);
             close(fno);
             fclose(fp_segment);
             //download if segment ahead not in cache and no other download runs
@@ -664,17 +814,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     }//end while
     return result;
   }
-  /*
-    result = pread(((openfile*)(uintptr_t)info->fh)->fd, buf, size, offset);
-    debugf(DBG_LEVEL_EXT, "cfs_read(%s): got data from file", path);
-    if (offset == 0)
-    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
-    strerror(errno));
-    else
-    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_read(%s) result=%s", path,
-    strerror(errno));
-    return result;
-  */
 }
 
 //todo: flush will upload a file again even if just file attributes are changed.
@@ -889,38 +1028,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   de->segment_size = segment_size;
   de->segment_remaining = segment_size;
 
-  /*
-    if (de->is_segmented)
-    {
-    int i;
-    dir_entry* de_seg;
-    size_t file_size = offset + length;
-    long seg_count = file_size / segment_size;
-    FILE* fp = NULL;
-    int seg_index = offset / segment_size;
-    if (file_size % segment_size > 0)
-      seg_count++;
-
-    for (i = seg_index)
-    {
-      de_seg = get_create_segment(de, seg_index);
-      //todo: work in progress
-      open_segment_in_cache(de, de_seg, &fp, HTTP_PUT);
-      int fno = fileno(fp);
-      assert(fno != -1);
-      result = pwrite(fno, buf, length, offset);
-      errsv = errno;
-      fclose(fp);
-      clock_gettime(CLOCK_REALTIME, &de->ctime_local);
-      de_seg->size = offset + result;//length;
-    }
-    debugf(DBG_LEVEL_EXT, KBLU "exit 1: cfs_write(%s) result=%s", path,
-           strerror(errsv));
-    return result;
-    }
-
-  */
-
   if (!option_enable_progressive_upload)
   {
     //regular upload, copy first in cache, upload at flush, no progress
@@ -982,6 +1089,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       de->upload_buf.work_buf_size = length;
     }
     de->size = offset + length;
+    size_t last_work_buf_size  = de_seg->upload_buf.work_buf_size;
     //loop until entire buffer was uploaded
     while (de_seg->upload_buf.work_buf_size > 0)
     {
@@ -1016,17 +1124,22 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         pthread_mutex_unlock(&de_seg->upload_buf.mutex);
 
         debugf(DBG_LEVEL_EXT, KMAG
-               "cfs_write(%s): buffer for upload, work_size=%lu", path,
+               "cfs_write(%s:%s): buffer full, work_size=%lu",
+               de->name, de_seg->name,
                de_seg->upload_buf.work_buf_size);
       }
       else//only progressive, not segmented
       {
         //signal there is data available in buffer for upload
-        sem_post(de->upload_buf.sem_list[SEM_FULL]);
+        if (de_seg->upload_buf.sem_list[SEM_FULL])
+          sem_post(de->upload_buf.sem_list[SEM_FULL]);
         //wait until previous buffer data is uploaded
-        sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
-        sem_getvalue(de->upload_buf.sem_list[SEM_FULL], &sem_val_full);
+        if (de_seg->upload_buf.sem_list[SEM_EMPTY])
+          sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
       }
+      //check to avoid endless loops
+      assert(de_seg->upload_buf.work_buf_size != last_work_buf_size);
+      last_work_buf_size = de_seg->upload_buf.work_buf_size;
     }
     if (option_enable_progressive_upload && de->is_segmented)
       de_seg->upload_buf.fuse_buf_size = length;
@@ -1264,54 +1377,31 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
 int cfs_setxattr(const char* path, const char* name, const char* value,
                  size_t size, int flags)
 {
+  debugf(DBG_LEVEL_EXT, KBLU "cfs_setxattr(%s): name=%s value=%s",
+         path, name, value);
   return 0;
 }
 
 int cfs_getxattr(const char* path, const char* name, char* value, size_t size)
 {
+  debugf(DBG_LEVEL_EXT, KBLU "cfs_getxattr(%s): name=%s value=%s",
+         path, name, value);
   return 0;
 }
 
 int cfs_removexattr(const char* path, const char* name)
 {
+  debugf(DBG_LEVEL_EXT, KBLU "cfs_removexattr(%s): name=%s", path, name);
   return 0;
 }
 
 int cfs_listxattr(const char* path, char* list, size_t size)
 {
+  debugf(DBG_LEVEL_EXT, KBLU "cfs_listxattr(%s): name=%s", path);
   return 0;
 }
 
-FuseOptions options =
-{
-  .cache_timeout = "600",
-  .verify_ssl = "true",
-  .segment_size = "1073741824",
-  .segment_above = "2147483647",
-  .storage_url = "",
-  .container = "",
-  //.temp_dir = "/tmp/",
-  .temp_dir = "",
-  .client_id = "",
-  .client_secret = "",
-  .refresh_token = ""
-};
 
-ExtraFuseOptions extra_options =
-{
-  .get_extended_metadata = "false",
-  .curl_verbose = "false",
-  .cache_statfs_timeout = 0,
-  .debug_level = 0,
-  .curl_progress_state = "false",
-  .enable_chown = "false",
-  .enable_chmod = "false",
-  .enable_progressive_upload = "false",
-  .enable_progressive_download = "false",
-  .min_speed_limit_progressive = "0",
-  .min_speed_timeout = "3",
-  .read_ahead = "0"
-};
 
 int parse_option(void* data, const char* arg, int key,
                  struct fuse_args* outargs)
@@ -1352,122 +1442,8 @@ int parse_option(void* data, const char* arg, int key,
   return 1;
 }
 
-//allows memory leaks inspections
-void interrupt_handler(int sig)
-{
-  debugf(DBG_LEVEL_NORM, "Got interrupt signal %d, cleaning memory", sig);
-  //TODO: clean memory allocations
-  //http://www.cprogramming.com/debugging/valgrind.html
-  cloudfs_free();
-  //TODO: clear dir cache
-  pthread_mutex_destroy(&dcachemut);
-  exit(0);
-}
 
-bool initialise_options(struct fuse_args args)
-{
-  char settings_filename[MAX_PATH_SIZE] = "";
-  FILE* settings;
-  snprintf(settings_filename, sizeof(settings_filename), "%s/.hubicfuse",
-           get_home_dir());
-  if ((settings = fopen(settings_filename, "r")))
-  {
-    char line[OPTION_SIZE];
-    while (fgets(line, sizeof(line), settings))
-      parse_option(NULL, line, -1, &args);
-    fclose(settings);
-  }
 
-  cache_timeout = atoi(options.cache_timeout);
-  segment_size = atoll(options.segment_size);
-  segment_above = atoll(options.segment_above);
-  // this is ok since main is on the stack during the entire execution
-  override_storage_url = options.storage_url;
-  public_container = options.container;
-  temp_dir = options.temp_dir;
-
-  if (*options.verify_ssl)
-    verify_ssl = !strcasecmp(options.verify_ssl, "true") ? 2 : 0;
-
-  if (*extra_options.get_extended_metadata)
-    option_get_extended_metadata = !strcasecmp(extra_options.get_extended_metadata,
-                                   "true");
-  if (*extra_options.curl_verbose)
-    option_curl_verbose = !strcasecmp(extra_options.curl_verbose,
-                                      "true");
-  if (*extra_options.debug_level)
-    option_debug_level = atoi(extra_options.debug_level);
-  if (*extra_options.cache_statfs_timeout)
-    option_cache_statfs_timeout = atoi(extra_options.cache_statfs_timeout);
-  if (*extra_options.curl_progress_state)
-    option_curl_progress_state = !strcasecmp(extra_options.curl_progress_state,
-                                 "true");
-  if (*extra_options.enable_chmod)
-    option_enable_chmod = !strcasecmp(extra_options.enable_chmod, "true");
-  if (*extra_options.enable_chown)
-    option_enable_chown = !strcasecmp(extra_options.enable_chown, "true");
-  if (*extra_options.enable_progressive_download)
-    option_enable_progressive_download = !strcasecmp(
-                                           extra_options.enable_progressive_download, "true");
-  if (*extra_options.enable_progressive_upload)
-    option_enable_progressive_upload = !strcasecmp(
-                                         extra_options.enable_progressive_upload, "true");
-  if (*extra_options.min_speed_limit_progressive)
-    option_min_speed_limit_progressive = atoll(
-                                           extra_options.min_speed_limit_progressive);
-  if (*extra_options.read_ahead)
-    option_read_ahead = atoll(extra_options.read_ahead);
-  if (*extra_options.min_speed_timeout)
-    option_min_speed_timeout = atoll(extra_options.min_speed_timeout);
-
-  if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
-  {
-    fprintf(stderr,
-            "Unable to determine client_id, client_secret or refresh_token.\n\n");
-    fprintf(stderr, "These can be set either as mount options or in "
-            "a file named %s\n\n", settings_filename);
-    fprintf(stderr, "  client_id=[App's id]\n");
-    fprintf(stderr, "  client_secret=[App's secret]\n");
-    fprintf(stderr, "  refresh_token=[Get it running hubic_token]\n");
-    fprintf(stderr, "The following settings are optional:\n\n");
-    fprintf(stderr,
-            "  cache_timeout=[Seconds for directory caching, default 600]\n");
-    fprintf(stderr, "  verify_ssl=[false to disable SSL cert verification]\n");
-    fprintf(stderr,
-            "  segment_size=[Size to use when creating DLOs, default 1073741824]\n");
-    fprintf(stderr,
-            "  segment_above=[File size at which to use segments, defult 2147483648]\n");
-    fprintf(stderr,
-            "  storage_url=[Storage URL for other tenant to view container]\n");
-    fprintf(stderr,
-            "  container=[Public container to view of tenant specified by storage_url]\n");
-    fprintf(stderr, "  temp_dir=[Directory to store temp files]\n");
-    fprintf(stderr,
-            "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
-    fprintf(stderr,
-            "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
-    fprintf(stderr,
-            "  curl_progress_state=[true to enable progress callback enabled. Mostly used for debugging]\n");
-    fprintf(stderr,
-            "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
-    fprintf(stderr,
-            "  debug_level=[0 to 2, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
-    fprintf(stderr, "  enable_chmod=[true to enable chmod support on fuse]\n");
-    fprintf(stderr, "  enable_chown=[true to enable chown support on fuse]\n");
-    fprintf(stderr,
-            "  enable_progressive_download=[true to enable progressive operation support]\n");
-    fprintf(stderr,
-            "  enable_progressive_upload=[true to enable progressive operation support]\n");
-    fprintf(stderr,
-            "  min_speed_limit_progressive=[0 to disable, or = number of transferred bytes per second limit under which operation will be aborted and resumed]\n");
-    fprintf(stderr,
-            "  min_speed_timeout=[number of seconds after which slow operation will be aborted and resumed]\n");
-    fprintf(stderr,
-            "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
-    return false;
-  }
-  return true;
-}
 
 int main(int argc, char** argv)
 {
@@ -1481,25 +1457,8 @@ int main(int argc, char** argv)
   fuse_opt_parse(&args, &options, NULL, parse_option);
   cloudfs_init();
   if (debug)
-  {
-    fprintf(stderr, "verify_ssl = %lu\n", verify_ssl);
-    fprintf(stderr, "curl_progress_state = %lu\n", option_curl_progress_state);
-    fprintf(stderr, "segment_size = %lu\n", segment_size);
-    fprintf(stderr, "segment_above = %lu\n", segment_above);
-    fprintf(stderr, "debug_level = %d\n", option_debug_level);
-    fprintf(stderr, "get_extended_metadata = %d\n", option_get_extended_metadata);
-    fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
-    fprintf(stderr, "enable_chmod = %d\n", option_enable_chmod);
-    fprintf(stderr, "enable_chown = %d\n", option_enable_chown);
-    fprintf(stderr, "enable_progressive_download = %d\n",
-            option_enable_progressive_download);
-    fprintf(stderr, "enable_progressive_upload = %d\n",
-            option_enable_progressive_upload);
-    fprintf(stderr, "min_speed_limit_progressive = %d\n",
-            option_min_speed_limit_progressive);
-    fprintf(stderr, "min_speed_timeout = %d\n", option_min_speed_timeout);
-    fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
-  }
+    print_options();
+
   cloudfs_set_credentials(options.client_id, options.client_secret,
                           options.refresh_token);
   if (!cloudfs_connect())

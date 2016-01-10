@@ -18,16 +18,15 @@ fi
 }
 
 echo Waiting for source file changes...
-while true; do
+#while true; do
 sleep 1
-if [ -f $SRC_FILE ]; then
-	echo New source detected!
-	read -t 1 -p "Press a key to compile and run"
+#if [ -f $SRC_FILE ]; then
+	echo New source detected, compiling!
 	rm $SRC_FILE
 	main
 	echo Run completed!
 	echo ==============
 	echo
 	echo Waiting for source file changes...
-fi
-done
+#fi
+#done

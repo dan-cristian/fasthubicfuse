@@ -19,8 +19,6 @@ typedef enum { false, true } bool;
 #define MAX_SEGMENT_THREADS 5
 #define APP_ID "FastHubicFuse_v0_1"
 
-
-
 // utimens support
 #define HEADER_TEXT_MTIME "X-Object-Meta-Mtime"
 #define HEADER_TEXT_ATIME "X-Object-Meta-Atime"
@@ -38,8 +36,11 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_MANIFEST "X-Object-Manifest"
 #define HEADER_TEXT_SEGMENT_SIZE "X-Object-Segment-Size"
 
-#define TEMP_FILE_NAME_FORMAT "%s/cloudfuse_%s_"
+//used for storing locally cloud cached files in temp folder
+#define TEMP_FILE_NAME_FORMAT "%s/cloudfuse%s"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
+//root folder on hubic cloud that will store segments uploaded via this app
+//default one in hubic is "default_segments", we keep it separately as safety measure
 #define HUBIC_SEGMENT_STORAGE_ROOT "default_fuse_segments"
 #define TEMP_SEGMENT_DIR_SUFFIX "_segments"
 #define TEMP_SEGMENT_FORMAT "_segments/%d"
@@ -218,6 +219,9 @@ bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
 void cloudfs_debug(int dbg);
+void interrupt_handler(int sig);
+void clear_full_cache();
+void print_options();
 void debugf(int level, char* fmt, ...);
 
 #endif
