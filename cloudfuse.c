@@ -1495,12 +1495,12 @@ int main(int argc, char** argv)
     .readlink = cfs_readlink,
     .init = cfs_init,
     .utimens = cfs_utimens,
-#ifdef HAVE_SETXATTR
+//#ifdef HAVE_SETXATTR
     .setxattr = cfs_setxattr,
     .getxattr = cfs_getxattr,
     .listxattr = cfs_listxattr,
     .removexattr = cfs_removexattr,
-#endif
+//#endif
   };
   pthread_mutexattr_init(&mutex_attr);
   pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
