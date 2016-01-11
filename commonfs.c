@@ -681,31 +681,34 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
   char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + 20] = "\0";
   int errsv, sem_val, i;
   char* sem_name;
-  for (i = 0; i < 2; i++)
+  for (i = 0; i <= SEM_DONE; i++)
   {
     if (data_buf->sem_list[i] || data_buf->sem_name_list[i])
     {
       debugf(DBG_LEVEL_NORM, KYEL
-             "init_semaphores(%s): semaphore %d not null @init", de->name, i);
+             "init_semaphores(%s): semaphore %d not null at init, name=%s",
+             de->name, i, data_buf->sem_name_list[i]);
       abort();
     }
     if (i == SEM_EMPTY)
       sem_name = "isempty";
     else if (i == SEM_FULL)
       sem_name = "isfull";
+    else if (i == SEM_DONE)
+      sem_name = "isdone";
     else
     {
       debugf(DBG_LEVEL_EXTALL,
              "init_semaphores(%s): " KRED "unknown semaphore type=%d", de->full_name, i);
-      return 0;
+      abort();
     }
     assert(de->full_name_hash);
     snprintf(semaphore_name, sizeof(semaphore_name), "/%s_%s_%s", prefix, sem_name,
              de->full_name_hash);
-    debugf(DBG_LEVEL_EXTALL, "init_semaphores(%s): sem_name=%s", de->full_name,
-           semaphore_name);
     //don't forget to free this
     data_buf->sem_name_list[i] = strdup(semaphore_name);
+    debugf(DBG_LEVEL_EXT, "init_semaphores(%s): sem_name=%s", de->full_name,
+           data_buf->sem_name_list[i]);
     //ensure semaphore does not exist
     //(might be in the system from a previous unclean finished operation)
     sem_unlink(data_buf->sem_name_list[i]);
@@ -806,12 +809,16 @@ dir_entry* init_dir_entry()
   de->upload_buf.mutex_initialised = false;
   de->downld_buf.sem_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_list[SEM_FULL] = NULL;
+  de->downld_buf.sem_list[SEM_DONE] = NULL;
   de->downld_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_name_list[SEM_FULL] = NULL;
+  de->downld_buf.sem_name_list[SEM_DONE] = NULL;
   de->upload_buf.sem_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_list[SEM_FULL] = NULL;
+  de->upload_buf.sem_list[SEM_DONE] = NULL;
   de->upload_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_name_list[SEM_FULL] = NULL;
+  de->upload_buf.sem_name_list[SEM_DONE] = NULL;
   de->upload_buf.size_processed = 0;
   de->upload_buf.fuse_buf_size = 0;
   de->downld_buf.ahead_thread_count = 0;

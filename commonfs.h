@@ -66,6 +66,7 @@ typedef enum { false, true } bool;
 
 #define SEM_EMPTY 0
 #define SEM_FULL 1
+#define SEM_DONE 2
 
 typedef struct
 {
@@ -88,8 +89,8 @@ typedef struct progressive_data_buf
   pthread_t thread;
   pthread_mutex_t mutex;
   bool mutex_initialised;
-  sem_t* sem_list[2];
-  char* sem_name_list[2];
+  sem_t* sem_list[SEM_DONE + 1];
+  char* sem_name_list[SEM_DONE + 1];
   size_t fuse_read_size;
   FILE* local_cache_file;
   size_t fuse_buf_size;

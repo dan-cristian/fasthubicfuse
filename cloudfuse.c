@@ -825,6 +825,14 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
          "cfs_flush(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
+
+  //exit on null paths
+  if (!path)
+  {
+    debugf(DBG_LEVEL_NORM, KRED "cfs_flush: received NULL path");
+    return 0;
+  }
+
   debug_print_descriptor(info);
   int errsv = 0;
   dir_entry* de = check_path_info(path);
@@ -923,6 +931,11 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): finishing upload operation",
                de->name);
         sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+        //wait until upload and cleanup of previous versions fully completes
+        //otherwise errors will be thrown by rsync (due to early rename)
+        sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
+        //signal free of semaphores is safe now
+        free_semaphores(&de_seg->upload_buf, SEM_DONE);
       }
     }
     else
@@ -1109,7 +1122,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         assert(op_ok);
       }
 
-      //this will happen for a progressive/segmented upload
+
       if (de->is_segmented)
       {
         assert(de_seg->upload_buf.mutex_initialised);

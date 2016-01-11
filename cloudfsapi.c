@@ -710,12 +710,17 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   //set segment actual size
   de->size = upload_buf->size_processed;
 
+  //signal we're done, usefull for cfs_flush etc
   if (de->upload_buf.sem_list[SEM_EMPTY])
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
+
+
 
   pthread_mutex_lock(&de->upload_buf.mutex);
   free_semaphores(&de->upload_buf, SEM_EMPTY);
   free_semaphores(&de->upload_buf, SEM_FULL);
+  //free SEM_DONE in cfs_flush after we're done
+  //free_semaphores(&de->upload_buf, SEM_DONE);
   pthread_mutex_unlock(&de->upload_buf.mutex);
 
   return 0;
@@ -1797,6 +1802,8 @@ void internal_upload_segment_progressive(void* arg)
     cloudfs_free_dir_list(de_versions);
     //mark file meta as obsolete to force a reload (for md5sums mostly)
     job->de->metadata_downloaded = false;
+    //signal cfs_flush we're done
+    sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
   }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
          job->de->name);
@@ -2472,14 +2479,14 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
             if (text_node->type == XML_TEXT_NODE)
             {
               content = (char*)text_node->content;
-              debugf(DBG_LEVEL_EXT, KYEL
-                     "List dir anode=[%s] content=[%s]",
-                     (const char*)anode->name, content);
+              //debugf(DBG_LEVEL_EXT, KYEL
+              //       "List dir anode=[%s] content=[%s]",
+              //       (const char*)anode->name, content);
             }
             else
             {
-              debugf(DBG_LEVEL_EXT, KYEL
-                     "List dir anode=[%s]", (const char*)anode->name);
+              //debugf(DBG_LEVEL_EXT, KYEL
+              //       "List dir anode=[%s]", (const char*)anode->name);
             }
           }
           debugf(DBG_LEVEL_EXTALL, KCYN
