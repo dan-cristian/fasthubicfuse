@@ -705,8 +705,10 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
 
   //all data uploaded and write completed, exit
   debugf(DBG_LEVEL_EXT, KMAG
-         "progressive_upload_callback(%s): segment upload done, len was=%lu",
-         de->name, max_size_to_upload);
+         "progressive_upload_callback(%s): segment upload done, blen=%lu, tlen=%lu",
+         de->name, max_size_to_upload, upload_buf->size_processed);
+  //set segment actual size
+  de->size = upload_buf->size_processed;
 
   if (de->upload_buf.sem_list[SEM_EMPTY])
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
@@ -792,8 +794,13 @@ static int send_request_size(const char* method, const char* encoded_path,
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20);
     curl_easy_setopt(curl, CURLOPT_VERBOSE, option_curl_verbose ? 1 : 0);
+    //if previous error was 0 (usually on SSL timeouts), try a fresh connect
+    if (response == 0)
+      curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1);
+    else
+      curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 0);
     add_header(&headers, "X-Auth-Token", storage_token);
 
     // add headers to save utimens attribs only on upload
@@ -935,6 +942,7 @@ static int send_request_size(const char* method, const char* encoded_path,
           curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, info->size_processed);
           debugf(DBG_LEVEL_EXT, "send_request_size(%s): "
                  KYEL " resuming from %lu", orig_path, info->size_processed);
+          abort();
         }
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
         //de is null on segments
@@ -1018,15 +1026,18 @@ static int send_request_size(const char* method, const char* encoded_path,
          Now, our chunk.memory points to a memory block that is chunk.size
          bytes big and contains the remote file.
       */
-      //printf("%lu bytes retrieved\n", (long)chunk.size);
       debugf(DBG_LEVEL_NORM, KRED
              "send_request_size: error, resp=%d , size=%lu, [HTTP %d] (%s)(%s)",
              response, (long)chunk.size, response, method, print_path);
       debugf(DBG_LEVEL_NORM, KRED"send_request_size: error message=[%s]",
              chunk.memory);
     }
-    if (is_download && info->size_copy > 0 && info != NULL
-        && info->size_copy != info->size_processed)
+
+    //detect if download was incomplete
+    if (is_download && info
+        && info->size_copy > 0  && info->size_copy != info->size_processed
+        && (de && info->size_processed != de->size)
+        && (de_seg && info->size_processed != de_seg->size))
     {
       debugf(DBG_LEVEL_NORM, KRED
              "send_request_size: download interrupted, expect size=%lu but got size=%.0f",
@@ -1034,6 +1045,7 @@ static int send_request_size(const char* method, const char* encoded_path,
       response = 417;//too slow, signal error and hope for faster download
     }
     free(chunk.memory);
+
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE")
         && response == 409))
     {
@@ -1042,6 +1054,20 @@ static int send_request_size(const char* method, const char* encoded_path,
              KCYN "(%s) "KGRN"[HTTP OK]", print_path, total_time, response, size_downloaded,
              size_uploaded, method);
       break;
+    }
+    if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
+    {
+      debugf(DBG_LEVEL_NORM, KYEL"exit 1: send_request_size(%s) (%s) [HTTP REAUTH]",
+             print_path, method);
+      break;
+    }
+    //something went really wrong
+    if (response == 0)
+    {
+      debugf(DBG_LEVEL_NORM, KRED
+             "status: send_request_size(%s:%s) unexpected error, try fresh connect",
+             print_path, method);
+      //abort();
     }
     //handle cases when file is not found, no point in retrying, should exit
     if (response == 404)
@@ -1056,17 +1082,11 @@ static int send_request_size(const char* method, const char* encoded_path,
       debugf(DBG_LEVEL_NORM,
              "send_request_size: httpcode=%d (%s)(%s), retrying "KRED"[HTTP ERR]", response,
              method, print_path);
-      //todo: try to list response content for debug purposes
       if (response != 417)//skip pause on slow speed errors
         //sleep(8 << tries); // backoff
         sleep(1);
     }
-    if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
-    {
-      debugf(DBG_LEVEL_NORM, KYEL"exit 1: send_request_size(%s) (%s) [HTTP REAUTH]",
-             print_path, method);
-      break;
-    }
+
     if (xmlctx)
       xmlCtxtResetPush(xmlctx, NULL, 0, NULL, NULL);
   }//end for
@@ -1722,7 +1742,17 @@ void internal_upload_segment_progressive(void* arg)
         break;
       }
     }
-    else break;
+    else
+      break;
+  }
+
+  if (!op_ok)
+  {
+    debugf(DBG_LEVEL_NORM, KRED
+           "internal_upload_segment_progressive(%s:%s): upload failed",
+           job->de->name, job->de_seg->full_name);
+    //todo: signal error to running threads
+    abort();
   }
 
   //if this is the last segment, upload the zero size parent file
@@ -1752,7 +1782,7 @@ void internal_upload_segment_progressive(void* arg)
       {
         //usually first entry is the just uploaded segment folder
         //ensure is not deleted
-        if (de_tmp &&
+        if (de_tmp && job->de->manifest_time &&
             strcasecmp(de_tmp->full_name + 1, job->de->manifest_time))
           //+1 as manifest does not have starting slash "/"
         {
@@ -1765,6 +1795,8 @@ void internal_upload_segment_progressive(void* arg)
     else
       abort();
     cloudfs_free_dir_list(de_versions);
+    //mark file meta as obsolete to force a reload (for md5sums mostly)
+    job->de->metadata_downloaded = false;
   }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
          job->de->name);
@@ -2213,8 +2245,6 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
     debugf(DBG_LEVEL_EXT, KMAG
            "cloudfs_download_segment: cache NOT ok after lock %s part=%lu",
            de->name, de_seg->segment_part);
-    if (de_seg->segment_part == 6)
-      sleep_ms(1);
   }
 
   init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
@@ -2232,11 +2262,20 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   info.size_copy = info.size_left;
 
   //get existing segment size on disk for resume ops
+  //if size is less than full segment size,
+  //otherwise assume is corrupted as md5check above failed
   struct stat st;
   int fd = fileno(fp);
   assert(fd != -1);
   assert(fstat(fd, &st) ==  0);
-  info.size_processed = st.st_size;
+  if (st.st_size < de_seg->size)
+    info.size_processed = st.st_size;
+  else
+  {
+    //sould never happen?
+    debugf(DBG_LEVEL_EXT, KRED "cloudfs_download_segment: segment corrupted");
+    abort();
+  }
 
   info.seg_base = de_seg->full_name;
   info.de_seg = de_seg;
@@ -2247,14 +2286,12 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   assert(info.fp);
   assert(fseek(info.fp, info.size_processed, SEEK_SET) == 0);
   setvbuf(info.fp, NULL, _IOFBF, DISK_BUFF_SIZE);
-  //char* encoded = curl_escape(info.seg_base, 0);
   int response = send_request_size(info.method, NULL, &info, NULL, NULL,
                                    info.size_copy, de->is_segmented, de, de_seg);
   if (!(response >= 200 && response < 300))
     debugf(DBG_LEVEL_NORM, KRED
            "cloudfs_download_segment: %s failed resp=%d proc=%lu",
            info.seg_base, response, info.size_processed);
-  //curl_free(encoded);
   fflush(info.fp);
   //compute md5sum after each seg download
   if (de_seg->md5sum_local)

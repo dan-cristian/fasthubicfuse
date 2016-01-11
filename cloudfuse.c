@@ -76,7 +76,7 @@ ExtraFuseOptions extra_options =
 bool initialise_options(struct fuse_args args)
 {
   char settings_filename[MAX_PATH_SIZE] = "";
-  FILE* settings;
+  FILE* settings ;
   snprintf(settings_filename, sizeof(settings_filename), "%s/.hubicfuse",
            get_home_dir());
   if ((settings = fopen(settings_filename, "r")))
@@ -188,9 +188,9 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
     {
       debugf(DBG_LEVEL_NORM, KRED "DEBUG COMMAND: Cache Reset!", path);
       clear_full_cache();
-      struct fuse_args args;
-      initialise_options(args);
-      print_options();
+      //struct fuse_args args;
+      //initialise_options(args);
+      //print_options();
       return -ENOENT;
     }
   }
@@ -1138,7 +1138,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
       }
       //check to avoid endless loops
-      assert(de_seg->upload_buf.work_buf_size != last_work_buf_size);
+      //assert(de_seg->upload_buf.work_buf_size != last_work_buf_size);
       last_work_buf_size = de_seg->upload_buf.work_buf_size;
     }
     if (option_enable_progressive_upload && de->is_segmented)
@@ -1438,7 +1438,7 @@ int parse_option(void* data, const char* arg, int key,
      )
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
-    cloudfs_debug(1);
+    debug = 1;
   return 1;
 }
 

@@ -3,7 +3,7 @@ HUB_ROOT=$MOUNT_HUBIC/test
 #HUB=/mnt/hubic2/test/t1
 HUB=$MOUNT_HUBIC/default/test/t2
 CACHE_RESET_CMD=$MOUNT_HUBIC/debug-decache
-HUB_NOCACHE=$MOUNT_HUBIC/test/ref
+#HUB_NOCACHE=$MOUNT_HUBIC/test/ref
 SRC=~/test/ref
 HUBIC_TMP=/media/temp/hubicfuse
 HUBIC_CFG=~/.hubicfuse
@@ -47,20 +47,20 @@ fi
 }
 
 function test(){
-  echo -n "Testing: $1 [$2] ..."
+  echo -n $(date +"%H:%m:%S")" Testing: $1 [$2] ..."
   eval $2 > /dev/null 2>&1
   check
 }
 
 function test_not(){
-  echo -n "Testing: $1 [$2]..."
+  echo -n $(date +"%H:%m:%S")" Testing: $1 [$2]..."
   eval $2 > /dev/null 2>&1
   check_not
 }
 
 # $1=file name, $2=target md5sum
 function check_md5(){
-	echo -n "Testing: md5sum check" $1 "..."
+	echo -n $(date +"%H:%m:%S")" Testing: md5sum check" $1 "..."
 	md5=$(md5sum $1)
 	if [[ "$md5" == *"$2"* ]]; then
 		echo -e $PASSED_MSG
@@ -74,7 +74,7 @@ function check_md5(){
 
 # $1=file name, $2=target chmod
 function check_chmod(){
-	echo -n "Testing: chmod check" $1 "..."
+	echo -n $(date +"%H:%m:%S")" Testing: chmod check" $1 "..."
 	chmod=$(stat -c %a $1)
 	if [[ "$chmod" == *"$2"* ]]; then
 		echo -e $PASSED_MSG
@@ -85,6 +85,21 @@ function check_chmod(){
 		return 0
 	fi
 }
+
+# $1=file name, $2=target chown
+function check_chown(){
+	echo -n $(date +"%H:%m:%S")" Testing: chown check" $1 "..."
+	chown=$(stat -c "%U:%G" $1)
+	if [[ "$chown" == *"$2"* ]]; then
+		echo -e $PASSED_MSG
+		return 1
+	else
+		echo -n " $chown!=$2 "
+		echo -e $FAILED_MSG
+		return 0
+	fi
+}
+
 
 function setup_config_progressive(){
 	echo
@@ -140,7 +155,7 @@ function test_upload_large(){
 
 function test_download_small(){
 	echo "Testing copy operations, download"
-	if test "download tiny file" "$COPY_CMD $HUB_NOCACHE/$TINY $TMP/"; then return; fi
+	if test "download tiny file" "$COPY_CMD $HUB/$TINY $TMP/"; then return; fi
 	if check_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi
 	if test "download small file" "$COPY_CMD $HUB/$SMALL $TMP/"; then return; fi
 	if check_md5 "$TMP/$SMALL" "$SMALL_MD5"; then return; fi
@@ -155,6 +170,8 @@ function test_copy_huge()
 	if check_md5 "$TMP/$LARGE" "$LARGE_MD5"; then return; fi
 	if test "download huge segmented file" "$COPY_CMD $HUB/$HUGE $TMP/"; then return; fi
 	if check_md5 "$TMP/$HUGE" "$HUGE_MD5"; then return; fi
+	echo Test completed!
+	echo ---------------
 }
 
 function test_chmod(){
@@ -162,8 +179,23 @@ function test_chmod(){
 	if test "chmod set" "chmod 765 $HUB/$TINY"; then return 0; fi
 	cache_reset
 	if check_chmod "$HUB/$TINY" "765"; then return 0; fi
+	echo Test completed!
+	echo ---------------
 	return 1
 }
+
+function test_chown(){
+	echo "Testing chown..."
+	if test "chown set" "chown haiot:dcristian $HUB/$TINY"; then return 0; fi
+	cache_reset
+	if check_chown "$HUB/$TINY" "haiot:dcristian"; then return 0; fi
+	if test "chown set" "chown dcristian:users $HUB/$TINY"; then return 0; fi
+	if check_chown "$HUB/$TINY" "dcristian:users"; then return 0; fi
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
 
 function test_rename(){
 	echo "Testing rename..."
@@ -171,6 +203,19 @@ function test_rename(){
 	if test_not "old file must not exist" "stat $HUB/$TINY"; then return 0; fi
 	if test "new file must exist" "stat $HUB/renamed$TINY"; then return 0; fi
 	if test "rename tiny file back" "mv $HUB/renamed$TINY $HUB/$TINY"; then return 0; fi
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
+function test_create(){
+	echo "Testing create file..."
+	if test "create empty file" "touch $HUB/touch$TINY"; then return 0; fi
+	if test "new file must exist" "stat $HUB/touch$TINY"; then return 0; fi
+	if test "append to new file" "cat $HUB/$TINY >> $HUB/touch$TINY"; then return 0; fi
+	if check_md5 "$HUB/touch$TINY" "$TINY_MD5"; then return; fi
+	echo Test completed!
+	echo ---------------
 	return 1
 }
 
@@ -191,11 +236,11 @@ while true; do
 		echo New build detected!
 		sleep 5
 		setup_test
-		
 		test_upload_small
+		test_create
 		if test_rename; then exit; fi
 		if test_chmod; then exit; fi
-		
+		if test_chown; then exit; fi
 		test_upload_small
 		
 		test_download_small

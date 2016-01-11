@@ -435,15 +435,24 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
     //remove file from disk cache, fix for issue #89, https://github.com/TurboGit/hubicfuse/issues/89
     delete_file(de->full_name);
     free(de->name);
+    de->name = NULL;
     free(de->full_name);
+    de->full_name = NULL;
     free(de->content_type);
+    de->content_type = NULL;
     //TODO free all added fields
     free(de->md5sum);
+    de->md5sum = NULL;
     free(de->md5sum_local);
+    de->md5sum_local = NULL;
     free(de->full_name_hash);
+    de->full_name_hash = NULL;
     free(de->manifest_cloud);
+    de->manifest_cloud = NULL;
     free(de->manifest_seg);
+    de->manifest_seg = NULL;
     free(de->manifest_time);
+    de->manifest_time = NULL;
     //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
     free(de);
   }
@@ -1259,10 +1268,6 @@ char* get_home_dir()
   return "~";
 }
 
-void cloudfs_debug(int dbg)
-{
-  debug = dbg;
-}
 
 //allows memory leaks inspections
 void interrupt_handler(int sig)
