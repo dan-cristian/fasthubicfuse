@@ -36,6 +36,7 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_MANIFEST "X-Object-Manifest"
 #define HEADER_TEXT_SEGMENT_SIZE "X-Object-Segment-Size"
 
+
 //used for storing locally cloud cached files in temp folder
 #define TEMP_FILE_NAME_FORMAT "%s/cloudfuse%s"
 #define HUBIC_DATE_FORMAT "%Y-%m-%d %T."
@@ -202,6 +203,7 @@ dir_entry* path_info(const char* path);
 dir_entry* check_path_info(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
 dir_entry* get_segment(dir_entry* de, int segment_index);
+void path_to_de(const char* path, dir_entry* de);
 dir_entry* get_create_segment(dir_entry* de, int segment_index);
 void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);

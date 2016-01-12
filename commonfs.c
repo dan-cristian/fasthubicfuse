@@ -47,7 +47,6 @@ bool option_enable_progressive_download = false;
 long option_min_speed_limit_progressive = 0;//use long not double
 long option_min_speed_timeout;
 long option_read_ahead = 0;
-size_t file_buffer_size = 0;
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -433,7 +432,7 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
     dir_entry* de = dir_list;
     dir_list = dir_list->next;
     //remove file from disk cache, fix for issue #89, https://github.com/TurboGit/hubicfuse/issues/89
-    delete_file(de->full_name);
+    //delete_file(de->full_name);
     free(de->name);
     de->name = NULL;
     free(de->full_name);
@@ -533,6 +532,33 @@ void get_manifest_path(dir_entry* de, char* manifest_path)
 }
 
 /*
+  set de manifest related fields using now date
+*/
+void path_to_de(const char* path, dir_entry* de)
+{
+  assert(de);
+  char seg_base[MAX_URL_SIZE] = "";
+  char container[MAX_URL_SIZE] = "";
+  char object[MAX_URL_SIZE] = "";
+  char manifest[MAX_URL_SIZE];
+  split_path(path, seg_base, container, object);
+
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  char string_float[TIME_CHARS];
+  snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+  char meta_mtime[TIME_CHARS];
+  snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+  snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
+           HUBIC_SEGMENT_STORAGE_ROOT, container);
+  assert(!de->manifest_seg);
+  de->manifest_seg = strdup(manifest);
+  snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
+           HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
+  assert(!de->manifest_time);
+  de->manifest_time = strdup(manifest);
+}
+/*
   returns the segment.
   if does not exist then a new empty segment is created, used when writing new files.
   NOTE!: sets de->manifest field
@@ -574,41 +600,43 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   assert(de_seg);
   de_seg->segment_part = segment_index;
 
-  char seg_base[MAX_URL_SIZE] = "";
-  char container[MAX_URL_SIZE] = "";
-  char object[MAX_URL_SIZE] = "";
-  char manifest[MAX_URL_SIZE];
-  split_path(de->full_name, seg_base, container, object);
+  //char seg_base[MAX_URL_SIZE] = "";
+  //char container[MAX_URL_SIZE] = "";
+  //char object[MAX_URL_SIZE] = "";
+  //char manifest[MAX_URL_SIZE];
+  //split_path(de->full_name, seg_base, container, object);
   if (!de->manifest_seg)
   {
-    struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
-    char string_float[TIME_CHARS];
-    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-    char meta_mtime[TIME_CHARS];
-    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-    //snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
-    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
+    path_to_de(de->full_name, de);
+    /*
+      struct timespec now;
+      clock_gettime(CLOCK_REALTIME, &now);
+      char string_float[TIME_CHARS];
+      snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+      char meta_mtime[TIME_CHARS];
+      snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+      snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
              HUBIC_SEGMENT_STORAGE_ROOT, container);
-    de->manifest_seg = strdup(manifest);
-    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
+      de->manifest_seg = strdup(manifest);
+      snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
              HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
-    de->manifest_time = strdup(manifest);
+      de->manifest_time = strdup(manifest);
+    */
   }
   //at this stage file size is not known so we set it to 0
   //segment size is set equal for all segments, remaining size is not known
   //snprintf(manifest, MAX_URL_SIZE, "%s/%ld/", de->manifest_time, segment_size);
-  snprintf(manifest, MAX_URL_SIZE, "%s/", de->manifest_time);
-  char tmp[MAX_URL_SIZE];
-  strncpy(tmp, seg_base, MAX_URL_SIZE);
-  snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
+  //snprintf(manifest, MAX_URL_SIZE, "%s/", de->manifest_time);
+  //char tmp[MAX_URL_SIZE];
+  //strncpy(tmp, seg_base, MAX_URL_SIZE);
+  //snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
 
   char seg_name[8 + 1] = { 0 };
   snprintf(seg_name, 8 + 1, "%08i", segment_index);
   de_seg->name = strdup(seg_name);
 
   char seg_path[MAX_URL_SIZE] = { 0 };
-  snprintf(seg_path, MAX_URL_SIZE, "%s%08i", seg_base, segment_index);
+  snprintf(seg_path, MAX_URL_SIZE, "%s/%08i", de->manifest_time, segment_index);
   de_seg->full_name = strdup(seg_path);
   de_seg->full_name_hash = strdup(str2md5(de_seg->full_name,
                                           strlen(de_seg->full_name)));;
@@ -833,6 +861,7 @@ dir_entry* init_dir_entry()
 
 void free_de_before_get(dir_entry* de)
 {
+  debugf(DBG_LEVEL_EXT, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
   free(de->md5sum_local);
   de->md5sum_local = NULL;
   free_de_before_head(de);
@@ -840,6 +869,7 @@ void free_de_before_get(dir_entry* de)
 
 void free_de_before_head(dir_entry* de)
 {
+  debugf(DBG_LEVEL_EXT, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
   //assumes a file might change from segmented to none
   free(de->manifest_cloud);
   de->manifest_cloud = NULL;

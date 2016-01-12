@@ -35,7 +35,6 @@ extern int option_debug_level;
 extern bool option_curl_progress_state;
 extern bool option_enable_chown;
 extern bool option_enable_chmod;
-extern size_t file_buffer_size;
 extern bool option_enable_progressive_upload;
 extern bool option_enable_progressive_download;
 extern long option_min_speed_limit_progressive;
@@ -618,7 +617,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
            "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
   //sleep_ms(rnd);
   int iters = 0;
-  file_buffer_size = size;
   debug_print_descriptor(info);
   bool in_cache = false;
 
@@ -1002,13 +1000,13 @@ static int cfs_rmdir(const char* path)
 static int cfs_ftruncate(const char* path, off_t size,
                          struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_ftruncate(%s)", path);
-  file_buffer_size = size;
-  openfile* of = (openfile*)(uintptr_t)info->fh;
-  if (ftruncate(of->fd, size))
+  debugf(DBG_LEVEL_NORM, KBLU "cfs_ftruncate(%s): size=%lu", path, size);
+  /*openfile* of = (openfile*)(uintptr_t)info->fh;
+    if (ftruncate(of->fd, size))
     return -errno;
-  lseek(of->fd, 0, SEEK_SET);
-  update_dir_cache(path, size, 0, 0);
+    lseek(of->fd, 0, SEEK_SET);
+    update_dir_cache(path, size, 0, 0);
+  */
   debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_ftruncate(%s)", path);
   return 0;
 }
@@ -1157,8 +1155,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     if (option_enable_progressive_upload && de->is_segmented)
       de_seg->upload_buf.fuse_buf_size = length;
 
-    debugf(DBG_LEVEL_EXT, KMAG "cfs_write(%s): exit, work_size=%lu, seg_count=%d",
-           path, de_seg->upload_buf.work_buf_size, de->segment_count);
+    if (offset == 0)
+      debugf(DBG_LEVEL_EXTALL,
+             KMAG "cfs_write(%s): exit, work_size=%lu, seg_count=%d",
+             path, de_seg->upload_buf.work_buf_size, de->segment_count);
     return length;
   }
 }
@@ -1192,7 +1192,7 @@ static int cfs_fsync(const char* path, int idunno,
 
 static int cfs_truncate(const char* path, off_t size)
 {
-  debugf(DBG_LEVEL_NORM, "cfs_truncate(%s)", path);
+  debugf(DBG_LEVEL_NORM, "cfs_truncate(%s): size=%lu", path, size);
   dir_entry* de = check_path_info(path);
   assert(de);
   clock_gettime(CLOCK_REALTIME, &de->ctime_local);

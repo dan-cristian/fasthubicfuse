@@ -208,6 +208,21 @@ function test_rename(){
 	return 1
 }
 
+function test_rename_large(){
+	echo "Testing rename segmented file..."
+	if test "rename large file" "mv $HUB/$LARGE $HUB/renamed$LARGE"; then return 0; fi
+	if test_not "old file must not exist" "stat $HUB/$LARGE"; then return 0; fi
+	if test "new file must exist" "stat $HUB/renamed$LARGE"; then return 0; fi
+	if test "download renamed large file" "$COPY_CMD $HUB/renamed$LARGE $TMP/"; then return 0; fi
+	if check_md5 "$TMP/renamed$LARGE" "$LARGE_MD5"; then return 0; fi
+	if test "rename large file back" "mv $HUB/renamed$LARGE $HUB/$LARGE"; then return 0; fi
+	if test "download large file" "$COPY_CMD $HUB/$LARGE $TMP/"; then return 0; fi
+	if check_md5 "$TMP/$LARGE" "$LARGE_MD5"; then return 0; fi
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
 function test_create(){
 	echo "Testing create file..."
 	if test "create empty file" "touch $HUB/touch$TINY"; then return 0; fi
@@ -236,6 +251,9 @@ while true; do
 		echo New build detected!
 		sleep 5
 		setup_test
+		test_upload_large
+		if test_rename_large; then exit; fi
+		
 		test_upload_small
 		test_create
 		if test_rename; then exit; fi
