@@ -1319,6 +1319,13 @@ void interrupt_handler(int sig)
   exit(0);
 }
 
+/* Catch Signal Handler function */
+void sigpipe_callback_handler(int signum)
+{
+
+  debugf(DBG_LEVEL_NORM, KRED "Caught signal SIGPIPE, ignoring %d\n", signum);
+}
+
 void clear_full_cache()
 {
   dir_decache("");

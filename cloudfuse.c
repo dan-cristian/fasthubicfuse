@@ -1462,6 +1462,8 @@ int main(int argc, char** argv)
 {
   fprintf(stderr, "Starting hubicfuse on homedir %s!\n", get_home_dir());
   signal(SIGINT, interrupt_handler);
+  /* Catch Signal Handler SIGPIPE */
+  signal(SIGPIPE, sigpipe_callback_handler);
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if (!initialise_options(args))

@@ -222,6 +222,7 @@ bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
 void interrupt_handler(int sig);
+void sigpipe_callback_handler(int signum);
 void clear_full_cache();
 void print_options();
 void debugf(int level, char* fmt, ...);
