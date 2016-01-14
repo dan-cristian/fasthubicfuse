@@ -1792,9 +1792,22 @@ void internal_upload_segment_progressive(void* arg)
                                  0, 0, job->de, NULL);
     curl_slist_free_all(headers);
     dir_entry* de_versions, *de_tmp;
-    char manifest_root[MAX_URL_SIZE] = "";
-    snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
-             job->de->manifest_seg, job->de->name);
+    char* manifest_root;
+    //detect manifest location where to search for previous versions
+    if (job->de->manifest_cloud)
+    {
+      //if file already exists
+      manifest_root = job->de->manifest_cloud;
+    }
+    else
+    {
+      //this is for new files
+      char buff[MAX_URL_SIZE];
+      manifest_root = buff;
+      snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
+               job->de->manifest_seg, job->de->name);
+    }
+
     debugf(DBG_LEVEL_EXT, KCYN "internal_upload: get file versions manif=%s",
            manifest_root);
     if (cloudfs_list_directory(manifest_root, &de_versions))
@@ -2513,7 +2526,7 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
               //       "List dir anode=[%s]", (const char*)anode->name);
             }
           }
-          debugf(DBG_LEVEL_EXTALL, KCYN
+          debugf(DBG_LEVEL_EXT, KCYN
                  "cloudfs_list_directory(%s): anode [%s]=[%s]", path,
                  (const char*)anode->name, content);
           if (!strcasecmp((const char*)anode->name, "name"))
