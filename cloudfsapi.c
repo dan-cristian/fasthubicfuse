@@ -129,7 +129,7 @@ static void add_header(curl_slist** headers, const char* name,
   char x_header[MAX_HEADER_SIZE];
   char safe_value[256];
   const char* value_ptr;
-  debugf(DBG_LEVEL_EXTALL, "add_header(%s:%s)", name, value);
+  debugf(DBG_LEVEL_EXT, "add_header(%s:%s)", name, value);
   if (strlen(value) > 256)
   {
     debugf(DBG_LEVEL_NORM, KRED"add_header: warning, value size > 256 (%s:%s) ",
@@ -680,6 +680,14 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
          upload_buf->work_buf_size, de->upload_buf.sem_list[SEM_FULL],
          de->upload_buf.sem_list[SEM_EMPTY]);
 
+
+  if (!de->upload_buf.sem_list[SEM_FULL])
+  {
+    debugf(DBG_LEVEL_EXT, "progressive_upload_callback(%s): " KRED
+           "unexpected uploadbuf = null, signal upload done", de->name);
+    return 0;
+  }
+
   //wait to get fuse buffer data
   sem_wait(de->upload_buf.sem_list[SEM_FULL]);
 
@@ -840,7 +848,11 @@ static int send_request_size(const char* method, const char* encoded_path,
       debugf(DBG_LEVEL_EXT, "send_request_size: POST (%s)", orig_path);
       curl_easy_setopt(curl, CURLOPT_POST, 1L);
       curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
+      curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS, 10000L);
+
       //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
+      //add_header(&headers, "Transfer-Encoding", "chunked");
+      //add_header(&headers, "Expect", "");
     }
     else if (!strcasecmp(method, "MKLINK") && fp)
     {
@@ -905,6 +917,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     }
     else if (!strcasecmp(method, HTTP_GET))
     {
+      curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
       //reset local cache md5sum on file retrieval
       //avoid reseting de on segments download
       if (de_seg)
@@ -1008,7 +1021,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     curl_slist* extra;
     for (extra = extra_headers; extra; extra = extra->next)
     {
-      debugf(DBG_LEVEL_EXT, "adding header: %s", extra->data);
+      debugf(DBG_LEVEL_EXT, "adding extra header: %s", extra->data);
       headers = curl_slist_append(headers, extra->data);
     }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -1803,14 +1816,16 @@ void internal_upload_segment_progressive(void* arg)
     }
     else
       abort();
-    cloudfs_free_dir_list(de_versions);
+    if (de_versions)
+      cloudfs_free_dir_list(de_versions);
     //mark file meta as obsolete to force a reload (for md5sums mostly)
     job->de->metadata_downloaded = false;
     //signal cfs_flush we're done
-    sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
+    if (job->de_seg->upload_buf.sem_list[SEM_DONE])
+      sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
   }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
-         job->de->name);
+         (job->de ? job->de->name : "nil"));
   free(job->self_reference);
   pthread_exit(NULL);
 }
@@ -2359,7 +2374,7 @@ int cloudfs_object_truncate(dir_entry* de, off_t size)
 void get_file_metadata(dir_entry* de)
 {
 
-  if (option_get_extended_metadata && !de->isdir)
+  if (option_get_extended_metadata)
   {
     debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",
            de->full_name, de->size_on_cloud);
