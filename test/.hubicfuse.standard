@@ -1,7 +1,7 @@
 client_x_id = api_hubic_xxxxx
 client_x_secret = xxxxxx
 refresh_x_token = xxxx
-cache_timeout = 600
+cache_timeout = 0
 temp_dir = /media/temp/hubicfuse
 segment_size = 10485760
 segment_above = 10485759

@@ -314,6 +314,8 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_readdir(%s)", path);
   dir_entry* de;
+  //fixme: if this called while an upload is in progress and cache expires,
+  //will remove the cache entries and crash as previous segments are deleted
   if (!caching_list_directory(path, &de))
   {
     debug_list_cache_content();
@@ -934,6 +936,11 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
         //signal free of semaphores is safe now
         free_semaphores(&de_seg->upload_buf, SEM_DONE);
+        //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
+        //free_semaphores(&de_seg->upload_buf, SEM_FULL);
+        de->metadata_downloaded = false;
+        //dir_decache(path);
+        //return 0;
       }
     }
     else
@@ -1071,6 +1078,16 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       //creates the segment to be uploaded as dir_entry
       //and sets minimum required fields
       seg_index = offset / segment_size;
+      if (offset == 0)
+      {
+        //clear manifest meta to avoid overwrite of same segments
+        //and force creation of a new version (in the same session)
+        free(de->manifest_seg);
+        de->manifest_seg = NULL;
+        free(de->manifest_time);
+        de->manifest_time = NULL;
+      }
+
       de_seg = get_create_segment(de, seg_index);
       assert(get_segment(de, seg_index));
       assert(de->manifest_seg);
@@ -1089,8 +1106,12 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       {
         dir_entry* prev_seg = get_segment(de, seg_index - 1);
         assert(prev_seg);
-        if (prev_seg->upload_buf.sem_list[SEM_FULL])
+        if (prev_seg->upload_buf.sem_list[SEM_FULL]
+            && !prev_seg->upload_buf.signaled_completion)
+        {
           sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
+          prev_seg->upload_buf.signaled_completion = true;
+        }
       }
     }
     else //not progressive-segmented
@@ -1101,6 +1122,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     }
     de->size = offset + length;
     size_t last_work_buf_size  = de_seg->upload_buf.work_buf_size;
+    int loops = 0;
     //loop until entire buffer was uploaded
     while (de_seg->upload_buf.work_buf_size > 0)
     {
@@ -1109,8 +1131,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       ptr_offset = length - de_seg->upload_buf.work_buf_size;
       de_seg->upload_buf.readptr = buf + ptr_offset;
 
-      //start a new segment upload thread if needed
-      if (option_enable_progressive_upload &&
+      //start a new segment upload thread if needed, just once in loop
+      if (option_enable_progressive_upload && loops == 0 &&
           (de_seg->upload_buf.size_processed == 0
            || de_seg->upload_buf.size_processed == de_seg->size))
       {
@@ -1123,8 +1145,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
 
       if (de->is_segmented)
       {
-        assert(de_seg->upload_buf.mutex_initialised);
-        pthread_mutex_lock(&de_seg->upload_buf.mutex);
+        //assert(de_seg->upload_buf.mutex_initialised);
+        //pthread_mutex_lock(&de_seg->upload_buf.mutex);
         //signal there is data available in buffer for upload
         if (de_seg->upload_buf.sem_list[SEM_FULL])
           sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
@@ -1132,9 +1154,9 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         //wait until previous buffer data is uploaded
         if (de_seg->upload_buf.sem_list[SEM_EMPTY])
           sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
-        pthread_mutex_unlock(&de_seg->upload_buf.mutex);
+        //pthread_mutex_unlock(&de_seg->upload_buf.mutex);
 
-        debugf(DBG_LEVEL_EXT, KMAG
+        debugf(DBG_LEVEL_EXTALL, KMAG
                "cfs_write(%s:%s): buffer full, work_size=%lu",
                de->name, de_seg->name,
                de_seg->upload_buf.work_buf_size);
@@ -1151,6 +1173,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       //check to avoid endless loops
       //assert(de_seg->upload_buf.work_buf_size != last_work_buf_size);
       last_work_buf_size = de_seg->upload_buf.work_buf_size;
+      loops++;
     }
     if (option_enable_progressive_upload && de->is_segmented)
       de_seg->upload_buf.fuse_buf_size = length;
@@ -1192,12 +1215,12 @@ static int cfs_fsync(const char* path, int idunno,
 
 static int cfs_truncate(const char* path, off_t size)
 {
-  debugf(DBG_LEVEL_NORM, "cfs_truncate(%s): size=%lu", path, size);
+  debugf(DBG_LEVEL_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
   dir_entry* de = check_path_info(path);
   assert(de);
   clock_gettime(CLOCK_REALTIME, &de->ctime_local);
-  cloudfs_object_truncate(de, size);
-  debugf(DBG_LEVEL_NORM, "exit: cfs_truncate(%s)", path);
+  //cloudfs_object_truncate(de, size);
+  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_truncate(%s)", path);
   return 0;
 }
 

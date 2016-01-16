@@ -110,7 +110,7 @@ int get_time_as_string(time_t time_t_val, long nsec, char* time_str,
   int str_len = strftime(time_str, time_str_len, HUBIC_DATE_FORMAT,
                          &time_val_tm);
   char nsec_str[TIME_CHARS];
-  sprintf(nsec_str, "%d", nsec);
+  sprintf(nsec_str, "%ld", nsec);
   strcat(time_str, nsec_str);
   return str_len + strlen(nsec_str);
 }
@@ -570,6 +570,8 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
 
   if (!de->segments)
   {
+    debugf(DBG_LEVEL_EXTALL, "get_create_segment(%s:%d): creating first segment",
+           de->name, segment_index);
     de->segments = init_dir_entry();
     de_seg = de->segments;
   }
@@ -584,11 +586,14 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
       {
         if (de_seg->segment_part != segment_index)
           de_seg->segment_part = segment_index;
-        //return de_seg;
+        debugf(DBG_LEVEL_EXTALL, "get_create_segment(%s:%d): reusing segment",
+               de->name, segment_index);
         break;
       }
       if (!de_seg->next)
       {
+        debugf(DBG_LEVEL_EXTALL, "get_create_segment(%s:%d): appending segment",
+               de->name, segment_index);
         de_seg->next = init_dir_entry();
         de_seg = de_seg->next;
         break;
@@ -647,6 +652,16 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   return de_seg;
 }
 
+/*
+  delete segments from memory cache
+*/
+void dir_decache_segments(dir_entry* de)
+{
+  if (de->segments)
+    cloudfs_free_dir_list(de->segments);
+  de->segments = NULL;
+}
+
 void dir_decache(const char* path)
 {
   dir_cache* cw;
@@ -667,7 +682,7 @@ void dir_decache(const char* path)
       if (cw->next)
         cw->next->prev = cw->prev;
       debugf(DBG_LEVEL_EXT, "dir_decache: free_dir1(%s)", cw->path);
-      //fixme: this sometimes is NULL and generates segfaults, checking first
+      //fix: this sometimes is NULL and generates segfaults, checking first
       if (cw->entries != NULL)
         cloudfs_free_dir_list(cw->entries);
       free(cw->path);
@@ -706,7 +721,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 {
   debugf(DBG_LEVEL_EXT, "init_semaphores(%s): prefix=%s len=%d",
          de->full_name, prefix, strlen(prefix));
-  char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + 20] = "\0";
+  char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + MAX_PATH_SIZE] = "\0";
   int errsv, sem_val, i;
   char* sem_name;
   for (i = 0; i <= SEM_DONE; i++)
@@ -726,13 +741,13 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
       sem_name = "isdone";
     else
     {
-      debugf(DBG_LEVEL_EXTALL,
-             "init_semaphores(%s): " KRED "unknown semaphore type=%d", de->full_name, i);
+      debugf(DBG_LEVEL_EXTALL, "init_semaphores(%s): " KRED
+             "unknown semaphore type=%d", de->full_name, i);
       abort();
     }
     assert(de->full_name_hash);
-    snprintf(semaphore_name, sizeof(semaphore_name), "/%s_%s_%s", prefix, sem_name,
-             de->full_name_hash);
+    snprintf(semaphore_name, sizeof(semaphore_name), "/%s_%s_%s_%s",
+             prefix, sem_name, de->full_name_hash, de->name);
     //don't forget to free this
     data_buf->sem_name_list[i] = strdup(semaphore_name);
     debugf(DBG_LEVEL_EXT, "init_semaphores(%s): sem_name=%s", de->full_name,
@@ -841,6 +856,7 @@ dir_entry* init_dir_entry()
   de->downld_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_name_list[SEM_FULL] = NULL;
   de->downld_buf.sem_name_list[SEM_DONE] = NULL;
+  de->downld_buf.signaled_completion = false;
   de->upload_buf.sem_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_list[SEM_FULL] = NULL;
   de->upload_buf.sem_list[SEM_DONE] = NULL;
@@ -849,6 +865,7 @@ dir_entry* init_dir_entry()
   de->upload_buf.sem_name_list[SEM_DONE] = NULL;
   de->upload_buf.size_processed = 0;
   de->upload_buf.fuse_buf_size = 0;
+  de->upload_buf.signaled_completion = false;
   de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
   de->is_segmented = false;
@@ -993,6 +1010,8 @@ int caching_list_directory(const char* path, dir_entry** list)
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
+    debugf(DBG_LEVEL_NORM, KYEL
+           "caching_list_directory(%s): Cache expired, cleaning!", path);
     if (!cloudfs_list_directory(path, list))
     {
       //mutex unlock was forgotten
@@ -1000,8 +1019,8 @@ int caching_list_directory(const char* path, dir_entry** list)
       debugf(DBG_LEVEL_EXTALL, "exit 1: caching_list_directory(%s)", path);
       return  0;
     }
-    //fixme: this frees dir subentries but leaves the dir parent entry, this confuses path_info
-    //which believes this dir has no entries
+    //fixme: this frees dir subentries but leaves the dir parent entry,
+    //this confuses path_info which believes this dir has no entries
     if (cw->entries != NULL)
     {
       cloudfs_free_dir_list(cw->entries);

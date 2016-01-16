@@ -675,18 +675,9 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   */
 
   debugf(DBG_LEVEL_EXT,
-         "progressive_upload_callback(%s): processing sizeleft=%lu fullb=%p, emptyb=%p",
-         de->name,
-         upload_buf->work_buf_size, de->upload_buf.sem_list[SEM_FULL],
-         de->upload_buf.sem_list[SEM_EMPTY]);
-
-
-  if (!de->upload_buf.sem_list[SEM_FULL])
-  {
-    debugf(DBG_LEVEL_EXT, "progressive_upload_callback(%s): " KRED
-           "unexpected uploadbuf = null, signal upload done", de->name);
-    return 0;
-  }
+         "progressive_upload_callback(%s): processing size_proc=%lu",
+         de->name, upload_buf->size_processed);
+  assert(de->upload_buf.sem_list[SEM_FULL]);
 
   //wait to get fuse buffer data
   sem_wait(de->upload_buf.sem_list[SEM_FULL]);
@@ -705,7 +696,7 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
     upload_buf->readptr += max_size_to_upload;
     upload_buf->work_buf_size -= max_size_to_upload;
     upload_buf->size_processed += max_size_to_upload;
-    debugf(DBG_LEVEL_EXT, "progressive_upload_callback(%s): " KMAG
+    debugf(DBG_LEVEL_EXTALL, "progressive_upload_callback(%s): " KMAG
            "feed http data size=%lu", de->name, max_size_to_upload);
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
     return max_size_to_upload;
@@ -722,14 +713,10 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   if (de->upload_buf.sem_list[SEM_EMPTY])
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
 
-
-
-  pthread_mutex_lock(&de->upload_buf.mutex);
-  free_semaphores(&de->upload_buf, SEM_EMPTY);
-  free_semaphores(&de->upload_buf, SEM_FULL);
-  //free SEM_DONE in cfs_flush after we're done
-  //free_semaphores(&de->upload_buf, SEM_DONE);
-  pthread_mutex_unlock(&de->upload_buf.mutex);
+  //fixme: get's stuck here as it pased lock in cfs_write
+  //pthread_mutex_lock(&de->upload_buf.mutex);
+  //free both
+  //pthread_mutex_unlock(&de->upload_buf.mutex);
 
   return 0;
 }
@@ -748,6 +735,8 @@ static int send_request_size(const char* method, const char* encoded_path,
          (de ? de->name : "nil"), (de_seg ? de_seg->name : "nil"));
   char url[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
+
+
   char* slash;
   long response = -1;
   int tries = 0;
@@ -886,7 +875,7 @@ static int send_request_size(const char* method, const char* encoded_path,
         curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
         if (fp)
         {
-          curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
+          curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, file_size);
           debugf(DBG_LEVEL_EXT, "send_request_size: standard PUT (%s)",
                  orig_path);
           curl_easy_setopt(curl, CURLOPT_READDATA, fp);//actually infoseg
@@ -1127,7 +1116,7 @@ int send_request(char* method, const char* path, FILE* fp,
                  xmlParserCtxtPtr xmlctx, curl_slist* extra_headers,
                  dir_entry* de, dir_entry* de_seg)
 {
-  long flen = 0;
+  off_t flen = 0;
   if (fp)
   {
     // if we don't flush the size will probably be zero
@@ -1765,7 +1754,18 @@ void internal_upload_segment_progressive(void* arg)
       }
     }
     else
+    {
+      //last uploaded segment is freed in cfs_flush
+      if (job->de_seg->upload_buf.sem_list[SEM_EMPTY])
+        free_semaphores(&job->de_seg->upload_buf, SEM_EMPTY);
+      if (job->de_seg->upload_buf.sem_list[SEM_FULL])
+        free_semaphores(&job->de_seg->upload_buf, SEM_FULL);
+      //don't free DONE semaphore on last segment upload, is freed in cfsflush
+      if (job->de_seg->segment_part != job->de->segment_count - 1)
+        if (job->de_seg->upload_buf.sem_list[SEM_DONE])
+          free_semaphores(&job->de_seg->upload_buf, SEM_DONE);
       break;
+    }
   }
 
   if (!op_ok)
@@ -1791,49 +1791,56 @@ void internal_upload_segment_progressive(void* arg)
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                  0, 0, job->de, NULL);
     curl_slist_free_all(headers);
+
+    //detect manifest location where to search and delete previous versions
+    char* paths_list[2];
+    //for existing files
+    paths_list[0] = job->de->manifest_cloud;
+
+    //this is for new files without a previous manifest
+    char manifest_root[MAX_URL_SIZE];
+    snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
+             job->de->manifest_seg, job->de->name);
+    paths_list[1] = manifest_root;
+    int i;
+
     dir_entry* de_versions, *de_tmp;
-    char* manifest_root;
-    //detect manifest location where to search for previous versions
-    if (job->de->manifest_cloud)
+    for (i = 0; i < 2; i++)
     {
-      //if file already exists
-      manifest_root = job->de->manifest_cloud;
-    }
-    else
-    {
-      //this is for new files
-      char buff[MAX_URL_SIZE];
-      manifest_root = buff;
-      snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
-               job->de->manifest_seg, job->de->name);
+      debugf(DBG_LEVEL_EXT, "internal_upload_segment_prog: try del vers. in %s",
+             paths_list[i]);
+      if (paths_list[i])
+        if (cloudfs_list_directory(paths_list[i], &de_versions))
+        {
+          assert(job->de->segments);
+          //delete folder if first segment in cloud
+          //does not match new first uploaded segment
+          //+1 due to slash prefix
+          if (de_versions)
+            if (!strstr(job->de->segments->full_name, de_versions->full_name + 1))
+            {
+              dir_entry* tmp = init_dir_entry();
+              tmp->manifest_cloud = strdup(paths_list[i]);
+              tmp->full_name = strdup(paths_list[i]);
+              tmp->name = "";
+              tmp->isdir = 1;
+              cloudfs_delete_object(tmp);
+              free(tmp);
+            }
+            else
+              debugf(DBG_LEVEL_EXT, KMAG
+                     "not deleting just uploaded version %s",
+                     de_versions->full_name);
+        }
+        else
+          abort();
     }
 
-    debugf(DBG_LEVEL_EXT, KCYN "internal_upload: get file versions manif=%s",
-           manifest_root);
-    if (cloudfs_list_directory(manifest_root, &de_versions))
-    {
-      de_tmp = de_versions;
-      while (de_tmp)
-      {
-        //usually first entry is the just uploaded segment folder
-        //ensure is not deleted
-        if (de_tmp && job->de->manifest_time &&
-            strcasecmp(de_tmp->full_name + 1, job->de->manifest_time))
-          //+1 as manifest does not have starting slash "/"
-        {
-          //delete current folder/subfolders as there is a newer version available
-          cloudfs_delete_folder(de_tmp);
-        }
-        de_tmp = de_tmp->next;
-      }
-    }
-    else
-      abort();
-    if (de_versions)
-      cloudfs_free_dir_list(de_versions);
     //mark file meta as obsolete to force a reload (for md5sums mostly)
     job->de->metadata_downloaded = false;
-    //signal cfs_flush we're done
+    get_file_metadata(job->de);
+
+    //signal cfs_flush we're done uploading main file
     if (job->de_seg->upload_buf.sem_list[SEM_DONE])
       sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
   }
@@ -2391,6 +2398,8 @@ void get_file_metadata(dir_entry* de)
   {
     debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",
            de->full_name, de->size_on_cloud);
+    //clear existing segments cache
+    dir_decache_segments(de);
     //retrieve additional file metadata with a quick HEAD query
     int response = send_request("GET", NULL, NULL, NULL, NULL, de, NULL);
     debugf(DBG_LEVEL_EXT, KCYN "status: get_file_metadata(%s) hash=%s",
@@ -2526,9 +2535,9 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
               //       "List dir anode=[%s]", (const char*)anode->name);
             }
           }
-          debugf(DBG_LEVEL_EXT, KCYN
-                 "cloudfs_list_directory(%s): anode [%s]=[%s]", path,
-                 (const char*)anode->name, content);
+          //debugf(DBG_LEVEL_EXT, KCYN
+          //       "cloudfs_list_directory(%s): anode [%s]=[%s]", path,
+          //       (const char*)anode->name, content);
           if (!strcasecmp((const char*)anode->name, "name"))
           {
             de->name = strdup(content + prefix_length);
@@ -2653,58 +2662,63 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   return retval;
 }
 
+void thread_cloudfs_delete_object(dir_entry* de)
+{
+  cloudfs_delete_object(de);
+  pthread_exit(NULL);
+}
+
 /*
   remove folder and it's subfolders & files recursively
   todo: implement bulk delete:
-    https://docs.hpcloud.com/publiccloud/api/swift-api.html
+  https://docs.hpcloud.com/publiccloud/api/swift-api.html
 */
-int cloudfs_delete_folder(dir_entry* de)
-{
-  debugf(DBG_LEVEL_EXT, "cloudfs_delete_folder(%s)", de->full_name);
-  int response = -1;
-  dir_entry* de_content, *de_tmp;
-  char manifest_root[MAX_URL_SIZE] = "";
-  if (cloudfs_list_directory(de->full_name, &de_content))
-  {
-    de_tmp = de_content;
-    while (de_tmp)
-    {
-      if (de_tmp->isdir)
-        cloudfs_delete_folder(de_tmp);
-      else
-        response = send_request(HTTP_DELETE, NULL, NULL, NULL, NULL, de_tmp, NULL);
-      de_tmp = de_tmp->next;
-    }
-  }
-  //delete this folder. it might throw 404 errors, not sure why
-  response = send_request(HTTP_DELETE, NULL, NULL, NULL, NULL, de, NULL);
-  if (de_content)
-    cloudfs_free_dir_list(de_content);
-  debugf(DBG_LEVEL_EXT, "cloudfs_delete_folder(%s): exit response=%d",
-         de->full_name, response);
-}
-
 int cloudfs_delete_object(dir_entry* de)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_delete_object(%s)", de->name);
-  if (de->is_segmented)
+  debugf(DBG_LEVEL_EXT, "cloudfs_delete_object(%s): dir=%d seg=%d",
+         de->full_name, de->isdir, de->is_segmented);
+  if (de->is_segmented || de->isdir)
   {
-    dir_entry* de_content, *de_tmp;
-    if (cloudfs_list_directory(de->manifest_cloud, &de_content))
+    //delete object segments or subfolders
+    if (de->manifest_cloud || de->isdir)
     {
-      de_tmp = de_content;
-      while (de_tmp)
+      dir_entry* de_content;
+      char* prefix_path = de->isdir ? de->full_name : de->manifest_cloud;
+      if (cloudfs_list_directory(prefix_path, &de_content))
       {
-        if (de_tmp->isdir)
-          cloudfs_delete_folder(de_tmp);
-        else
-          cloudfs_delete_object(de_tmp);
-        de_tmp = de_tmp->next;
+        dir_entry* de_tmp;
+        pthread_t* threads = (pthread_t*)malloc(MAX_DELETE_THREADS * sizeof(
+            pthread_t));
+        int active_threads = 0;
+        int th_ret, i;
+        de_tmp = de_content;
+        while (de_tmp)
+        {
+          if (active_threads < MAX_DELETE_THREADS)
+          {
+            pthread_create(&threads[active_threads], NULL,
+                           (void*)thread_cloudfs_delete_object, de_tmp);
+            active_threads++;
+          }
+          //start threads if pool is full or this is the last object
+          if (active_threads == MAX_DELETE_THREADS || !de_tmp->next)
+            for (i = 0; i < active_threads; i++)
+            {
+              if ((th_ret = pthread_join(threads[i], NULL)) != 0)
+                debugf(DBG_LEVEL_NORM, KRED
+                       "cloudfs_delete_object(%s): Error wait thread %d, stat=%d",
+                       de->full_name, active_threads, th_ret);
+              else
+                active_threads = 0;
+            }
+          de_tmp = de_tmp->next;
+        }
       }
+      else
+        abort();
     }
-    else
-      abort();
   }
+  //delete main object
   int response = send_request(HTTP_DELETE, NULL, NULL, NULL, NULL, de, NULL);
   int ret = (response >= 200 && response < 300);
 
@@ -2720,6 +2734,69 @@ int cloudfs_delete_object(dir_entry* de)
     dir_decache(de->full_name);
   return ret;
 }
+
+
+
+/*
+  remove folder and it's subfolders & files recursively
+  todo: implement bulk delete:
+    https://docs.hpcloud.com/publiccloud/api/swift-api.html
+*/
+/*
+  int cloudfs_delete_folder(dir_entry* de)
+  {
+  debugf(DBG_LEVEL_EXT, "cloudfs_delete_folder(%s)", de->full_name);
+  int response = -1;
+  dir_entry* de_content, *de_tmp;
+  char manifest_root[MAX_URL_SIZE] = "";
+  int active_threads = 0;
+  if (cloudfs_list_directory(de->full_name, &de_content))
+  {
+    pthread_t* threads = (pthread_t*)malloc(MAX_DELETE_THREADS * sizeof(
+        pthread_t));
+    int active_threads = 0;
+    de_tmp = de_content;
+    int i = 0, th_ret;
+    while (de_tmp)
+    {
+      if (active_threads < MAX_DELETE_THREADS)
+      {
+        pthread_create(&threads[i], NULL,
+                       (void*)thread_cloudfs_delete_object, de_tmp);
+        active_threads++;
+      }
+      //start threads if pool is full or this is the last object
+      if (active_threads == MAX_DELETE_THREADS || !de_tmp->next)
+        for (i = 0; i < active_threads; i++)
+        {
+          if ((th_ret = pthread_join(threads[i], NULL)) != 0)
+            debugf(DBG_LEVEL_NORM, KRED
+                   "cloudfs_delete_folder(%s): Error waiting thread %d, stat=%d",
+                   de->full_name, i, th_ret);
+          else
+            active_threads = 0;
+        }
+      //cloudfs_delete_object(de_tmp);
+      //if (de_tmp->isdir)
+      //  cloudfs_delete_folder(de_tmp);
+      //  else
+      //  response = send_request(HTTP_DELETE, NULL, NULL, NULL, NULL, de_tmp, NULL);
+
+      de_tmp = de_tmp->next;
+      i++;
+    }
+    free(threads);
+  }
+  //delete this folder. it might throw 404 errors, not sure why
+  int ok = cloudfs_delete_object(de);
+  if (de_content)
+    cloudfs_free_dir_list(de_content);
+  debugf(DBG_LEVEL_EXT, "cloudfs_delete_folder(%s): exit ok=%d",
+         de->full_name, ok);
+  }
+
+*/
+
 
 //fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
 // https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/

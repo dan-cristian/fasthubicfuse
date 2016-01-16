@@ -17,6 +17,8 @@ typedef enum { false, true } bool;
 #define INT_CHAR_LEN 16
 #define MD5_DIGEST_HEXA_STRING_LEN  (2 * MD5_DIGEST_LENGTH + 1)
 #define MAX_SEGMENT_THREADS 5
+#define MAX_DELETE_THREADS 5
+
 #define APP_ID "FastHubicFuse_v0_1"
 
 // utimens support
@@ -85,6 +87,7 @@ typedef struct progressive_data_buf
   size_t size_processed;
   //bool upload_completed;
   //bool write_completed;
+  bool signaled_completion;
   bool file_is_in_cache;
   int ahead_thread_count;
   pthread_t thread;
@@ -205,6 +208,7 @@ dir_entry* check_parent_folder_for_file(const char* path);
 dir_entry* get_segment(dir_entry* de, int segment_index);
 void path_to_de(const char* path, dir_entry* de);
 dir_entry* get_create_segment(dir_entry* de, int segment_index);
+void dir_decache_segments(dir_entry* de);
 void dir_decache(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
