@@ -17,7 +17,8 @@ typedef enum { false, true } bool;
 #define INT_CHAR_LEN 16
 #define MD5_DIGEST_HEXA_STRING_LEN  (2 * MD5_DIGEST_LENGTH + 1)
 #define MAX_SEGMENT_THREADS 5
-#define MAX_DELETE_THREADS 5
+#define MAX_DELETE_THREADS 10
+#define MAX_COPY_THREADS 10
 
 #define APP_ID "FastHubicFuse_v0_1"
 
@@ -154,6 +155,15 @@ typedef struct thread_job
   bool is_single_thread;
 } thread_job;
 
+typedef struct thread_copy_job
+{
+  dir_entry* de_src;
+  char* dest;
+  char* manifest;
+  int result;
+  void* self_reference;
+} thread_copy_job;
+
 // linked list with cached folder names
 typedef struct dir_cache
 {
@@ -202,14 +212,18 @@ void dir_for(const char* path, char* dir);
 void debug_print_file_name(FILE* fp);
 void debug_list_cache_content();
 void update_dir_cache(const char* path, off_t size, int isdir, int islink);
+void update_dir_cache_upload(const char* path, off_t size, int isdir,
+                             int islink);
 dir_entry* path_info(const char* path);
 dir_entry* check_path_info(const char* path);
+dir_entry* check_path_info_upload(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
 dir_entry* get_segment(dir_entry* de, int segment_index);
 void path_to_de(const char* path, dir_entry* de);
 dir_entry* get_create_segment(dir_entry* de, int segment_index);
 void dir_decache_segments(dir_entry* de);
 void dir_decache(const char* path);
+void dir_decache_upload(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);

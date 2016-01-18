@@ -23,6 +23,7 @@
 
 extern char* temp_dir;
 extern pthread_mutex_t dcachemut;
+extern pthread_mutex_t dcacheuploadmut;
 extern pthread_mutexattr_t mutex_attr;
 extern pthread_mutexattr_t segment_mutex_attr;
 extern int debug;
@@ -386,37 +387,40 @@ static int cfs_create(const char* path, mode_t mode,
     info->fh = (uintptr_t)of;
   */
   info->fh = -1;
+
+  //create a copy in upload cache to record creation time meta fields
+  update_dir_cache_upload(path, 0, 0, 0);
+
+  //create also a copy in access cache to signal create OK
   update_dir_cache(path, 0, 0, 0);
+
   info->direct_io = 1;
-  dir_entry* de = check_path_info(path);
-  if (de)
-  {
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_create(%s): found in cache", path);
-    struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_create(%s) set utimes as now", path);
-    de->atime.tv_sec = now.tv_sec;
-    de->atime.tv_nsec = now.tv_nsec;
-    de->mtime.tv_sec = now.tv_sec;
-    de->mtime.tv_nsec = now.tv_nsec;
-    de->ctime.tv_sec = now.tv_sec;
-    de->ctime.tv_nsec = now.tv_nsec;
-    de->ctime_local.tv_sec = now.tv_sec;
-    de->ctime_local.tv_nsec = now.tv_nsec;
-    char time_str[TIME_CHARS] = "";
-    get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_create: atime=[%s]", time_str);
-    get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_create: mtime=[%s]", time_str);
-    get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_create: ctime=[%s]", time_str);
-    //set chmod & chown
-    de->chmod = mode;
-    de->uid = geteuid();
-    de->gid = getegid();
-  }
-  else
-    debugf(DBG_LEVEL_EXT, KBLU "cfs_create(%s) "KYEL"dir-entry not found", path);
+  dir_entry* de = check_path_info_upload(path);
+  assert(de);
+
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  debugf(DBG_LEVEL_EXT, KCYN"cfs_create(%s) set utimes as now", path);
+  de->atime.tv_sec = now.tv_sec;
+  de->atime.tv_nsec = now.tv_nsec;
+  de->mtime.tv_sec = now.tv_sec;
+  de->mtime.tv_nsec = now.tv_nsec;
+  de->ctime.tv_sec = now.tv_sec;
+  de->ctime.tv_nsec = now.tv_nsec;
+  de->ctime_local.tv_sec = now.tv_sec;
+  de->ctime_local.tv_nsec = now.tv_nsec;
+  char time_str[TIME_CHARS] = "";
+  get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
+  debugf(DBG_LEVEL_EXT, KCYN"cfs_create: atime=[%s]", time_str);
+  get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
+  debugf(DBG_LEVEL_EXT, KCYN"cfs_create: mtime=[%s]", time_str);
+  get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
+  debugf(DBG_LEVEL_EXT, KCYN"cfs_create: ctime=[%s]", time_str);
+  //set chmod & chown
+  de->chmod = mode;
+  de->uid = geteuid();
+  de->gid = getegid();
+
   debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_create(%s)=(%s) result=%d:%s", path,
          file_path_safe, errsv, strerror(errsv));
   return 0;
@@ -632,6 +636,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     while (result <= 0)
     {
       de_seg = get_segment(de, segment_part);
+      //if assertion fails probably segments are missing from cloud
       assert(de_seg);
       //offset in segment is different than full file offset
       offset_seg = offset - (segment_part * de->segment_size);
@@ -686,8 +691,9 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             result = pread(fno, buf, size, offset_seg);
             err = errno;
             if (offset % 100000 == 0)
-              debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s) fno=%d fp=%p part=%d res=%lu",
-                     de_seg->name, fno, fp_segment, segment_part, result);
+              debugf(DBG_LEVEL_EXT, KBLU
+                     "cfs_read(%s) fno=%d fp=%p part=%d off=%lu res=%lu",
+                     de_seg->name, fno, fp_segment, segment_part, offset_seg, result);
             close(fno);
             fclose(fp_segment);
             //download if segment ahead not in cache and no other download runs
@@ -836,7 +842,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   debug_print_descriptor(info);
   int errsv = 0;
   dir_entry* de = check_path_info(path);
-  assert(de);
+  dir_entry* de_upload = check_path_info_upload(path);
+
+  if (!de_upload)
+    assert(de);
   /*
     if (info->fh != -1)
     {
@@ -916,55 +925,70 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
 
   if (option_enable_progressive_upload)
   {
-    debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
-           path, de->size);
-    if (de->is_segmented)
+    if (de_upload)
     {
-      dir_entry* de_seg = get_segment(de, de->segment_count - 1);
-      assert(de_seg);
-      //will be blocked until http upload trully terminates
-      debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): seg_count=%d",
-             de->name, de->segment_count);
-      //unblock the last segment wait in http callback
-      if (de_seg->upload_buf.sem_list[SEM_FULL])
+      debugf(DBG_LEVEL_EXT, KMAG
+             "cfs_flush(%s): upload done, size=%lu", path, de_upload->size);
+      if (de_upload->is_segmented)
       {
-        debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): finishing upload operation",
-               de->name);
-        sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
-        //wait until upload and cleanup of previous versions fully completes
-        //otherwise errors will be thrown by rsync (due to early rename)
-        sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
-        //signal free of semaphores is safe now
-        free_semaphores(&de_seg->upload_buf, SEM_DONE);
-        //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
-        //free_semaphores(&de_seg->upload_buf, SEM_FULL);
-        de->metadata_downloaded = false;
-        //dir_decache(path);
-        //return 0;
+        dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
+        assert(de_seg);
+        //will be blocked until http upload trully terminates
+        debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): seg_count=%d",
+               de_upload->name, de_upload->segment_count);
+        //unblock the last segment wait in http callback
+        if (de_seg->upload_buf.sem_list[SEM_FULL])
+        {
+          debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): finishing upload operation",
+                 de->name);
+          sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+          //wait until upload and cleanup of previous versions fully completes
+          //otherwise errors will be thrown by rsync (due to early rename)
+          sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
+          //signal free of semaphores is safe now
+          free_semaphores(&de_seg->upload_buf, SEM_DONE);
+          //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
+          //free_semaphores(&de_seg->upload_buf, SEM_FULL);
+
+          //update cache (move from upload to access)
+          dir_decache_upload(de_upload->full_name);
+          //mark file meta as obsolete to force a reload (for md5sums mostly)
+          de->metadata_downloaded = false;
+          get_file_metadata(de);
+          //dir_decache(path);
+          //return 0;
+        }
+      }
+      else
+      {
+        //signal completion of read/write operation
+        //signal last data available in buffer for upload
+        if (de->upload_buf.sem_list[SEM_FULL])
+          sem_post(de->upload_buf.sem_list[SEM_FULL]);
+        //if (de->upload_buf.sem_list[SEM_EMPTY])
+        //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
       }
     }
-    else
+    else//not upload
     {
-      //signal completion of read/write operation
-      //signal last data available in buffer for upload
-      if (de->upload_buf.sem_list[SEM_FULL])
-        sem_post(de->upload_buf.sem_list[SEM_FULL]);
-      //if (de->upload_buf.sem_list[SEM_EMPTY])
-      //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+      debugf(DBG_LEVEL_EXT, KMAG
+             "cfs_flush(%s): non-upload done, size=%lu", path, de->size);
     }
     errsv = 0;
   }
-
-  //if segmented or progressive upload is already done by now, skip it
-  if (!de->is_segmented && !option_enable_progressive_upload)
+  else //not option_progressive
   {
-    if (/*file_changed_time(de) || */file_changed_md5(de))
+    //if segmented or progressive upload is already done by now, skip it
+    if (!de->is_segmented && !option_enable_progressive_upload)
     {
-      debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content changed", de->name);
-      cloudfs_upload_segment(de, de);
+      if (/*file_changed_time(de) || */file_changed_md5(de))
+      {
+        debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content changed", de->name);
+        cloudfs_upload_segment(de, de);
+      }
+      else
+        debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content not changed", de->name);
     }
-    else
-      debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content not changed", de->name);
   }
   debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
          strerror(errsv));
@@ -1035,12 +1059,12 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     debugf(DBG_LEVEL_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   int result, errsv;
-  dir_entry* de = check_path_info(path);
-  if (!de)
-  {
-    update_dir_cache(path, offset, 0, 0);
-    de = check_path_info(path);
-  }
+  dir_entry* de;// = check_path_info(path);
+  //if (!de)
+  //{
+  update_dir_cache_upload(path, offset, 0, 0);
+  de = check_path_info_upload(path);
+  //}
   assert(de);
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
@@ -1069,6 +1093,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   }
   else
   {
+
     dir_entry* de_seg;
     int seg_index = 0;
     int sem_val_full, sem_val_empty;
@@ -1141,7 +1166,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         bool op_ok = cloudfs_create_segment(de_seg, de);
         assert(op_ok);
       }
-
 
       if (de->is_segmented)
       {
@@ -1550,6 +1574,7 @@ int main(int argc, char** argv)
   pthread_mutexattr_init(&mutex_attr);
   pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(&dcachemut, &mutex_attr);
+  pthread_mutex_init(&dcacheuploadmut, &mutex_attr);
   pthread_mutexattr_init(&segment_mutex_attr);
   pthread_mutexattr_settype(&segment_mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
   return fuse_main(args.argc, args.argv, &cfs_oper, &options);

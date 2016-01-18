@@ -1576,6 +1576,7 @@ int update_segments(dir_entry* de)
   }
   while (seg_dir && seg_dir->isdir);
 
+  int seg_count = 0;
   if (seg_dir && !seg_dir->isdir)
   {
     //most reliable way to get true size is to add all segments
@@ -1586,10 +1587,15 @@ int update_segments(dir_entry* de)
       assert(!tmp_de->isdir);//folders are not welcomed
       total_size += tmp_de->size;
       tmp_de = tmp_de->next;
+      seg_count++;
     }
     de->size = total_size;
+
+    //if we only have one segment mark general file segment size as per conf file
+    //because it must be larger than actual segment size in the cloud
+    //to avoid crash in cfs_read
     if (de->segment_size == 0)
-      de->segment_size = seg_dir->size;
+      de->segment_size = seg_count == 1 ? segment_size : seg_dir->size;
     else
       assert(de->segment_size == seg_dir->size || de->size == seg_dir->size);
   }
@@ -1599,6 +1605,7 @@ int update_segments(dir_entry* de)
   de->segment_remaining = de->size % de->segment_size;
   de->segment_full_count = de->size / de->segment_size;
   de->segment_count = de->segment_full_count + (de->segment_remaining > 0);
+  assert(seg_count == de->segment_count);
   //save segments dir list into parent file entry
   //fixme: potentially unsafe as it get's overwritten and data is lost
   if (de)
@@ -1755,7 +1762,6 @@ void internal_upload_segment_progressive(void* arg)
     }
     else
     {
-      //last uploaded segment is freed in cfs_flush
       if (job->de_seg->upload_buf.sem_list[SEM_EMPTY])
         free_semaphores(&job->de_seg->upload_buf, SEM_EMPTY);
       if (job->de_seg->upload_buf.sem_list[SEM_FULL])
@@ -1778,9 +1784,10 @@ void internal_upload_segment_progressive(void* arg)
   }
 
   //if this is the last segment, upload the zero size parent file
+  //and remove older versions. move file from upload cache to access cache
   if (job->de_seg->segment_part == job->de->segment_count - 1)
   {
-    debugf(DBG_LEVEL_EXT,
+    debugf(DBG_LEVEL_EXT, KMAG
            "internal_upload_segment_prog(%s): creating 0 size parent, de_seg=%s",
            job->de->name, job->de_seg->full_name);
     curl_slist* headers = NULL;
@@ -1790,8 +1797,10 @@ void internal_upload_segment_progressive(void* arg)
     add_header(&headers, "Content-Type", filemimetype);
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                  0, 0, job->de, NULL);
+    //now file is updated on cloud
     curl_slist_free_all(headers);
 
+    //remove older versions
     //detect manifest location where to search and delete previous versions
     char* paths_list[2];
     //for existing files
@@ -1813,39 +1822,36 @@ void internal_upload_segment_progressive(void* arg)
         if (cloudfs_list_directory(paths_list[i], &de_versions))
         {
           assert(job->de->segments);
-          //delete folder if first segment in cloud
-          //does not match new first uploaded segment
-          //+1 due to slash prefix
-          if (de_versions)
+          while (de_versions)
+          {
+            debugf(DBG_LEVEL_EXT, "internal_upload_segment_prog: compare %s vs %s",
+                   job->de->segments->full_name, de_versions->full_name + 1);
             if (!strstr(job->de->segments->full_name, de_versions->full_name + 1))
             {
               dir_entry* tmp = init_dir_entry();
-              tmp->manifest_cloud = strdup(paths_list[i]);
-              tmp->full_name = strdup(paths_list[i]);
+              //tmp->manifest_cloud = strdup(paths_list[i]);
+              tmp->full_name = strdup(de_versions->full_name);
               tmp->name = "";
               tmp->isdir = 1;
               cloudfs_delete_object(tmp);
               free(tmp);
             }
             else
-              debugf(DBG_LEVEL_EXT, KMAG
-                     "not deleting just uploaded version %s",
+              debugf(DBG_LEVEL_EXT, KMAG "not deleting just uploaded version %s",
                      de_versions->full_name);
+            de_versions = de_versions->next;
+          }
         }
         else
           abort();
     }
 
-    //mark file meta as obsolete to force a reload (for md5sums mostly)
-    job->de->metadata_downloaded = false;
-    get_file_metadata(job->de);
-
-    //signal cfs_flush we're done uploading main file
+    //signal cfs_flush we're done uploading main file so it can exit
     if (job->de_seg->upload_buf.sem_list[SEM_DONE])
       sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
   }
   debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
-         (job->de ? job->de->name : "nil"));
+         job->de);
   free(job->self_reference);
   pthread_exit(NULL);
 }
@@ -2393,7 +2399,6 @@ int cloudfs_object_truncate(dir_entry* de, off_t size)
 //todo: not thread-safe?
 void get_file_metadata(dir_entry* de)
 {
-
   if (option_get_extended_metadata)
   {
     debugf(DBG_LEVEL_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",
@@ -2700,7 +2705,7 @@ int cloudfs_delete_object(dir_entry* de)
                            (void*)thread_cloudfs_delete_object, de_tmp);
             active_threads++;
           }
-          //start threads if pool is full or this is the last object
+          //wait for threads if pool is full or this is the last object
           if (active_threads == MAX_DELETE_THREADS || !de_tmp->next)
             for (i = 0; i < active_threads; i++)
             {
@@ -2713,6 +2718,7 @@ int cloudfs_delete_object(dir_entry* de)
             }
           de_tmp = de_tmp->next;
         }
+        free(threads);
       }
       else
         abort();
@@ -2798,26 +2804,60 @@ int cloudfs_delete_object(dir_entry* de)
 */
 
 
-//fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
-// https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/
-// this operation also causes an HTTP 400 error if X-Object-Meta-FilePath value is larger than 256 chars
-int cloudfs_copy_object(dir_entry* de, const char* dst)
+void thread_cloudfs_copy_object(void* arg)
 {
-  debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s, %s)", de->name, dst);
-  char* dst_encoded = curl_escape(dst, 0);
+  struct thread_copy_job* job = arg;
+  dir_entry* de = job->de_src;
+  char* dst_encoded = curl_escape(job->dest, 0);
   char* src_encoded = curl_escape(de->full_name, 0);
-
-  dir_entry* de_versions, *de_tmp;
-  dir_entry* new_de = NULL;
   //convert encoded string (slashes are encoded as well) to encoded string with slashes
   decode_path(src_encoded);
 
+  curl_slist* headers = NULL;
+  //copy file (or manifest) as destination
+  if (de->is_segmented)
+  {
+    //this is the manifest file so add the manifest field
+    add_header(&headers, HEADER_TEXT_MANIFEST, job->manifest);
+  }
+  add_header(&headers, "X-Copy-From", src_encoded);
+  add_header(&headers, "Content-Length", "0");
+  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, NULL,
+                              NULL);
+  int op_ok = (response >= 200 && response < 300);
+
+  curl_free(dst_encoded);
+  curl_free(src_encoded);
+  curl_slist_free_all(headers);
+  free(job->dest);
+  free(job->manifest);
+  free(job->self_reference);
+  debugf(DBG_LEVEL_EXT, "exit: cloudfs_copy_object(%s) response=%d", de->name,
+         response);
+  job->result = op_ok;
+  pthread_exit(NULL);
+}
+
+//fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
+// https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/
+// this operation also causes an HTTP 400 error if X-Object-Meta-FilePath value is larger than 256 chars
+bool cloudfs_copy_object(dir_entry* de, const char* dst)
+{
+  debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s, %s)", de->name, dst);
+  dir_entry* de_versions, *de_tmp;
+  dir_entry* new_de = NULL;
+
+  int result = true;
+  int active_threads = 0;
+  pthread_t* threads = (pthread_t*)malloc(MAX_COPY_THREADS * sizeof(
+      pthread_t));
   if (de->is_segmented)
   {
     //copy segments with destination prefix
     assert(de->manifest_cloud);
     if (cloudfs_list_directory(de->manifest_cloud, &de_versions))
     {
+      int th_ret, i;
       new_de = init_dir_entry();
       path_to_de(dst, new_de);//get manifest root
       char seg_path[MAX_URL_SIZE] = "";
@@ -2827,50 +2867,69 @@ int cloudfs_copy_object(dir_entry* de, const char* dst)
         //format segment full path
         snprintf(seg_path, MAX_URL_SIZE, "/%s/%08i", new_de->manifest_time,
                  de_tmp->segment_part);
-        if (cloudfs_copy_object(de_tmp, seg_path))
-          de_tmp = de_tmp->next;
-        else
-          abort();
+
+        if (active_threads < MAX_COPY_THREADS)
+        {
+          struct thread_copy_job* job = malloc(sizeof(struct thread_copy_job));
+          job->dest = strdup(seg_path);
+          job->de_src = de_tmp;
+          job->manifest = strdup(new_de->manifest_time);
+          job->self_reference = job;
+          pthread_create(&threads[active_threads], NULL,
+                         (void*)thread_cloudfs_copy_object, job);
+          active_threads++;
+        }
+        //wait for threads if pool is full or this is the last object
+        if (active_threads == MAX_COPY_THREADS || !de_tmp->next)
+          for (i = 0; i < active_threads; i++)
+          {
+            if ((th_ret = pthread_join(threads[i], NULL)) != 0)
+            {
+              debugf(DBG_LEVEL_NORM, KRED
+                     "cloudfs_copy_object(%s): Error wait thread %d, stat=%d",
+                     de->full_name, active_threads, th_ret);
+              result = -1;
+              break;
+            }
+            else
+              active_threads = 0;
+          }
+
+        //if (cloudfs_copy_object(de_tmp, seg_path))
+        de_tmp = de_tmp->next;
+        //else
+        //abort();
       }
+
     }
     else
       abort();
 
-  }
-
-  //copy source file (or manifest) as destination
-  curl_slist* headers = NULL;
-  if (de->is_segmented)
-  {
-    add_header(&headers, HEADER_TEXT_MANIFEST, new_de->manifest_time);
-    cloudfs_free_dir_list(new_de);
-  }
-  add_header(&headers, "X-Copy-From", src_encoded);
-  add_header(&headers, "Content-Length", "0");
-  //pass src metadata so that PUT will set time attributes of the src file
-  int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, NULL,
-                              NULL);
-  int op_ok = (response >= 200 && response < 300);
-
-  curl_free(dst_encoded);
-  curl_free(src_encoded);
-  curl_slist_free_all(headers);
-
-  if (de->is_segmented)
-  {
-    if (op_ok)
+    if (result)
     {
-      //safe to delete segments from source manifest root
-      de_tmp = de_versions;
-      while (de_tmp)
+      struct thread_copy_job* job = malloc(sizeof(struct thread_copy_job));
+      job->dest = strdup(dst);
+      job->de_src = de;
+      job->manifest = strdup(new_de->manifest_time);
+      job->self_reference = job;
+      pthread_create(&threads[active_threads], NULL,
+                     (void*)thread_cloudfs_copy_object, job);
+      if (pthread_join(threads[active_threads], NULL) != 0)
+        result = -1;
+      else
       {
-        if (cloudfs_delete_object(de_tmp))
-          de_tmp = de_tmp->next;
-        else
-          abort();
+        //safe to delete segments from source manifest root
+        de_tmp = de_versions;
+        while (de_tmp)
+        {
+          if (cloudfs_delete_object(de_tmp))
+            de_tmp = de_tmp->next;
+          else
+            abort();
+        }
+        //delete older segments from destination manifest root
+        //todo
       }
-      //delete older segments from destination manifest root
-      //todo
     }
     else
     {
@@ -2878,11 +2937,16 @@ int cloudfs_copy_object(dir_entry* de, const char* dst)
       ;
     }
   }
-  debugf(DBG_LEVEL_EXT, "exit: cloudfs_copy_object(%s,%s) response=%d", de->name,
-         dst,
-         response);
-  return op_ok;
+  else
+    abort();
+
+  cloudfs_free_dir_list(new_de);
+  free(threads);
+  debugf(DBG_LEVEL_EXT, "cloudfs_copy_object(%s, %s): exit res=%d",
+         de->name, dst, result);
+  return result;
 }
+
 
 int cloudfs_post_object(dir_entry* de)
 {

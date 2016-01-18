@@ -11,12 +11,14 @@ TMP=/media/temp/hubic_test_tmp
 BUILD_FILE=newbuild
 SRC_FILE=newsrc
 SMALL=small.txt
+MEDIUM=medium.txt
 LARGE=large.avi
 TINY=tiny.txt
 HUGE=huge.mkv
 TINY_MD5=41ec28b253670dcc01601014317bece0
 LARGE_MD5=701603c35a8b3af176dc687e17e7b44e
 SMALL_MD5=70a4b9f4707d258f559f91615297a3ec
+MEDIUM_MD5=71a376228c6057f5ca318797dd2dca3c
 HUGE_MD5=8d5baa851762166d2e279dceec3b9024
 COPY_CMD=cp
 #COPY_CMD=rsync -ah --progress
@@ -117,12 +119,16 @@ function setup_config_standard(){
 	cat ~/.hubicfuse.secret >> $HUBIC_CFG
 }
 
+function delete_fuse_cache(){
+	echo "Deleting fuse cache in $HUBIC_TMP"
+	rm -Rf $HUBIC_TMP/*
+}
+
 function setup_test(){
 	echo
 	echo Cleaning folders...
-	rm -Rf $HUBIC_TMP/*
 	rm -Rf $TMP/*
-	
+	delete_fuse_cache
 	rm -Rf $HUB/*
 	rmdir $HUB
 
@@ -145,6 +151,7 @@ function test_upload_small(){
 	echo "Testing copy operations, upload"
 	if test "upload non-segmented file" "$COPY_CMD $SRC/$TINY $HUB/"; then return; fi
 	if test "upload non-segmented file" "$COPY_CMD $SRC/$SMALL $HUB/"; then return; fi
+	if test "upload segmented file" "$COPY_CMD $SRC/$MEDIUM $HUB/"; then return; fi
 	echo Test completed!
 	echo ---------------
 }
@@ -159,6 +166,8 @@ function test_download_small(){
 	if check_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi
 	if test "download small file" "$COPY_CMD $HUB/$SMALL $TMP/"; then return; fi
 	if check_md5 "$TMP/$SMALL" "$SMALL_MD5"; then return; fi
+	if test "download medium file" "$COPY_CMD $HUB/$MEDIUM $TMP/"; then return; fi
+	if check_md5 "$TMP/$MEDIUM" "$MEDIUM_MD5"; then return; fi
 	echo Test completed!
 	echo ---------------
 }
@@ -197,12 +206,23 @@ function test_chown(){
 }
 
 
-function test_rename(){
-	echo "Testing rename..."
+function test_rename_small(){
+	echo "Testing rename small files..."
+	
 	if test "rename tiny file" "mv $HUB/$TINY $HUB/renamed$TINY"; then return 0; fi
 	if test_not "old file must not exist" "stat $HUB/$TINY"; then return 0; fi
 	if test "new file must exist" "stat $HUB/renamed$TINY"; then return 0; fi
 	if test "rename tiny file back" "mv $HUB/renamed$TINY $HUB/$TINY"; then return 0; fi
+	
+	echo "Testing rename small segmented file..."
+	if test "rename medium file" "mv $HUB/$MEDIUM $HUB/renamed$MEDIUM"; then return 0; fi
+	if test_not "old file must not exist" "stat $HUB/$MEDIUM"; then return 0; fi
+	if test "new file must exist" "stat $HUB/renamed$MEDIUM"; then return 0; fi
+	if test "rename medium file back" "mv $HUB/renamed$MEDIUM $HUB/$MEDIUM"; then return 0; fi
+	delete_fuse_cache
+	if test "download medium file" "$COPY_CMD $HUB/$MEDIUM $TMP/"; then return 0; fi
+	if check_md5 "$TMP/$MEDIUM" "$MEDIUM_MD5"; then return 0; fi
+	
 	echo Test completed!
 	echo ---------------
 	return 1
@@ -251,12 +271,18 @@ while true; do
 		echo New build detected!
 		sleep 5
 		setup_test
+		
+		test_upload_small
+		test_create
+		
+		
+		if test_rename_small; then exit; fi
+		
 		test_upload_large
 		if test_rename_large; then exit; fi
 		
 		test_upload_small
-		test_create
-		if test_rename; then exit; fi
+		
 		if test_chmod; then exit; fi
 		if test_chown; then exit; fi
 		test_upload_small
