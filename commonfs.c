@@ -204,6 +204,48 @@ int file_md5(FILE* file_handle, char* md5_file_str)
 }
 
 /*
+  init md5 context before starting
+  to calculate md5sum on a http job (upload or download)
+*/
+bool init_job_md5(thread_job* job)
+{
+  job->md5str = NULL;
+  return (MD5_Init(&job->mdContext) == 1);
+}
+
+bool update_job_md5(thread_job* job, const unsigned char* data_buf,
+                    int buf_len)
+{
+  return (MD5_Update(&job->mdContext, data_buf, buf_len) == 1);
+}
+
+bool complete_job_md5(thread_job* job)
+{
+  int result = 0;
+  unsigned char c[MD5_DIGEST_LENGTH];
+  result = MD5_Final(c, &job->mdContext);
+  if (result == 1)
+  {
+    char md5_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
+    int i;
+    char mdchar[3];//2 chars for md5 + null string terminator
+    for (i = 0; i < MD5_DIGEST_LENGTH; i++)
+    {
+      snprintf(mdchar, 3, "%02x", c[i]);
+      strcat(md5_str, mdchar);
+    }
+    job->md5str = strdup(md5_str);
+  }
+  else abort();
+  return result;
+}
+
+void free_thread_job(thread_job* job)
+{
+  free(job->md5str);
+  free(job->self_reference);
+}
+/*
   determines if local cache content equals cloud content
 */
 bool file_changed_md5(dir_entry* de)
@@ -1188,7 +1230,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
 */
 dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
 {
-  debugf(DBG_LEVEL_EXT, "check_path_info(%s): upload=%d", path,
+  debugf(DBG_LEVEL_EXTALL, "check_path_info(%s): upload=%d", path,
          check_upload_cache);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
@@ -1196,13 +1238,13 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
   //get parent folder cache entry
   if (!check_upload_cache && !check_caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXT, "exit 0: check_path_info(%s) " KYEL "[CACHE-MISS]",
+    debugf(DBG_LEVEL_EXTALL, "exit 0: check_path_info(%s) " KYEL "[CACHE-MISS]",
            path);
     return NULL;
   }
   if (check_upload_cache && !check_caching_list_dir_upload(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXT, "exit 0: check_path_info(%s) " KYEL
+    debugf(DBG_LEVEL_EXTALL, "exit 0: check_path_info(%s) " KYEL
            "[CACHE-MISS-UPLOAD]", path);
     return NULL;
   }
@@ -1210,16 +1252,16 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_LEVEL_EXT, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]",
+      debugf(DBG_LEVEL_EXTALL, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]",
              path);
       return tmp;
     }
   }
   if (!strcmp(path, "/"))
-    debugf(DBG_LEVEL_EXT,
+    debugf(DBG_LEVEL_EXTALL,
            "exit 2: check_path_info(%s) "KYEL"ignoring root [CACHE-MISS]", path);
   else
-    debugf(DBG_LEVEL_EXT, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]",
+    debugf(DBG_LEVEL_EXTALL, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]",
            path);
   return NULL;
 }

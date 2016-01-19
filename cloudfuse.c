@@ -1112,7 +1112,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         free(de->manifest_time);
         de->manifest_time = NULL;
       }
-
+      //get existing segment or create a new one if not exists
       de_seg = get_create_segment(de, seg_index);
       assert(get_segment(de, seg_index));
       assert(de->manifest_seg);
@@ -1136,6 +1136,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         {
           sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
           prev_seg->upload_buf.signaled_completion = true;
+          debugf(DBG_LEVEL_EXT, KMAG
+                 "cfs_write(%s): signal prev segment %s complete", path, prev_seg->name);
         }
       }
     }
@@ -1145,6 +1147,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       de->upload_buf.readptr = buf;
       de->upload_buf.work_buf_size = length;
     }
+    //keep increase the segment size as we get more data
     de->size = offset + length;
     size_t last_work_buf_size  = de_seg->upload_buf.work_buf_size;
     int loops = 0;
@@ -1161,7 +1164,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           (de_seg->upload_buf.size_processed == 0
            || de_seg->upload_buf.size_processed == de_seg->size))
       {
-        //de->is_segmented = true; //set when offset=0
         assert(de->manifest_seg);
         bool op_ok = cloudfs_create_segment(de_seg, de);
         assert(op_ok);

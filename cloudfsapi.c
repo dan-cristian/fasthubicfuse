@@ -215,6 +215,79 @@ static void header_set_time_from_str(char* time_str,
 }
 
 /*
+  get segment metadata from HTTP response headers (usually after put to check md5)
+*/
+static size_t header_get_segment_meta(void* ptr, size_t size, size_t nmemb,
+                                      void* userdata)
+{
+  size_t memsize = size * nmemb;
+  char* header = (char*)alloca(memsize + 1);
+  char* head = (char*)alloca(memsize + 1);
+  char* value = (char*)alloca(memsize + 1);
+  memcpy(header, (char*)ptr, memsize);
+  header[memsize] = '\0';
+  static char storage[MAX_HEADER_SIZE];
+  if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
+  {
+    //sometimes etag is formated on hubic with "" (for segmented files?), check inconsistency!
+    char* quote_lptr = strchr(value, '"');
+    char* quote_rptr = strrchr(value, '"');
+    if (quote_lptr || quote_rptr)
+    {
+      debugf(DBG_LEVEL_NORM, "header_get_segment_meta: " KRED
+             "header value incorrectly formated on cloud, head=[%s], value=[%s]",
+             head, value);
+
+      if (quote_lptr && quote_rptr)
+      {
+        debugf(DBG_LEVEL_NORM, "header_get_segment_meta: " KYEL
+               "fixing by stripping quotes, value=[%s]", value);
+        removeSubstr(value, "\"");
+        debugf(DBG_LEVEL_NORM, "header_get_segment_meta: " KGRN
+               "fixed value=[%s]", value);
+      }
+      else
+        debugf(DBG_LEVEL_NORM, "header_get_segment_meta: " KRED
+               "unable to fix value=[%s]", value);
+    }
+    strncpy(storage, head, sizeof(storage));
+    debugf(DBG_LEVEL_EXTALL, "header_get_segment_meta: " KCYN
+           "head=[%s] val=[%s]", head, value);
+    dir_entry* de = (dir_entry*)userdata;
+
+    if (de != NULL)
+    {
+      if (!strncasecmp(head, HEADER_TEXT_MD5HASH, memsize))
+      {
+        if (de->md5sum == NULL)
+        {
+          de->md5sum = strdup(value);
+          debugf(DBG_LEVEL_EXT, "header_get_segment_meta: set md5sum=%s",
+                 de->md5sum);
+        }
+        else if (strcasecmp(de->md5sum, value))
+        {
+          //todo: hash is different, usually on large segmented files
+          debugf(DBG_LEVEL_NORM, "header_get_segment_meta: " KYEL
+                 "unexpected md5sum , cache=%s cloud=%s",
+                 de->md5sum, value);
+          //fixme: sometimes etag on hubic is incorrect,
+          //noticed on segmented files or newly uploaded files (rigth after PUT)
+          free(de->md5sum);
+          de->md5sum = strdup(value);//this is ok for PUT
+        }
+      }
+    }
+    else abort();
+  }
+  else
+  {
+    //debugf(DBG_LEVEL_NORM, "Received unexpected header line");
+  }
+  return memsize;
+}
+
+/*
    get file metadata from HTTP response headers
 */
 static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
@@ -646,34 +719,6 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   size_t max_size_to_upload;
   int sem_val_empty, sem_val_full;
 
-  /*if (upload_buf->offset == 0 && upload_buf->work_buf_size != 0)
-    {
-      //opening semaphores might not be needed - same process?
-      if ((de->upload_buf.isempty_semaphore = sem_open(
-        de->upload_buf.isempty_semaphore_name, O_CREAT, 0644, 0)) == SEM_FAILED)
-      {
-      int errsv = errno;
-      debugf(DBG_LEVEL_NORM,
-             KRED"progressive_read_callback: cannot open isempty_semaphore, err=%s",
-             strerror(errsv));
-      }
-      else
-      debugf(DBG_LEVEL_EXTALL,
-             "progressive_read_callback: isempty_semaphore opened");
-      if ((de->upload_buf.isfull_semaphore = sem_open(
-        de->upload_buf.isfull_semaphore_name, O_CREAT, 0644, 0)) == SEM_FAILED)
-      {
-      int errsv = errno;
-      debugf(DBG_LEVEL_NORM,
-             KRED"progressive_read_callback: cannot open isfull_semaphore, err=%s",
-             strerror(errsv));
-      }
-      else
-      debugf(DBG_LEVEL_EXTALL, "progressive_read_callback: isfull_semaphore opened");
-
-    }
-  */
-
   debugf(DBG_LEVEL_EXT,
          "progressive_upload_callback(%s): processing size_proc=%lu",
          de->name, upload_buf->size_processed);
@@ -693,6 +738,7 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
     //todo: check if this mem copy can be optimised
     //http://sourceforge.net/p/fuse/mailman/message/29119987/
     memcpy(ptr, upload_buf->readptr, max_size_to_upload);
+    assert(update_job_md5(de->job, upload_buf->readptr, max_size_to_upload));
     upload_buf->readptr += max_size_to_upload;
     upload_buf->work_buf_size -= max_size_to_upload;
     upload_buf->size_processed += max_size_to_upload;
@@ -713,11 +759,6 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   if (de->upload_buf.sem_list[SEM_EMPTY])
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
 
-  //fixme: get's stuck here as it pased lock in cfs_write
-  //pthread_mutex_lock(&de->upload_buf.mutex);
-  //free both
-  //pthread_mutex_unlock(&de->upload_buf.mutex);
-
   return 0;
 }
 
@@ -735,7 +776,6 @@ static int send_request_size(const char* method, const char* encoded_path,
          (de ? de->name : "nil"), (de_seg ? de_seg->name : "nil"));
   char url[MAX_URL_SIZE];
   char header_data[MAX_HEADER_SIZE];
-
 
   char* slash;
   long response = -1;
@@ -775,7 +815,6 @@ static int send_request_size(const char* method, const char* encoded_path,
     path++;
 
   snprintf(url, sizeof(url), "%s/%s", storage_url, path);
-  //snprintf(orig_path, sizeof(orig_path), "/%s", path);
   // retry on HTTP failures
   for (tries = 0; tries < REQUEST_RETRIES; tries++)
   {
@@ -787,22 +826,26 @@ static int send_request_size(const char* method, const char* encoded_path,
     if (rhel5_mode)
       curl_easy_setopt(curl, CURLOPT_CAINFO, RHEL5_CERTIFICATE_FILE);
     curl_slist* headers = NULL;
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_HEADER, 0);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
+    assert(curl_easy_setopt(curl, CURLOPT_URL, url) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_HEADER, 0) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1) == CURLE_OK);
     //reversed logic, 0 to enable progress
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS,
-                     option_curl_progress_state ? 0 : 1);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, option_curl_verbose ? 1 : 0);
+    assert(curl_easy_setopt(curl, CURLOPT_NOPROGRESS,
+                            option_curl_progress_state ? 0 : 1) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER,
+                            verify_ssl ? 1 : 0) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_VERBOSE,
+                            option_curl_verbose ? 1 : 0) == CURLE_OK);
+    //disable sigpipe errors, http://curl.haxx.se/mail/lib-2013-03/0123.html
+    //assert(curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK);
     //if previous error was 0 (usually on SSL timeouts), try a fresh connect
     if (response == 0)
-      curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1);
+      assert(curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1) == CURLE_OK);
     else
-      curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 0);
+      assert(curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 0) == CURLE_OK);
     add_header(&headers, "X-Auth-Token", storage_token);
 
     // add headers to save utimens attribs only on upload
@@ -828,16 +871,17 @@ static int send_request_size(const char* method, const char* encoded_path,
 
     if (!strcasecmp(method, "MKDIR"))
     {
-      curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
-      curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
+      assert(curl_easy_setopt(curl, CURLOPT_UPLOAD, 1) == CURLE_OK);
+      assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0) == CURLE_OK);
       add_header(&headers, "Content-Type", "application/directory");
     }
     else if (!strcasecmp(method, HTTP_POST))
     {
       debugf(DBG_LEVEL_EXT, "send_request_size: POST (%s)", orig_path);
-      curl_easy_setopt(curl, CURLOPT_POST, 1L);
-      curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
-      curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS, 10000L);
+      assert(curl_easy_setopt(curl, CURLOPT_POST, 1L) == CURLE_OK);
+      assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0) == CURLE_OK);
+      assert(curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS,
+                              10000L) == CURLE_OK);
 
       //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
       //add_header(&headers, "Transfer-Encoding", "chunked");
@@ -846,9 +890,9 @@ static int send_request_size(const char* method, const char* encoded_path,
     else if (!strcasecmp(method, "MKLINK") && fp)
     {
       rewind(fp);
-      curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
-      curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size);
-      curl_easy_setopt(curl, CURLOPT_READDATA, fp);
+      assert(curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L) == CURLE_OK);
+      assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, file_size) == CURLE_OK);
+      assert(curl_easy_setopt(curl, CURLOPT_READDATA, fp) == CURLE_OK);
       add_header(&headers, "Content-Type", "application/link");
     }
     else if (!strcasecmp(method, HTTP_PUT))
@@ -865,30 +909,37 @@ static int send_request_size(const char* method, const char* encoded_path,
         assert(de);
         if (de->is_segmented)
           assert(de_seg);
-        curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
+        assert(curl_easy_setopt(curl, CURLOPT_UPLOAD, 1) == CURLE_OK);
         debugf(DBG_LEVEL_EXT, "send_request_size: progressive PUT (%s)", orig_path);
-        curl_easy_setopt(curl, CURLOPT_READFUNCTION, progressive_upload_callback);
-        curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de_seg);
+        assert(curl_easy_setopt(curl, CURLOPT_READFUNCTION,
+                                progressive_upload_callback) == CURLE_OK);
+        assert(curl_easy_setopt(curl, CURLOPT_READDATA, (void*)de_seg) == CURLE_OK);
+
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)de_seg);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_segment_meta);
+
       }
       else//not progressive
       {
-        curl_easy_setopt(curl, CURLOPT_UPLOAD, 1); //1=upload
+        curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
         if (fp)
         {
-          curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, file_size);
+          assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
+                                  file_size) == CURLE_OK);
           debugf(DBG_LEVEL_EXT, "send_request_size: standard PUT (%s)",
                  orig_path);
-          curl_easy_setopt(curl, CURLOPT_READDATA, fp);//actually infoseg
-          curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
-          //don't add header parsing on PUT as etag is incorrect
+          assert(curl_easy_setopt(curl, CURLOPT_READDATA,
+                                  fp) == CURLE_OK); //actually infoseg
+          assert(curl_easy_setopt(curl, CURLOPT_READFUNCTION,
+                                  read_callback) == CURLE_OK);
+          //don't add header parsing on PUT as etag is incorrect?
           //better run a head (get_meta) right after PUT
         }
         else//no fp
         {
-          debugf(DBG_LEVEL_EXT,
-                 "send_request_size: 0 content PUT, for updating meta (%s)",
+          debugf(DBG_LEVEL_EXT, "send_request_size: 0 size PUT, update meta (%s)",
                  orig_path);
-          curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0);
+          assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0) == CURLE_OK);
         }
       }
       if (is_segment)
@@ -896,13 +947,14 @@ static int send_request_size(const char* method, const char* encoded_path,
         //fixme: progressive upload not working if file is segmented. conflict on read_callback?
         debugf(DBG_LEVEL_EXT, "send_request_size(%s): PUT is segmented, "
                KYEL "readcallback used", orig_path);
-        curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+        assert(curl_easy_setopt(curl, CURLOPT_READFUNCTION,
+                                read_callback) == CURLE_OK);
       }
       //get the response for debug purposes.
-      //fixme: carefull as conflicts with progressive download (GET)
       //send all data to this function
-      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc_callback);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
+      assert(curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+                              writefunc_callback) == CURLE_OK);
+      assert(curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk) == CURLE_OK);
     }
     else if (!strcasecmp(method, HTTP_GET))
     {
@@ -945,23 +997,14 @@ static int send_request_size(const char* method, const char* encoded_path,
                            option_min_speed_limit_progressive);
           curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, option_min_speed_timeout);
         }
-        //assume we need to append to an existing file
+        //assume we need to append to an existing file (download interrupted)
         if (info->size_processed > 0)
         {
           curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, info->size_processed);
           debugf(DBG_LEVEL_EXT, "send_request_size(%s): "
                  KYEL " resuming from %lu", orig_path, info->size_processed);
-          //abort();
         }
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
-        //de is null on segments
-
-        /**/
-        /*
-          //download directly to file
-          curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
-          curl_easy_setopt(curl, CURLOPT_WRITEDATA, info->fp);
-        */
       }
       else if (xmlctx)
       {
@@ -1016,6 +1059,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     debugf(DBG_LEVEL_EXTALL, "status: send_request_size(%s) started HTTP(%s)",
            orig_path, url);
+
     curl_easy_perform(curl);
 
     char* effective_url;
@@ -1033,37 +1077,40 @@ static int send_request_size(const char* method, const char* encoded_path,
 
     if (response != 404 && (response >= 400 || response < 200))
     {
-      /*
-         Now, our chunk.memory points to a memory block that is chunk.size
-         bytes big and contains the remote file.
-      */
+      //Now, our chunk.memory points to a memory block that is chunk.size
+      //bytes big and contains the remote file.
       debugf(DBG_LEVEL_NORM, KRED
              "send_request_size: error, resp=%d , size=%lu, [HTTP %d] (%s)(%s)",
              response, (long)chunk.size, response, method, print_path);
       debugf(DBG_LEVEL_NORM, KRED"send_request_size: error message=[%s]",
              chunk.memory);
     }
+    free(chunk.memory);
 
-    //detect if download was incomplete
+    //detect if download was incomplete/interrupted
     if (is_download && info
         && info->size_copy > 0  && info->size_copy != info->size_processed
         && (de && info->size_processed != de->size)
         && (de_seg && info->size_processed != de_seg->size))
     {
       debugf(DBG_LEVEL_NORM, KRED
-             "send_request_size: download interrupted, expect size=%lu but got size=%.0f",
+             "send_request_size: download interrupted, expect size=%lu got size=%.0f",
              info->size_copy, size_downloaded);
       response = 417;//too slow, signal error and hope for faster download
     }
-    free(chunk.memory);
+
+    if (is_upload)
+    {
+      //
+    }
 
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE")
         && response == 409))
     {
       debugf(DBG_LEVEL_NORM,
              "exit 0: send_request_size(%s) speed=%.1f sec res=%d dwn=%.0f upld=%.0f"
-             KCYN "(%s) "KGRN"[HTTP OK]", print_path, total_time, response, size_downloaded,
-             size_uploaded, method);
+             KCYN "(%s) " KGRN "[HTTP OK]", print_path, total_time, response,
+             size_downloaded, size_uploaded, method);
       break;
     }
     if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
@@ -1739,12 +1786,14 @@ void internal_upload_segment_progressive(void* arg)
   int response;
   int i;
   bool op_ok = false;
-  for (i = 0; i < 2; i++)
+  //multiple attempts, one to create root storage, rest for md5sum failures
+  for (i = 0; i < 1 + REQUEST_RETRIES; i++)
   {
+    assert(init_job_md5(job));
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL,
                                  1, 0, job->de, job->de_seg);
     op_ok = valid_http_response(response);
-    //if error, decrement
+    //if error, decrement, might be because there is no parent storage created
     if (!op_ok)
     {
       if (job->de_seg->segment_part == 0 && response == 404)
@@ -1762,17 +1811,36 @@ void internal_upload_segment_progressive(void* arg)
     }
     else
     {
-      if (job->de_seg->upload_buf.sem_list[SEM_EMPTY])
-        free_semaphores(&job->de_seg->upload_buf, SEM_EMPTY);
-      if (job->de_seg->upload_buf.sem_list[SEM_FULL])
-        free_semaphores(&job->de_seg->upload_buf, SEM_FULL);
-      //don't free DONE semaphore on last segment upload, is freed in cfsflush
-      if (job->de_seg->segment_part != job->de->segment_count - 1)
-        if (job->de_seg->upload_buf.sem_list[SEM_DONE])
-          free_semaphores(&job->de_seg->upload_buf, SEM_DONE);
-      break;
+      assert(complete_job_md5(job));
+      assert(job->md5str);
+      assert(job->de_seg->md5sum);
+      //check if md5 computed locally matches cloud md5
+      if (!strcasecmp(job->de_seg->md5sum, job->md5str))
+      {
+        debugf(DBG_LEVEL_EXT, KMAG
+               "internal_upload_segment_prog(%s): md5sum OK de_seg=%s",
+               job->de->name, job->de_seg->full_name);
+        break;
+      }
+      else
+      {
+        debugf(DBG_LEVEL_EXT, KRED
+               "internal_upload_segment_prog(%s): md5sum NOT OK de_seg=%s",
+               job->de->name, job->de_seg->name);
+        //todo: some cleanup needed?
+        abort();
+      }
     }
   }
+
+  if (job->de_seg->upload_buf.sem_list[SEM_EMPTY])
+    free_semaphores(&job->de_seg->upload_buf, SEM_EMPTY);
+  if (job->de_seg->upload_buf.sem_list[SEM_FULL])
+    free_semaphores(&job->de_seg->upload_buf, SEM_FULL);
+  //don't free DONE semaphore on last segment upload, is freed in cfsflush
+  if (job->de_seg->segment_part != job->de->segment_count - 1)
+    if (job->de_seg->upload_buf.sem_list[SEM_DONE])
+      free_semaphores(&job->de_seg->upload_buf, SEM_DONE);
 
   if (!op_ok)
   {
@@ -1793,11 +1861,12 @@ void internal_upload_segment_progressive(void* arg)
     curl_slist* headers = NULL;
     const char* filemimetype = get_file_mimetype(job->de->full_name);
     add_header(&headers, HEADER_TEXT_MANIFEST, job->de->manifest_time);
-    add_header(&headers, "Content-Length", "0");
-    add_header(&headers, "Content-Type", filemimetype);
+    add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
+    add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                  0, 0, job->de, NULL);
     //now file is updated on cloud
+
     curl_slist_free_all(headers);
 
     //remove older versions
@@ -1850,9 +1919,9 @@ void internal_upload_segment_progressive(void* arg)
     if (job->de_seg->upload_buf.sem_list[SEM_DONE])
       sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
   }
-  debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%s)",
+  debugf(DBG_LEVEL_EXT, "exit: internal_upload_segment_progressive(%p)",
          job->de);
-  free(job->self_reference);
+  free_thread_job(job);
   pthread_exit(NULL);
 }
 
@@ -1886,6 +1955,7 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   struct thread_job* job = malloc(sizeof(struct thread_job));
   job->de = de;
   job->de_seg = de_seg;
+  job->de_seg->job = job; //cyclic ref. for md5 sum update in curl callbacks
   job->self_reference = job;//freed in internal_upload_segment_progressive
   pthread_create(&job->thread, NULL,
                  (void*)internal_upload_segment_progressive, job);

@@ -38,7 +38,8 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_PRODUCED_BY "X-Object-Meta-Produced-By"
 #define HEADER_TEXT_MANIFEST "X-Object-Manifest"
 #define HEADER_TEXT_SEGMENT_SIZE "X-Object-Segment-Size"
-
+#define HEADER_TEXT_CONTENT_LEN "Content-Length"
+#define HEADER_TEXT_CONTENT_TYPE "Content-Type"
 
 //used for storing locally cloud cached files in temp folder
 #define TEMP_FILE_NAME_FORMAT "%s/cloudfuse%s"
@@ -135,6 +136,7 @@ typedef struct dir_entry
   bool metadata_downloaded;
   struct progressive_data_buf upload_buf;
   struct progressive_data_buf downld_buf;
+  struct thread_job* job;
   bool is_progressive;
   bool is_single_thread;
   // end change
@@ -153,6 +155,8 @@ typedef struct thread_job
   pthread_t thread;
   void* self_reference;
   bool is_single_thread;
+  MD5_CTX mdContext;
+  char* md5str;
 } thread_job;
 
 typedef struct thread_copy_job
@@ -189,6 +193,10 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
 char* str2md5(const char* str, int length);
 int file_md5(FILE* file_handle, char* md5_file_str);
 int file_md5_by_name(const char* file_name_str, char* md5_file_str);
+bool init_job_md5(thread_job* job);
+bool update_job_md5(thread_job* job, const unsigned char* data_buf,
+                    int buf_len);
+bool complete_job_md5(thread_job* job);
 void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
 bool valid_http_response(int response);
@@ -206,6 +214,7 @@ long random_at_most(long max);
 dir_entry* init_dir_entry();
 void free_de_before_get(dir_entry* de);
 void free_de_before_head(dir_entry* de);
+void free_thread_job(thread_job* job);
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);
