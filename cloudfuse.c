@@ -345,7 +345,10 @@ static int cfs_mkdir(const char* path, mode_t mode)
   }
   debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_mkdir(%s) response=%d", path,
          response);
-  return -ENOENT;
+  return
+
+
+    -ENOENT;
 }
 
 static int cfs_create(const char* path, mode_t mode,
@@ -355,45 +358,26 @@ static int cfs_create(const char* path, mode_t mode,
   FILE* temp_file;
   int errsv;
   char file_path_safe[NAME_MAX] = "";
-  /*if (*temp_dir)
-    {
-    get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
-    temp_file = fopen(file_path_safe, "w+b");
-    errsv = errno;
-    if (temp_file == NULL)
-    {
-      debugf(DBG_LEVEL_NORM, KRED
-             "exit 0: cfs_create cannot open temp file %s.error %s\n", file_path_safe,
-             strerror(errsv));
-      return -EIO;
-    }
-    }
-    else
-    {
-    temp_file = tmpfile();
-    errsv = errno;
-    if (temp_file == NULL)
-    {
-      debugf(DBG_LEVEL_NORM, KRED
-             "exit 1: cfs_create cannot open tmp file for path %s.error %s\n", path,
-             strerror(errsv));
-      return -EIO;
-    }
-    }
-    openfile* of = (openfile*)malloc(sizeof(openfile));
-    of->fd = dup(fileno(temp_file));
-    fclose(temp_file);
-    of->flags = info->flags;
-    info->fh = (uintptr_t)of;
-  */
-  info->fh = -1;
+  char open_flags[10];
+  get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
+  flags_to_openmode(info->flags, open_flags);
+  temp_file = fopen(file_path_safe, open_flags);
+  errsv = errno;
+  if (!temp_file)
+  {
+    debugf(DBG_LEVEL_EXT, KRED "cfs_create(%s): cache file busy, mode=%s err=%s",
+           path, open_flags, strerror(errsv));
+    return -EBUSY;
+  }
 
+  int fd = fileno(temp_file);
+  assert(fd != -1);
+  add_open_file(path, open_flags, temp_file, fd);
+  info->fh = (uintptr_t)fd;
   //create a copy in upload cache to record creation time meta fields
   update_dir_cache_upload(path, 0, 0, 0);
-
   //create also a copy in access cache to signal create OK
   update_dir_cache(path, 0, 0, 0);
-
   info->direct_io = 1;
   dir_entry* de = check_path_info_upload(path);
   assert(de);
@@ -444,167 +428,30 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   dir_entry* de = path_info(path);
   if (!de)
     return -ENOENT;
-
-  /*
-    if (*temp_dir)
-    {
-    char file_path_safe[NAME_MAX];
-    get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
-    debugf(DBG_LEVEL_EXT, "cfs_open: try open custom temp (%s)", file_path_safe);
-    if (access(file_path_safe, F_OK) != -1)
-    {
-      // file exists in local cache
-      temp_file = fopen(file_path_safe, "r");
-      errsv = errno;
-      if (temp_file == NULL)
-      {
-        debugf(DBG_LEVEL_NORM, KRED
-               "exit 0: cfs_open can't open temp_file=[%s] err=%d:%s",
-               file_path_safe, errsv, strerror(errsv));
-        return -ENOENT;
-      }
-      else
-      {
-        debugf(DBG_LEVEL_EXT, "cfs_open: " KGRN "file is in cache(%s)",
-               file_path_safe);
-        //todo: compute md5sum to ensure file content is OK
-        if (de)
-        {
-          if (!option_enable_progressive_download && de->md5sum_local == NULL)
-          {
-            //save md5sum to avoid repetead calculations
-            char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
-            file_md5(temp_file, md5_file_hash_str);
-            de->md5sum_local = strdup(md5_file_hash_str);
-          }
-
-          if (de && de->md5sum && de->md5sum_local
-              && (!strcasecmp(de->md5sum_local, de->md5sum)))
-          {
-            debugf(DBG_LEVEL_EXT, "cfs_open: "KGRN"md5sum cache OK");
-            file_cache_ok = true;
-            //leave file open
-          }
-          else
-          {
-            debugf(DBG_LEVEL_EXT, "cfs_open: "KYEL"md5sum cache NOT OK (%s)",
-                   file_path_safe);
-            debugf(DBG_LEVEL_EXT, "cfs_open: "KYEL"md5sum de_cache=%s, local=%s",
-                   de->md5sum, de->md5sum_local);
-            fclose(temp_file);
-          }
-        }
-        else
-        {
-          debugf(DBG_LEVEL_EXT,
-                 "cfs_open: file in cache but"KYEL"unable to find cloud md5sum");
-          fclose(temp_file);
-        }
-      }
-    }
-
-    if (!file_cache_ok)
-    {
-      errsv = errno;
-      debugf(DBG_LEVEL_EXT, "cfs_open: file not in cache, err=%s", strerror(errsv));
-      //FIXME: commented out as this condition will not be meet in some odd cases and program will crash
-      //if (!(info->flags & O_WRONLY)) {
-      debugf(DBG_LEVEL_EXT, "cfs_open: opening custom temp(%s)",
-             file_path_safe);
-      // we need to lock on the filename another process could open the file
-      // while we are writing to it and then only read part of the file
-      // duplicate the directory caching datastructure to make the code easier
-      // to understand.
-      // each file in the cache needs:
-      //  filename, is_writing, last_closed, is_removing
-      // the first time a file is opened a new entry is created in the cache
-      // setting the filename and is_writing to true.  This check needs to be
-      // wrapped with a lock.
-      //
-      // each time a file is closed we set the last_closed for the file to now
-      // and we check the cache for files whose last
-      // closed is greater than cache_timeout, then start a new thread rming
-      // that file.
-      // TODO: just to prevent this craziness for now
-      temp_file = fopen(file_path_safe, "w+b");
-      errsv = errno;
-      if (temp_file == NULL)
-      {
-        debugf(DBG_LEVEL_NORM,
-               KRED"exit 1: cfs_open cannot open custom temp=[%s] err=%d:%s",
-               file_path_safe, errsv, strerror(errsv));
-        return -ENOENT;
-      }
-
-      debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) temp fp=%p", path, temp_file);
-
-      //skip file download if progressive, done later in cfs_read
-      if (!option_enable_progressive_download)
-      {
-        //standard download (not progressive), get full file in local cache
-        if (!cloudfs_object_write_fp(path, temp_file))
-        {
-          fclose(temp_file);
-          debugf(DBG_LEVEL_NORM, KRED
-                 "exit 2: cfs_open(%s) cannot download/write custom temp",
-                 path);
-          return -ENOENT;
-        }
-      }
-    }
-    //else file is in cache
-    }
-    else
-    {
-    //using system standard temp directory
-    temp_file = tmpfile();
-    if (temp_file == NULL)
-    {
-      debugf(DBG_LEVEL_NORM, KRED"exit 3: cfs_open cannot create tmpfile err=%s",
-             strerror(errno));
-      return -ENOENT;
-    }
-    if (!(info->flags & O_TRUNC))
-    {
-      //todo: why is this check on flags needed?
-      if (!option_enable_progressive_download &&
-          !cloudfs_object_write_fp(path, temp_file) && !(info->flags & O_CREAT))
-      {
-        fclose(temp_file);
-        debugf(DBG_LEVEL_NORM,
-               KRED"exit 4: cfs_open(%s) cannot download/write tmpfile", path);
-        return -ENOENT;
-      }
-    }
-    }
-  */
-  /*
-    update_dir_cache(path, (de ? de->size : 0), 0, 0);
-    openfile* of = (openfile*)malloc(sizeof(openfile));//where is this free'd?
-    of->fd = dup(fileno(temp_file));
-    if (of->fd == -1)
-    {
-    //FIXME: potential leak if free not used?
-    free(of);
-    debugf(DBG_LEVEL_NORM, KRED "exit 5: cfs_open(%s) of->fd", path);
-    return -ENOENT;
-    }
-    debugf(DBG_LEVEL_NORM, KMAG "cfs_open(%s) fp=%p", path, temp_file);
-
-    of->flags = info->flags;
-  */
-  //info->fh = (uintptr_t)of;
-
-  info->fh = -1;//((uint64_t)de);//save de for quick access later
+  //create/open file in cache so we can manage concurrent operations on same file
+  char open_flags[10];
+  char file_path_safe[NAME_MAX];
+  get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
+  flags_to_openmode(info->flags, open_flags);
+  temp_file = fopen(file_path_safe, open_flags);
+  errsv = errno;
+  if (!temp_file)
+  {
+    debugf(DBG_LEVEL_EXT, KRED "cfs_open(%s): cache file busy, mode=%s err=%s",
+           path, open_flags, strerror(errsv));
+    return -EBUSY;
+  }
+  int fd = fileno(temp_file);
+  assert(fd != -1);
+  add_open_file(path, open_flags, temp_file, fd);
+  info->fh = (uintptr_t)fd;
   info->direct_io = 1;
   //non seek must be set to 0 to enable
   // video players work via samba (as they perform a seek to file end)
   info->nonseekable = 0;
 
-
   debugf(DBG_LEVEL_NORM, KBLU "exit 8: cfs_open(%s)", path);
   return 0;
-  //return ((openfile*)(uintptr_t)info->fh)->fd;
 }
 
 /*
@@ -618,9 +465,9 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   off_t offset_seg;
   int sem_val, err;
   int rnd = random_at_most(50);
-  if (offset % 100000 == 0)//avoid clutter
-    debugf(DBG_LEVEL_EXT, KBLU
-           "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
+  //if (offset % 100000 == 0)//avoid clutter
+  debugf(DBG_LEVEL_EXT, KBLU
+         "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
   //sleep_ms(rnd);
   int iters = 0;
   debug_print_descriptor(info);
@@ -631,18 +478,17 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   if (de && de->is_segmented)
   {
     int read_ahead_count = (option_read_ahead / de->segment_size) + 1;
-    int segment_part = offset / de->segment_size;
+    int segment_index = offset / de->segment_size;
     dir_entry* de_seg, *de_seg_next;
     while (result <= 0)
     {
-      de_seg = get_segment(de, segment_part);
-      //if assertion fails probably segments are missing from cloud
+      de_seg = get_segment(de, segment_index);
       assert(de_seg);
       //offset in segment is different than full file offset
-      offset_seg = offset - (segment_part * de->segment_size);
+      offset_seg = offset - (segment_index * de->segment_size);
       debugf(DBG_LEVEL_EXTALL, KMAG
              "cfs_read: while seg path=%s off=%lu segment=%d seg_name=%s md5=%s",
-             de->name, offset, segment_part, de_seg->name, de_seg->md5sum);
+             de->name, offset, segment_index, de_seg->name, de_seg->md5sum);
       if (de_seg)
       {
         bool in_cache;
@@ -651,7 +497,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         if (!in_cache)
         {
           debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): seg %d " KYEL "not in cache",
-                 de_seg->name, segment_part);
+                 de_seg->name, segment_index);
           download_ahead_segment(de_seg, de, fp_segment, true);
           if (de_seg->downld_buf.mutex_initialised)
           {
@@ -693,11 +539,11 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             if (offset % 100000 == 0)
               debugf(DBG_LEVEL_EXT, KBLU
                      "cfs_read(%s) fno=%d fp=%p part=%d off=%lu res=%lu",
-                     de_seg->name, fno, fp_segment, segment_part, offset_seg, result);
+                     de_seg->name, fno, fp_segment, segment_index, offset_seg, result);
             close(fno);
             fclose(fp_segment);
             //download if segment ahead not in cache and no other download runs
-            de_seg_next = get_segment(de, segment_part + read_ahead_count);
+            de_seg_next = get_segment(de, segment_index + read_ahead_count);
             if (de->downld_buf.ahead_thread_count == 0 && de_seg_next &&
                 (de_seg_next->md5sum_local == NULL
                  || (strcasecmp(de_seg_next->md5sum_local, de_seg_next->md5sum))))
@@ -708,11 +554,11 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             else
             {
               debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): done serving segment %d",
-                     path, segment_part);
+                     path, segment_index);
               //force download (or read from cache) of a new segment
-              segment_part++;
+              segment_index++;
               //exit if all segments are downloaded
-              if (segment_part == de->segment_count)
+              if (segment_index == de->segment_count)
                 break;
             }
           }
@@ -760,12 +606,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                  de->downld_buf.work_buf_size);
           debugf(DBG_LEVEL_EXT, KBLU "cfs_read: exit ret_code=%lu",
                  de->downld_buf.work_buf_size);
-          if (de->downld_buf.work_buf_size == 0)
-          {
-            //cleanup thread, read completed
-            //de->downld_buf.download_started = false;
-            //thread_de_read = NULL;
-          }
           return de->downld_buf.work_buf_size;
         }
       }
@@ -846,82 +686,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
 
   if (!de_upload)
     assert(de);
-  /*
-    if (info->fh != -1)
-    {
-    openfile* of = (openfile*)(uintptr_t)info->fh;
-    if (of)
-    {
-      //this reset file size to 0 for large segmented files
-      //off_t file_size = cloudfs_file_size(of->fd);
-      //update_dir_cache(path, file_size, 0, 0);
-      if (of->flags & O_RDWR || of->flags & O_WRONLY)
-      {
-        FILE* fp = fdopen(dup(of->fd), "r");
-        errsv = errno;
-        if (fp != NULL)
-        {
-          //on progressive ops upload is already done
-          if (option_enable_progressive_upload && de->size > 0)
-          {
-            debugf(DBG_LEVEL_EXT, KMAG"cfs_flush(%s): progressive ops completed, size=%lu",
-                   path, de->size);
-            //signal completion of read/write operation
-            de->upload_buf.write_completed = true;
-            //signal last data available in buffer for upload
-            sem_post(de->upload_buf.isfull_semaphore);
-            sem_wait(de->upload_buf.isempty_semaphore);
-            fclose(fp);
-            errsv = 0;
-          }
-          else
-          {
-            rewind(fp);
-            //calculate md5 hash, compare with cloud hash to determine if file content is changed
-            char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
-            file_md5(fp, md5_file_hash_str);
-            if (de && de->md5sum != NULL && (!strcasecmp(md5_file_hash_str, de->md5sum)))
-            {
-              //file content is identical, no need to upload entire file, just update metadata
-              debugf(DBG_LEVEL_NORM, KBLU
-                     "cfs_flush(%s): skip full upload as content did not change", path);
-              cloudfs_update_meta(de);
-            }
-            else
-            {
-              //upload file from cache to cloud
-              rewind(fp);
-              debugf(DBG_LEVEL_NORM, KBLU
-                     "cfs_flush(%s): perform full upload as content changed (or no file found in cache)",
-                     path);
-              if (!cloudfs_object_read_fp(path, fp))
-              {
-                fclose(fp);
-                errsv = errno;
-                debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_flush(%s) result=%d:%s", path, errsv,
-                       strerror(errsv));
-                return -ENOENT;
-              }
-            }
-            fclose(fp);
-            errsv = errno;
-          }
-        }
-        else
-          debugf(DBG_LEVEL_EXT, KRED "status: cfs_flush, err=%d:%s", errsv,
-                 strerror(errsv));
-      }
-      else
-      {
-        //todo: what to do here?
-
-      }
-    }
-    }
-  */
-  //else //fh == -1
-  //{
-
 
   if (option_enable_progressive_upload)
   {
@@ -929,6 +693,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     {
       debugf(DBG_LEVEL_EXT, KMAG
              "cfs_flush(%s): upload done, size=%lu", path, de_upload->size);
+
       if (de_upload->is_segmented)
       {
         dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
@@ -950,10 +715,13 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
           //free_semaphores(&de_seg->upload_buf, SEM_FULL);
 
+          remove_open_file(de_upload->full_name, info->fh);
+
           //update cache (move from upload to access)
           dir_decache_upload(de_upload->full_name);
           //mark file meta as obsolete to force a reload (for md5sums mostly)
           de->metadata_downloaded = false;
+          //fixme: sometimes last segment is not yet visible on cloud, why?
           get_file_metadata(de);
           //dir_decache(path);
           //return 0;
@@ -967,7 +735,9 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           sem_post(de->upload_buf.sem_list[SEM_FULL]);
         //if (de->upload_buf.sem_list[SEM_EMPTY])
         //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+        remove_open_file(de_upload->full_name, info->fh);
       }
+
     }
     else//not upload
     {
@@ -990,10 +760,12 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content not changed", de->name);
     }
   }
+
+  remove_open_file(de->full_name, info->fh);
+
   debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
          strerror(errsv));
   return 0;
-  //}
 }
 
 static int cfs_release(const char* path, struct fuse_file_info* info)
@@ -1002,8 +774,8 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
          "cfs_release(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
-  if (info->fh != -1)
-    close(((openfile*)(uintptr_t)info->fh)->fd);
+  //if (info->fh != -1)
+  //  close(((openfile*)(uintptr_t)info->fh)->fd);
   debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
@@ -1239,6 +1011,7 @@ static int cfs_fsync(const char* path, int idunno,
   return 0;
 }
 
+//todo: implement this
 static int cfs_truncate(const char* path, off_t size)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
@@ -1326,24 +1099,24 @@ static int cfs_rename(const char* src, const char* dst)
            src, dst);
     return -EISDIR;
   }
+
   if (cloudfs_copy_object(src_de, dst))
   {
     /* FIXME this isn't quite right as doesn't preserve last modified */
     //fix done in cloudfs_copy_object()
-    update_dir_cache(dst, src_de->size, 0, 0);
-    int result = cfs_unlink(src);
+    //update_dir_cache(dst, src_de->size, 0, 0);
+    //int result = cfs_unlink(src);
     dir_entry* dst_de = path_info(dst);
     if (!dst_de)
+    {
       debugf(DBG_LEVEL_NORM, KRED"cfs_rename(%s,%s) dest-not-found-in-cache", src,
              dst);
-    else
-    {
-      debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s,%s) upload ok", src, dst);
-      //copy attributes, shortcut, rather than forcing a download from cloud
-      copy_dir_entry(src_de, dst_de);
+      abort();
     }
+    else
+      debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s,%s) upload ok", src, dst);
     debugf(DBG_LEVEL_NORM, KBLU"exit 3: cfs_rename(%s,%s)", src, dst);
-    return result;
+    return 0;
   }
   debugf(DBG_LEVEL_NORM, KRED"exit 4: cfs_rename(%s,%s) io error", src, dst);
   return -EIO;
@@ -1421,13 +1194,9 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: set atime=[%s]", time_str);
     path_de->atime = times[0];
     path_de->mtime = times[1];
-    // not sure how to best obtain ctime from fuse source file. just record current date.
+    // not sure how to best obtain ctime from fuse source file
+    //just record current date.
     clock_gettime(CLOCK_REALTIME, &path_de->ctime);
-    //calling a meta cloud update here is not always needed.
-    //touch for example opens and closes/flush the file.
-    //worth implementing a meta cache functionality to avoid multiple uploads on meta changes
-    //when changing timestamps on very large files, touch command will trigger 2 x long and useless file uploads on cfs_flush()
-    //cloudfs_update_meta(path_de);
   }
   else
     debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: a/m/time not changed");
@@ -1462,7 +1231,6 @@ int cfs_listxattr(const char* path, char* list, size_t size)
   debugf(DBG_LEVEL_EXT, KBLU "cfs_listxattr(%s): name=%s", path);
   return 0;
 }
-
 
 
 int parse_option(void* data, const char* arg, int key,
@@ -1505,8 +1273,6 @@ int parse_option(void* data, const char* arg, int key,
 }
 
 
-
-
 int main(int argc, char** argv)
 {
   fprintf(stderr, "Starting hubicfuse on homedir %s!\n", get_home_dir());
@@ -1531,8 +1297,8 @@ int main(int argc, char** argv)
     return 1;
   }
 #ifndef HAVE_OPENSSL
-#warning Compiling without libssl, will run single-threaded.
-  fuse_opt_add_arg(&args, "-s");
+//#warning Compiling without libssl, will run single-threaded.
+//fuse_opt_add_arg(&args, "-s");
 #endif
 //https://www.cs.hmc.edu/~geoff/classes/hmc.cs135.201001/homework/fuse/fuse_doc.html
   struct fuse_operations cfs_oper =

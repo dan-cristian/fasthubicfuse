@@ -1,3 +1,5 @@
+#!/bin/bash
+
 MOUNT_HUBIC=/mnt/hubic2
 HUB_ROOT=$MOUNT_HUBIC/test
 #HUB=/mnt/hubic2/test/t1
@@ -49,59 +51,63 @@ fi
 }
 
 function test(){
-  echo -n $(date +"%H:%m:%S")" Testing: $1 [$2] ..."
+  echo -n $(date +"%H:%m:%S")" $! Testing: $1 [$2] ..."
   eval $2 > /dev/null 2>&1
   check
 }
+export -f test
 
 function test_not(){
-  echo -n $(date +"%H:%m:%S")" Testing: $1 [$2]..."
+  echo -n $(date +"%H:%m:%S")" $! Testing: $1 [$2]..."
   eval $2 > /dev/null 2>&1
   check_not
 }
+export -f test_not
 
 # $1=file name, $2=target md5sum
 function check_md5(){
-	echo -n $(date +"%H:%m:%S")" Testing: md5sum check" $1 "..."
+	echo -n $(date +"%H:%m:%S")" $! Testing: md5sum check" $1 "..."
 	md5=$(md5sum $1)
 	if [[ "$md5" == *"$2"* ]]; then
-		echo -e $PASSED_MSG
+		echo -e $PASSED_MSG $!
 		return 1
 	else
 		echo -n " $md5!=$2 "
-		echo -e $FAILED_MSG
+		echo -e $FAILED_MSG $!
 		return 0
 	fi
 }
+export -f check_md5
 
 # $1=file name, $2=target chmod
 function check_chmod(){
-	echo -n $(date +"%H:%m:%S")" Testing: chmod check" $1 "..."
+	echo -n $(date +"%H:%m:%S")" $! Testing: chmod check" $1 "..."
 	chmod=$(stat -c %a $1)
 	if [[ "$chmod" == *"$2"* ]]; then
-		echo -e $PASSED_MSG
+		echo -e $PASSED_MSG $!
 		return 1
 	else
 		echo -n " $chmod!=$2 "
-		echo -e $FAILED_MSG
+		echo -e $FAILED_MSG $!
 		return 0
 	fi
 }
+export -f check_chmod
 
 # $1=file name, $2=target chown
 function check_chown(){
-	echo -n $(date +"%H:%m:%S")" Testing: chown check" $1 "..."
+	echo -n $(date +"%H:%m:%S")" $! Testing: chown check" $1 "..."
 	chown=$(stat -c "%U:%G" $1)
 	if [[ "$chown" == *"$2"* ]]; then
-		echo -e $PASSED_MSG
+		echo -e $PASSED_MSG $!
 		return 1
 	else
 		echo -n " $chown!=$2 "
-		echo -e $FAILED_MSG
+		echo -e $FAILED_MSG $!
 		return 0
 	fi
 }
-
+export -f check_chown
 
 function setup_config_progressive(){
 	echo
@@ -148,20 +154,30 @@ function cache_reset()
 }
 
 function test_upload_small(){
-	echo "Testing copy operations, upload"
+	echo "Testing copy operations, upload small files"
 	if test "upload non-segmented file" "$COPY_CMD $SRC/$TINY $HUB/"; then return; fi
 	if test "upload non-segmented file" "$COPY_CMD $SRC/$SMALL $HUB/"; then return; fi
+	
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
+function test_upload_medium(){
+	echo "Testing copy operations, upload medium file"
 	if test "upload segmented file" "$COPY_CMD $SRC/$MEDIUM $HUB/"; then return; fi
 	echo Test completed!
 	echo ---------------
+	return 1
 }
 
 function test_upload_large(){
-	if test "upload segmented file" "$COPY_CMD $SRC/$LARGE $HUB/"; then return; fi	
+	if test "upload segmented file" "$COPY_CMD $SRC/$LARGE $HUB/"; then return; fi
+	return 1
 }
 
 function test_download_small(){
-	echo "Testing copy operations, download"
+	echo "Testing copy operations, download small files"
 	if test "download tiny file" "$COPY_CMD $HUB/$TINY $TMP/"; then return; fi
 	if check_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi
 	if test "download small file" "$COPY_CMD $HUB/$SMALL $TMP/"; then return; fi
@@ -170,6 +186,36 @@ function test_download_small(){
 	if check_md5 "$TMP/$MEDIUM" "$MEDIUM_MD5"; then return; fi
 	echo Test completed!
 	echo ---------------
+	return 1
+}
+
+function test_download_medium(){
+	echo "Testing copy operations, download medium file"
+	if test "download medium file" "$COPY_CMD $HUB/$MEDIUM $TMP/"; then return; fi
+	if check_md5 "$TMP/$MEDIUM" "$MEDIUM_MD5"; then return; fi
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
+function test_download_medium_copy(){
+	echo "Testing copy operations, download 2nd copy medium file "
+	if test "download medium file" "$COPY_CMD $HUB/$MEDIUM $TMP/copy$MEDIUM"; then return; fi
+	if check_md5 "$TMP/copy$MEDIUM" "$MEDIUM_MD5"; then return; fi
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
+function test_downup_small(){
+	echo "Testing copy operations, download and upload "
+	if test "download upload tiny file" "$COPY_CMD $HUB/$TINY $HUB/copy$TINY"; then return; fi
+	if test "download tiny file" "$COPY_CMD $HUB/copy$TINY $TMP/"; then return; fi
+	if check_md5 "$TMP/copy$TINY" "$TINY_MD5"; then return; fi
+	
+	echo Test completed!
+	echo ---------------
+	return 1
 }
 
 function test_copy_huge()
@@ -181,6 +227,7 @@ function test_copy_huge()
 	if check_md5 "$TMP/$HUGE" "$HUGE_MD5"; then return; fi
 	echo Test completed!
 	echo ---------------
+	return 1
 }
 
 function test_chmod(){
@@ -257,7 +304,10 @@ function test_create(){
 echo Waiting for a new build...
 setup_config_progressive
 
+
+
 while true; do
+
 	sleep 1
 	if [ -f $SRC_FILE ]; then
 		#setup_config_standard
@@ -267,28 +317,39 @@ while true; do
 		sleep 2
 	fi
 	
+	
+
 	if [ -f $BUILD_FILE ]; then
 		echo New build detected!
 		sleep 5
 		setup_test
+	
+		test_upload_medium
 		
-		test_upload_small
-		test_create
+		test_download_medium_copy &
+		test_download_medium
 		
+		
+		if test_upload_small; then exit; fi
+		if test_create; then exit; fi
+		
+		
+		if test_downup_small; then exit; fi
 		
 		if test_rename_small; then exit; fi
 		
-		test_upload_large
+		if test_upload_large; then exit; fi
 		if test_rename_large; then exit; fi
 		
-		test_upload_small
+		if test_upload_small; then exit; fi
 		
 		if test_chmod; then exit; fi
 		if test_chown; then exit; fi
-		test_upload_small
+		if test_upload_small; then exit; fi
 		
-		test_download_small
-		test_download_small
+		if test_download_small; then exit; fi
+		if test_download_small; then exit; fi
+		
 		
 		echo "Check copy consistency, older segments should be removed..."
 		
@@ -296,7 +357,7 @@ while true; do
 		
 		echo ===============
 		echo
-		rm $BUILD_FILE
-		echo Waiting for a new build...
+		#rm $BUILD_FILE
+		echo Repeating tests...
 	fi
 done

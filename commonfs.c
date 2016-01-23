@@ -33,6 +33,8 @@ pthread_mutexattr_t segment_mutex_attr;
 dir_cache* dcache;//stores accessed files
 dir_cache* dcache_upload;//stores files being modified
 
+open_file* openfile_list = NULL;//stores all opened files
+
 char* temp_dir;
 int cache_timeout;
 int debug = 0;
@@ -242,6 +244,7 @@ bool complete_job_md5(thread_job* job)
 
 void free_thread_job(thread_job* job)
 {
+  debugf(DBG_LEVEL_EXT, "free_thread_job: freeing job");
   free(job->md5str);
   free(job->self_reference);
 }
@@ -514,6 +517,60 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
   }
 }
 
+void flags_to_openmode(unsigned int flags, char* openmode)
+{
+  int i = 0;
+  if (flags & O_WRONLY)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: write only detected");
+    openmode[i] = 'w';
+    i++;
+  }
+  if (flags & O_APPEND)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: append detected");
+    openmode[i] = 'a';
+    i++;
+  }
+  if (flags & O_RDONLY)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: read only detected");
+    openmode[i] = 'r';
+    i++;
+  }
+  if (flags & O_RDWR)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: read write detected");
+    openmode[i] = 'w';
+    i++;
+    openmode[i] = '+';
+    i++;
+  }
+  if (flags & O_TRUNC)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: truncate detected");
+    openmode[i] = 'w';
+    i++;
+  }
+  if (flags & O_CREAT)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: create detected");
+    openmode[i] = 'w';
+    i++;
+  }
+  if (flags & O_EXCL)
+    debugf(DBG_LEVEL_EXT, "cfs_open: EXCL detected");
+
+  //default open mode is r/w if none specified just to be safe
+  if (i == 0)
+  {
+    openmode[i] = 'w';
+    i++;
+    openmode[i] = '+';
+    i++;
+  }
+  openmode[i] = 0;//null terminate string
+}
 /*
   return a segment entry from dir_entry
   it assumes segments are stored in sorted ascending order
@@ -616,12 +673,21 @@ void path_to_de(const char* path, dir_entry* de)
   snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
   snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
            HUBIC_SEGMENT_STORAGE_ROOT, container);
-  assert(!de->manifest_seg);
-  de->manifest_seg = strdup(manifest);
+  if (!de->manifest_seg)
+    de->manifest_seg = strdup(manifest);
+  else
+    assert(!strcasecmp(de->manifest_seg, manifest));
   snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
            HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
-  assert(!de->manifest_time);
+  if (de->manifest_time)
+    free(de->manifest_time);
   de->manifest_time = strdup(manifest);
+  if (!de->name)
+    de->name = strdup(object);
+  if (strlen(object) > 0)
+    assert(!strcasecmp(object, de->name));
+  if (!de->full_name)
+    de->full_name = strdup(path);
 }
 /*
   returns the segment.
@@ -670,10 +736,11 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   assert(de_seg);
   de_seg->segment_part = segment_index;
 
+
   if (!de->manifest_seg)
   {
+    //populate manifest fields if empty
     path_to_de(de->full_name, de);
-    //
   }
 
   char seg_name[8 + 1] = { 0 };
@@ -703,7 +770,7 @@ void dir_decache_segments(dir_entry* de)
 }
 
 /*
-  removes path from cache
+  removes path from cache, I think only works fine with child objects?
 */
 void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
                           const char* path)
@@ -761,11 +828,13 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
 
 void dir_decache(const char* path)
 {
+  debugf(DBG_LEVEL_EXT, "dir_decache(%s)", path);
   internal_dir_decache(dcache, dcachemut, path);
 }
 
 void dir_decache_upload(const char* path)
 {
+  debugf(DBG_LEVEL_EXT, "dir_decache_upload(%s)", path);
   internal_dir_decache(dcache_upload, dcacheuploadmut, path);
 }
 
@@ -927,6 +996,7 @@ dir_entry* init_dir_entry()
   de->segment_count = 0;
   de->segment_part = -1;
   de->segment_size = 0;
+  de->size_on_cloud = 0;
   return de;
 }
 
@@ -1226,6 +1296,45 @@ dir_entry* check_parent_folder_for_file(const char* path)
 }
 
 /*
+  replace an object with a new one in cache.
+  returns the old object which must be freed in the caller
+*/
+dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
+{
+  debugf(DBG_LEVEL_EXTALL, "replace_cache_object(%s:%s)", de->name,
+         de_new->name);
+  char dir[MAX_PATH_SIZE];
+  dir_for(de->full_name, dir);
+  dir_entry* tmp;
+  //get parent folder cache entry
+  if (!check_caching_list_directory(dir, &tmp))
+  {
+    debugf(DBG_LEVEL_EXTALL,
+           "exit 0: replace_cache_object(%s) " KYEL "[CACHE-MISS]",
+           de->full_name);
+    return false;
+  }
+  dir_entry* prev = NULL;
+  for (; tmp; tmp = tmp->next)
+  {
+    if (!strcmp(tmp->full_name, de->full_name))
+    {
+      debugf(DBG_LEVEL_EXTALL, "exit 1: replace_cache_object(%s) "KGRN"[CACHE-HIT]",
+             de->name);
+      if (!prev)
+        prev = de_new;
+      else
+        prev->next = de_new;
+      de_new->next = tmp->next;
+      //cloudfs_free_dir_list(tmp);
+      return tmp;
+    }
+    prev = tmp;
+  }
+  return NULL;
+}
+
+/*
   check if local path is in cache, without downloading from cloud if not in cache
 */
 dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
@@ -1332,7 +1441,7 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
   if (file_exist)
   {
     debugf(DBG_LEVEL_EXTALL,
-           KMAG"open_segment_from_cache: found segment %d md5=%s",
+           KMAG "open_segment_from_cache: found segment %d md5=%s",
            de_seg->segment_part, de_seg->md5sum);
     //check if segment is in cache, with md5sum ok
     if (de_seg->md5sum_local == NULL)
@@ -1445,6 +1554,62 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   return false;
 }
 
+void add_open_file(const char* path, const char* open_flags,
+                   FILE* temp_file, int fd)
+{
+  open_file* of = (open_file*)malloc(sizeof(open_file));
+  of->cached_file = temp_file;
+  of->fd = fd;
+  of->path = strdup(path);
+  of->open_flags = strdup(open_flags);
+  of->opened = get_time_now();
+  //todo: search for process that opened the file in /proc/pid/fd
+  //of->process_origin = ? ;
+  if (openfile_list)
+    of->next = openfile_list;
+  else
+    of->next = NULL;
+  openfile_list = of;
+}
+
+
+bool remove_open_file(const char* path, int fd)
+{
+  open_file* of = openfile_list;
+  open_file* prev = NULL;
+  int count = 0;
+  bool result = false;
+  while (of)
+  {
+    if (!strcasecmp(of->path, path))
+    {
+      count++;
+      if (of->fd == fd)
+      {
+        fclose(of->cached_file);
+        free(of->path);
+        free(of->open_flags);
+        free(of);
+        if (prev)
+          prev->next = of->next;
+        else
+          openfile_list = of->next;
+        result = true;
+      }
+    }
+    prev = of;
+    of = of->next;
+  }
+  //last open instance was removed, file in cache to be deleted
+  if (count == 1 && result)
+  {
+    char file_path_safe[NAME_MAX] = "";
+    get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
+    unlink(file_path_safe);
+  }
+  return result;
+}
+
 void sleep_ms(int milliseconds)
 {
 #ifdef _POSIX_C_SOURCE
@@ -1486,7 +1651,7 @@ void interrupt_handler(int sig)
 void sigpipe_callback_handler(int signum)
 {
 
-  debugf(DBG_LEVEL_NORM, KRED "Caught signal SIGPIPE, ignoring %d\n", signum);
+  debugf(DBG_LEVEL_NORM, KRED "Caught signal SIGPIPE, ignoring %d", signum);
 }
 
 void clear_full_cache()

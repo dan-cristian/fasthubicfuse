@@ -102,4 +102,5 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                              size_t size);
 int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de);
 bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de);
+
 #endif

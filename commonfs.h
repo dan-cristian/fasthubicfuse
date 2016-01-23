@@ -111,7 +111,7 @@ typedef struct dir_entry
   char* content_type;
   char* manifest_time;
   char* manifest_seg;
-  char* manifest_cloud;
+  char* manifest_cloud;//starts with a slash even if on cloud does not
   off_t size;//size of the file, might not match the size in cloud if is segmented
   off_t size_on_cloud;//size of the file in cloud, should be 0 for segmented files
   time_t last_modified;
@@ -139,6 +139,7 @@ typedef struct dir_entry
   struct thread_job* job;
   bool is_progressive;
   bool is_single_thread;
+
   // end change
   int isdir;
   int islink;
@@ -180,6 +181,17 @@ typedef struct dir_cache
   //end change
   struct dir_cache* next, *prev;
 } dir_cache;
+
+typedef struct open_file
+{
+  char* path;
+  char* open_flags;
+  time_t opened;
+  FILE* cached_file;
+  int fd;
+  char* process_origin;
+  struct open_file* next;
+} open_file;
 
 time_t my_timegm(struct tm* tm);
 time_t get_time_from_str_as_gmt(char* time_str);
@@ -224,9 +236,11 @@ void update_dir_cache(const char* path, off_t size, int isdir, int islink);
 void update_dir_cache_upload(const char* path, off_t size, int isdir,
                              int islink);
 dir_entry* path_info(const char* path);
+dir_entry* replace_cache_object(const dir_entry* de, dir_entry* de_new);
 dir_entry* check_path_info(const char* path);
 dir_entry* check_path_info_upload(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
+void flags_to_openmode(unsigned int flags, char* openmode);
 dir_entry* get_segment(dir_entry* de, int segment_index);
 void path_to_de(const char* path, dir_entry* de);
 dir_entry* get_create_segment(dir_entry* de, int segment_index);
@@ -248,6 +262,9 @@ char* get_home_dir();
 bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
+void add_open_file(const char* path, const char* open_flags,
+                   FILE* temp_file, int fd);
+bool remove_open_file(const char* path, int fd);
 void interrupt_handler(int sig);
 void sigpipe_callback_handler(int signum);
 void clear_full_cache();
