@@ -355,24 +355,9 @@ static int cfs_create(const char* path, mode_t mode,
                       struct fuse_file_info* info)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_create(%s)", path);
-  FILE* temp_file;
-  int errsv;
-  char file_path_safe[NAME_MAX] = "";
-  char open_flags[10];
-  get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
-  flags_to_openmode(info->flags, open_flags);
-  temp_file = fopen(file_path_safe, open_flags);
-  errsv = errno;
-  if (!temp_file)
-  {
-    debugf(DBG_LEVEL_EXT, KRED "cfs_create(%s): cache file busy, mode=%s err=%s",
-           path, open_flags, strerror(errsv));
+  int fd = open_lock_file(path, info->flags);
+  if (fd == -1)
     return -EBUSY;
-  }
-
-  int fd = fileno(temp_file);
-  assert(fd != -1);
-  add_open_file(path, open_flags, temp_file, fd);
   info->fh = (uintptr_t)fd;
   //create a copy in upload cache to record creation time meta fields
   update_dir_cache_upload(path, 0, 0, 0);
@@ -405,8 +390,7 @@ static int cfs_create(const char* path, mode_t mode,
   de->uid = geteuid();
   de->gid = getegid();
 
-  debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_create(%s)=(%s) result=%d:%s", path,
-         file_path_safe, errsv, strerror(errsv));
+  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_create(%s)", path);
   return 0;
 }
 
@@ -422,35 +406,20 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
          "cfs_open(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
-  FILE* temp_file = NULL;
-  int errsv;
   bool file_cache_ok = false;
   dir_entry* de = path_info(path);
   if (!de)
     return -ENOENT;
   //create/open file in cache so we can manage concurrent operations on same file
-  char open_flags[10];
-  char file_path_safe[NAME_MAX];
-  get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
-  flags_to_openmode(info->flags, open_flags);
-  temp_file = fopen(file_path_safe, open_flags);
-  errsv = errno;
-  if (!temp_file)
-  {
-    debugf(DBG_LEVEL_EXT, KRED "cfs_open(%s): cache file busy, mode=%s err=%s",
-           path, open_flags, strerror(errsv));
+  int fd = open_lock_file(path, info->flags);
+  if (fd == -1)
     return -EBUSY;
-  }
-  int fd = fileno(temp_file);
-  assert(fd != -1);
-  add_open_file(path, open_flags, temp_file, fd);
   info->fh = (uintptr_t)fd;
   info->direct_io = 1;
   //non seek must be set to 0 to enable
   // video players work via samba (as they perform a seek to file end)
   info->nonseekable = 0;
-
-  debugf(DBG_LEVEL_NORM, KBLU "exit 8: cfs_open(%s)", path);
+  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_open(%s)", path);
   return 0;
 }
 
@@ -715,7 +684,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
           //free_semaphores(&de_seg->upload_buf, SEM_FULL);
 
-          remove_open_file(de_upload->full_name, info->fh);
+          close_lock_file(de_upload->full_name, info->fh);
 
           //update cache (move from upload to access)
           dir_decache_upload(de_upload->full_name);
@@ -735,7 +704,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           sem_post(de->upload_buf.sem_list[SEM_FULL]);
         //if (de->upload_buf.sem_list[SEM_EMPTY])
         //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
-        remove_open_file(de_upload->full_name, info->fh);
+        close_lock_file(de_upload->full_name, info->fh);
       }
 
     }
@@ -761,7 +730,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     }
   }
 
-  remove_open_file(de->full_name, info->fh);
+  close_lock_file(de->full_name, info->fh);
 
   debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
          strerror(errsv));
@@ -987,8 +956,12 @@ static int cfs_write(const char* path, const char* buf, size_t length,
 static int cfs_unlink(const char* path)
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_unlink(%s)", path);
+  int fd = open_lock_file(path, 0);
+  if (fd == -1)
+    return -EBUSY;
   dir_entry* de = check_path_info(path);
   int success = cloudfs_delete_object(de);
+  close_lock_file(path, fd);
   if (success == -1)
   {
     debugf(DBG_LEVEL_NORM, KRED "exit 0: cfs_unlink(%s)", path);
@@ -1053,7 +1026,6 @@ static int cfs_chown(const char* path, uid_t uid, gid_t gid)
                path, de->uid, de->gid, uid, gid);
         de->uid = uid;
         de->gid = gid;
-        //issue a PUT request to update metadata (quick request just to update headers)
         int response = cloudfs_update_meta(de);
       }
     }
@@ -1075,7 +1047,6 @@ static int cfs_chmod(const char* path, mode_t mode)
         debugf(DBG_LEVEL_NORM, "cfs_chmod(%s): change mode from %d to %d", path,
                de->chmod, mode);
         de->chmod = mode;
-        //todo: issue a PUT request to update metadata (empty request just to update headers?)
         int response = cloudfs_update_meta(de);
       }
     }
@@ -1087,38 +1058,38 @@ static int cfs_chmod(const char* path, mode_t mode)
 static int cfs_rename(const char* src, const char* dst)
 {
   debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s, %s)", src, dst);
+  int fd_src = open_lock_file(src, FUSE_FLAG_O_RDONLY);
+  if (fd_src == -1)
+    return -EBUSY;
+  int fd_dst = open_lock_file(dst, FUSE_FLAG_O_WRONLY);
+  if (fd_dst == -1)
+  {
+    close_lock_file(src, fd_src);
+    return -EBUSY;
+  }
+
   dir_entry* src_de = path_info(src);
   if (!src_de)
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_rename(%s,%s) not-found", src, dst);
+    debugf(DBG_LEVEL_NORM, KRED "exit 0: cfs_rename(%s,%s) not-found", src, dst);
     return -ENOENT;
   }
   if (src_de->isdir)
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit 1: cfs_rename(%s,%s) cannot rename dirs!",
+    debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_rename(%s,%s) cannot rename dirs!",
            src, dst);
     return -EISDIR;
   }
 
   if (cloudfs_copy_object(src_de, dst))
   {
-    /* FIXME this isn't quite right as doesn't preserve last modified */
-    //fix done in cloudfs_copy_object()
-    //update_dir_cache(dst, src_de->size, 0, 0);
-    //int result = cfs_unlink(src);
-    dir_entry* dst_de = path_info(dst);
-    if (!dst_de)
-    {
-      debugf(DBG_LEVEL_NORM, KRED"cfs_rename(%s,%s) dest-not-found-in-cache", src,
-             dst);
-      abort();
-    }
-    else
-      debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s,%s) upload ok", src, dst);
-    debugf(DBG_LEVEL_NORM, KBLU"exit 3: cfs_rename(%s,%s)", src, dst);
+    cloudfs_delete_object(src_de);
+    close_lock_file(src, fd_src);
+    close_lock_file(dst, fd_dst);
+    debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
     return 0;
   }
-  debugf(DBG_LEVEL_NORM, KRED"exit 4: cfs_rename(%s,%s) io error", src, dst);
+  debugf(DBG_LEVEL_NORM, KRED"exit 3: cfs_rename(%s,%s) io error", src, dst);
   return -EIO;
 }
 
@@ -1170,33 +1141,32 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
 {
   debugf(DBG_LEVEL_NORM, KBLU "cfs_utimens(%s)", path);
   // looking for file entry in cache
-  dir_entry* path_de = path_info(path);
-  if (!path_de)
+  dir_entry* de = path_info(path);
+  if (!de)
   {
     debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);
     return -ENOENT;
   }
-  if (path_de->atime.tv_sec != times[0].tv_sec
-      || path_de->atime.tv_nsec != times[0].tv_nsec ||
-      path_de->mtime.tv_sec != times[1].tv_sec
-      || path_de->mtime.tv_nsec != times[1].tv_nsec)
+  if (de->atime.tv_sec != times[0].tv_sec
+      || de->atime.tv_nsec != times[0].tv_nsec ||
+      de->mtime.tv_sec != times[1].tv_sec
+      || de->mtime.tv_nsec != times[1].tv_nsec)
   {
     debugf(DBG_LEVEL_EXT, KCYN
            "cfs_utimens: change %s prev: atime=%li.%li mtime=%li.%li new: atime=%li.%li mtime=%li.%li",
-           path,
-           path_de->atime.tv_sec, path_de->atime.tv_nsec, path_de->mtime.tv_sec,
-           path_de->mtime.tv_nsec,
+           path, de->atime.tv_sec, de->atime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
            times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
     char time_str[TIME_CHARS] = "";
     get_timespec_as_str(&times[1], time_str, sizeof(time_str));
     debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: set mtime=[%s]", time_str);
     get_timespec_as_str(&times[0], time_str, sizeof(time_str));
     debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: set atime=[%s]", time_str);
-    path_de->atime = times[0];
-    path_de->mtime = times[1];
+    de->atime = times[0];
+    de->mtime = times[1];
     // not sure how to best obtain ctime from fuse source file
     //just record current date.
-    clock_gettime(CLOCK_REALTIME, &path_de->ctime);
+    clock_gettime(CLOCK_REALTIME, &de->ctime);
+    cloudfs_update_meta(de);
   }
   else
     debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: a/m/time not changed");

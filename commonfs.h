@@ -73,6 +73,10 @@ typedef enum { false, true } bool;
 #define SEM_FULL 1
 #define SEM_DONE 2
 
+#define FUSE_FLAG_O_RDONLY 32768
+#define FUSE_FLAG_O_WRONLY 32769
+#define LOCK_WAIT_SEC 5
+
 typedef struct
 {
   int fd;
@@ -236,7 +240,8 @@ void update_dir_cache(const char* path, off_t size, int isdir, int islink);
 void update_dir_cache_upload(const char* path, off_t size, int isdir,
                              int islink);
 dir_entry* path_info(const char* path);
-dir_entry* replace_cache_object(const dir_entry* de, dir_entry* de_new);
+bool append_dir_entry(dir_entry* de);
+//dir_entry* replace_cache_object(const dir_entry* de, dir_entry* de_new);
 dir_entry* check_path_info(const char* path);
 dir_entry* check_path_info_upload(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
@@ -257,14 +262,14 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
+bool cleanup_older_segments(char* dir_path, char* exclude_path);
 void sleep_ms(int milliseconds);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
-void add_open_file(const char* path, const char* open_flags,
-                   FILE* temp_file, int fd);
-bool remove_open_file(const char* path, int fd);
+bool close_lock_file(const char* path, int fd);
+int open_lock_file(const char* path, unsigned int flags);
 void interrupt_handler(int sig);
 void sigpipe_callback_handler(int signum);
 void clear_full_cache();

@@ -1633,8 +1633,7 @@ bool update_segments(dir_entry* de)
     if (!cloudfs_list_directory(manifest_path, &seg_dir))
     {
       debugf(DBG_LEVEL_NORM, KRED "exit 1: update_segments(%s)", de->name);
-      abort();// can I recover?
-      //return 0;
+      return false;
     }
     if (seg_dir && !seg_dir->full_name)
       manifest_path = seg_dir->full_name;//manifest will be reused
@@ -1664,7 +1663,7 @@ bool update_segments(dir_entry* de)
                  "update_segments(%s): missing segment %d, retry #%d",
                  de->name, index, iterations);
           cloudfs_free_dir_list(seg_dir);
-          sleep_ms(1000);
+          sleep_ms(1000 * iterations);
           if (!cloudfs_list_directory(manifest_path, &seg_dir))
             abort();
           check_ok = false;
@@ -1690,54 +1689,65 @@ bool update_segments(dir_entry* de)
     iterations++;
   }
   while (!check_ok && iterations <= REQUEST_RETRIES);
-  assert(check_ok);
-  de->is_segmented = true;
-  if (de->segment_size == 0)
-    de->segment_size = segment_size;
-  de->segment_remaining = de->size % de->segment_size;
-  de->segment_full_count = de->size / de->segment_size;
-  de->segment_count = de->segment_full_count + (de->segment_remaining > 0);
-  if (seg_count != de->segment_count)
+  if (!check_ok)
   {
-    //incomplete no. of segments found in cloud
+    //incomplete segments, might show later
+    //todo: remove entry from cache
     return false;
   }
-  //assert(seg_count == de->segment_count);
-  //save segments dir list into parent file entry
-  //fixme: potentially unsafe as it get's overwritten and data is lost
-  if (de)
+  else
   {
-    if (!de->segments)
+    de->is_segmented = true;
+    if (de->segment_size == 0)
+      de->segment_size = segment_size;
+    de->segment_remaining = de->size % de->segment_size;
+    de->segment_full_count = de->size / de->segment_size;
+    de->segment_count = de->segment_full_count + (de->segment_remaining > 0);
+    if (seg_count != de->segment_count)
     {
-      debugf(DBG_LEVEL_EXT, KMAG
-             "format_segments: adding segment list to (%s)", de->full_name);
-      de->segments = seg_dir;
+      debugf(DBG_LEVEL_NORM, KRED
+             "update_segments(%s): diff no. segments than expected %d!=%d",
+             de->name, seg_count, de->segment_count);
+      //incomplete no. of segments found in cloud
+      return false;
     }
-    else
+    //assert(seg_count == de->segment_count);
+    //save segments dir list into parent file entry
+    //fixme: potentially unsafe as it get's overwritten and data is lost
+    if (de)
     {
-      //todo: free if is old and no op is active for this segment
-      dir_entry* new_seg = seg_dir;
-      dir_entry* old_seg;
-      int de_segment;
-      debugf(DBG_LEVEL_EXT, KMAG
-             "format_segments: checking seglist changes (%s)", de->full_name);
-      while (new_seg)
+      if (!de->segments)
       {
-        de_segment = atoi(new_seg->name);
-        old_seg = get_segment(de, de_segment);
-        //check if segments are identical
-        //if not replace de with new segment list
-        if (!old_seg || !old_seg->md5sum
-            || strcasecmp(old_seg->md5sum, new_seg->md5sum))
+        debugf(DBG_LEVEL_EXT, KMAG
+               "format_segments: adding segment list to (%s)", de->full_name);
+        de->segments = seg_dir;
+      }
+      else
+      {
+        //todo: free if is old and no op is active for this segment
+        dir_entry* new_seg = seg_dir;
+        dir_entry* old_seg;
+        int de_segment;
+        debugf(DBG_LEVEL_EXT, KMAG
+               "format_segments: checking seglist changes (%s)", de->full_name);
+        while (new_seg)
         {
-          debugf(DBG_LEVEL_EXT, KMAG
-                 "format_segments: modifing segment list for (%s)", de->full_name);
-          //todo: what if there are download segmented ops in progress?
-          cloudfs_free_dir_list(de->segments);
-          de->segments = seg_dir;
-          break;
+          de_segment = atoi(new_seg->name);
+          old_seg = get_segment(de, de_segment);
+          //check if segments are identical
+          //if not replace de with new segment list
+          if (!old_seg || !old_seg->md5sum
+              || strcasecmp(old_seg->md5sum, new_seg->md5sum))
+          {
+            debugf(DBG_LEVEL_EXT, KMAG
+                   "format_segments: modifing segment list for (%s)", de->full_name);
+            //todo: what if there are download segmented ops in progress?
+            cloudfs_free_dir_list(de->segments);
+            de->segments = seg_dir;
+            break;
+          }
+          new_seg = new_seg->next;
         }
-        new_seg = new_seg->next;
       }
     }
   }
@@ -1920,21 +1930,24 @@ void internal_upload_segment_progressive(void* arg)
     curl_slist_free_all(headers);
 
     //remove older versions
-    //detect manifest location where to search and delete previous versions
-    char* paths_list[2];
-    //for existing files
-    paths_list[0] = job->de->manifest_cloud;
-
-    //this is for new files without a previous manifest
     char manifest_root[MAX_URL_SIZE];
     snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
              job->de->manifest_seg, job->de->name);
-    paths_list[1] = manifest_root;
-    int i;
-
-    dir_entry* de_versions, *de_tmp;
-    for (i = 0; i < 2; i++)
+    if (job->de->manifest_cloud)
     {
+      //delete old segments from prev manifest root
+      cleanup_older_segments(job->de->manifest_cloud, NULL);
+    }
+    char new_manifest_root[MAX_URL_SIZE];
+    snprintf(new_manifest_root, MAX_URL_SIZE, "/%s",
+             job->de->manifest_time);
+    //delete older versions from current manifest (neeed on overwrites)
+    cleanup_older_segments(manifest_root, new_manifest_root);
+
+    /*
+      dir_entry* de_versions, *de_tmp;
+      for (i = 0; i < 2; i++)
+      {
       debugf(DBG_LEVEL_EXT, "internal_upload_segment_prog: try del vers. in %s",
              paths_list[i]);
       if (paths_list[i])
@@ -1965,17 +1978,40 @@ void internal_upload_segment_progressive(void* arg)
         }
         else
           abort();
-    }
+      }
+    */
     //todo: check if all segments are visible in cloud
     //as there are cases when last segment appears late
     //update: issue might not be here, is due to x-copy
-    dir_entry* seg_dir, *tmp;
-    int seg_count;
-    int tries = 0;
+
+    dir_entry* de_tmp = init_dir_entry();
     snprintf(manifest_root, MAX_URL_SIZE, "/%s",
              job->de->manifest_time);
-    do
+    de_tmp->manifest_cloud = strdup(manifest_root);
+
+    int tries = 0;
+    while (!update_segments(de_tmp) && tries < REQUEST_RETRIES
+           && de_tmp->segment_count != job->de->segment_count)
     {
+      //redo
+      tries++;
+      sleep_ms(1000 * tries);
+    }
+
+    if (de_tmp->segment_count != job->de->segment_count)
+    {
+      //how to recover?
+      abort();
+    }
+    cloudfs_free_dir_list(de_tmp);
+    /*
+      dir_entry* seg_dir, *tmp;
+      int seg_count;
+      int tries = 0;
+      snprintf(manifest_root, MAX_URL_SIZE, "/%s",
+             job->de->manifest_time);
+      do
+      {
       seg_count = 0;
       if (!cloudfs_list_directory(manifest_root, &seg_dir))
       {
@@ -1999,13 +2035,19 @@ void internal_upload_segment_progressive(void* arg)
         debugf(DBG_LEVEL_NORM, KRED
                "internal_upload_segment_progr(%s): incomplete upload!",
                job->de->manifest_time);
-        sleep_ms(1000);//wait a bit and retry, maybe segment will appear
+        sleep_ms(1000 * tries);//wait a bit and retry, maybe segment will appear
       }
       tries++;
-    }
-    while (seg_count != job->de->segment_count && tries <= REQUEST_RETRIES);
+      }
+      while (seg_count != job->de->segment_count && tries <= REQUEST_RETRIES);
 
 
+      if (seg_count != job->de->segment_count)
+      {
+      //how to recover?
+      abort();
+      }
+    */
     //signal cfs_flush we're done uploading main file so it can exit
     if (job->de_seg->upload_buf.sem_list[SEM_DONE])
       sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
@@ -2590,6 +2632,7 @@ void get_file_metadata(dir_entry* de)
     {
       //fixme: corrupt file, what to do?
       de->size = 0;
+      //delete from cache?
     }
   }
   else debugf(DBG_LEVEL_EXT, KCYN
@@ -2990,52 +3033,7 @@ void thread_cloudfs_copy_object(void* arg)
   pthread_exit(NULL);
 }
 
-bool cleanup_older_segments(char* dir_path, char* exclude_path)
-{
-  debugf(DBG_LEVEL_EXT, "cleanup_older_segments(%s - %s)", dir_path,
-         exclude_path);
-  assert(dir_path);
-  bool result = false;
-  //delete also parent path if no exception is specified
-  //(if exception is set it might be a child object so don't remove parent
-  if (!exclude_path)
-  {
-    dir_entry* tmp = init_dir_entry();
-    tmp->full_name = strdup(dir_path);
-    tmp->name = "";
-    tmp->isdir = 1;
-    cloudfs_delete_object(tmp);
-    free(tmp);
-    result = true;
-  }
-  else
-  {
-    dir_entry* de_versions, *de_tmp;
-    if (cloudfs_list_directory(dir_path, &de_versions))
-    {
-      while (de_versions)
-      {
-        if (!exclude_path || !strstr(de_versions->full_name, exclude_path))
-        {
-          dir_entry* tmp = init_dir_entry();
-          tmp->full_name = strdup(de_versions->full_name);
-          tmp->name = "";
-          tmp->isdir = 1;
-          cloudfs_delete_object(tmp);
-          free(tmp);
-          result = true;
-        }
-        else
-        {
-          debugf(DBG_LEVEL_EXT, KMAG "not deleting excluded path %s",
-                 de_versions->full_name);
-        }
-        de_versions = de_versions->next;
-      }
-    }
-  }
-  return result;
-}
+
 
 //fixme: this op does not preserve src attributes (e.g. will make rsync not work well)
 // https://ask.openstack.org/en/question/14307/is-there-a-way-to-moverename-an-object/
@@ -3083,6 +3081,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
         }
         //wait for threads if pool is full or this is the last object
         if (active_threads == MAX_COPY_THREADS || !de_tmp->next)
+        {
           for (i = 0; i < active_threads; i++)
           {
             if ((th_ret = pthread_join(threads[i], NULL)) != 0)
@@ -3095,8 +3094,12 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
               break;
             }
             else
-              active_threads = 0;
+              debugf(DBG_LEVEL_EXT, KMAG
+                     "cloudfs_copy_object(%s): copy done thread %d, stat=%d",
+                     de->full_name, i, th_ret);
           }
+          active_threads = 0;
+        }
         de_tmp = de_tmp->next;
       }
     }
@@ -3124,53 +3127,54 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
                                        0, 0, new_de, NULL);
       //now file is updated on cloud
       curl_slist_free_all(headers);
-      /*pthread_create(&threads[active_threads], NULL,
-                     (void*)thread_cloudfs_copy_object, job);
-        if (pthread_join(threads[active_threads], NULL) != 0)
-        {
-        result = -1;
-        abort();
-        }*/
       if (!valid_http_response(response))
         abort();
       else
       {
         assert(!new_de->manifest_cloud);
-
         //delete all segments from source
         char manifest_root[MAX_URL_SIZE];
         char new_manifest_root[MAX_URL_SIZE];
-        snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
-                 de->manifest_seg, de->name);
+        //snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
+        //         de->manifest_seg, de->name);
 
-        cleanup_older_segments(manifest_root, NULL);
+        //cleanup_older_segments(manifest_root, NULL);
         snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
                  new_de->manifest_seg, new_de->name);
         snprintf(new_manifest_root, MAX_URL_SIZE, "/%s", new_de->manifest_time);
         new_de->manifest_cloud = strdup(new_manifest_root);
         //delete older segments from destination, except recent one
         cleanup_older_segments(manifest_root, new_manifest_root);
-        //todo: check if all segments are visible in cloud
+
+        //check if all segments are visible in cloud after copy
         dir_entry* new_dir_entry;
-
-        if (update_segments(new_de))
+        int retries = 0;
+        do
         {
-          if (new_de->segment_count != de->segment_count)
-            abort();
+          if (update_segments(new_de))
+          {
+            if (new_de->segment_count != de->segment_count)
+            {
+              debugf(DBG_LEVEL_EXT, KRED
+                     "cloudfs_copy_object(%s): last segment missing, retry",
+                     de->name);
+            }
+          }
+          retries++;
+          sleep_ms(1000 * retries);
         }
-        else abort();
+        while (new_de->segment_count != de->segment_count
+               || retries < REQUEST_RETRIES);
 
-
-        dir_entry* de_old = replace_cache_object(de, new_de);
-        assert(de_old);
-        //delete source de
-        cloudfs_delete_object(de_old);
-
+        if (new_de->segment_count != de->segment_count)
+        {
+          //still not visible, what to do?
+          abort();
+        }
+        //insert new object in dir_entry list
+        append_dir_entry(new_de);
         new_de->metadata_downloaded = false;
         get_file_metadata(new_de);
-        //copy meta to new de
-        dir_entry* dst_de = path_info(dst);
-        assert(dst_de);
       }
     }
     else

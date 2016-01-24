@@ -324,7 +324,7 @@ while true; do
 		sleep 5
 		setup_test
 	
-		test_upload_medium
+		if test_upload_medium; then exit; fi
 		
 		test_download_medium_copy &
 		test_download_medium
@@ -353,7 +353,7 @@ while true; do
 		
 		echo "Check copy consistency, older segments should be removed..."
 		
-		cache_reset
+		#cache_reset
 		
 		echo ===============
 		echo

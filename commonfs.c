@@ -512,65 +512,17 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
     de->manifest_seg = NULL;
     free(de->manifest_time);
     de->manifest_time = NULL;
+    if (de->segments)
+    {
+      cloudfs_free_dir_list(de->segments);
+      de->segments = NULL;
+    }
     //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
     free(de);
   }
 }
 
-void flags_to_openmode(unsigned int flags, char* openmode)
-{
-  int i = 0;
-  if (flags & O_WRONLY)
-  {
-    debugf(DBG_LEVEL_EXT, "cfs_open: write only detected");
-    openmode[i] = 'w';
-    i++;
-  }
-  if (flags & O_APPEND)
-  {
-    debugf(DBG_LEVEL_EXT, "cfs_open: append detected");
-    openmode[i] = 'a';
-    i++;
-  }
-  if (flags & O_RDONLY)
-  {
-    debugf(DBG_LEVEL_EXT, "cfs_open: read only detected");
-    openmode[i] = 'r';
-    i++;
-  }
-  if (flags & O_RDWR)
-  {
-    debugf(DBG_LEVEL_EXT, "cfs_open: read write detected");
-    openmode[i] = 'w';
-    i++;
-    openmode[i] = '+';
-    i++;
-  }
-  if (flags & O_TRUNC)
-  {
-    debugf(DBG_LEVEL_EXT, "cfs_open: truncate detected");
-    openmode[i] = 'w';
-    i++;
-  }
-  if (flags & O_CREAT)
-  {
-    debugf(DBG_LEVEL_EXT, "cfs_open: create detected");
-    openmode[i] = 'w';
-    i++;
-  }
-  if (flags & O_EXCL)
-    debugf(DBG_LEVEL_EXT, "cfs_open: EXCL detected");
 
-  //default open mode is r/w if none specified just to be safe
-  if (i == 0)
-  {
-    openmode[i] = 'w';
-    i++;
-    openmode[i] = '+';
-    i++;
-  }
-  openmode[i] = 0;//null terminate string
-}
 /*
   return a segment entry from dir_entry
   it assumes segments are stored in sorted ascending order
@@ -1241,6 +1193,25 @@ dir_entry* path_info(const char* path)
   return NULL;
 }
 
+/*
+  appends a dir entry object (file) in cache
+  returns false if parent folder is not found
+*/
+bool append_dir_entry(dir_entry* de)
+{
+  dir_entry* tmp;
+  char new_dir[MAX_PATH_SIZE];
+  dir_for(de->full_name, new_dir);
+  if (!caching_list_directory(new_dir, &tmp))
+    return false;
+  else
+  {
+    while (tmp->next)
+      tmp = tmp->next;
+    tmp->next = de;
+  }
+  return true;
+}
 //retrieve folder from local cache if exists, return null if does not exist (rather than download)
 int internal_check_caching_list_directory(dir_cache* cache,
     pthread_mutex_t mutex, const char* path, dir_entry** list)
@@ -1299,8 +1270,9 @@ dir_entry* check_parent_folder_for_file(const char* path)
   replace an object with a new one in cache.
   returns the old object which must be freed in the caller
 */
-dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
-{
+/*
+  dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
+  {
   debugf(DBG_LEVEL_EXTALL, "replace_cache_object(%s:%s)", de->name,
          de_new->name);
   char dir[MAX_PATH_SIZE];
@@ -1332,7 +1304,8 @@ dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
     prev = tmp;
   }
   return NULL;
-}
+  }
+*/
 
 /*
   check if local path is in cache, without downloading from cloud if not in cache
@@ -1554,9 +1527,119 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   return false;
 }
 
-void add_open_file(const char* path, const char* open_flags,
+bool cleanup_older_segments(char* dir_path, char* exclude_path)
+{
+  debugf(DBG_LEVEL_EXT, "cleanup_older_segments(%s - %s)", dir_path,
+         exclude_path);
+  assert(dir_path);
+  bool result = false;
+  //delete also parent path if no exception is specified
+  //(if exception is set it might be a child object so don't remove parent
+  if (!exclude_path)
+  {
+    dir_entry* tmp = init_dir_entry();
+    tmp->full_name = strdup(dir_path);
+    tmp->name = "";
+    tmp->isdir = 1;
+    cloudfs_delete_object(tmp);
+    free(tmp);
+    result = true;
+  }
+  else
+  {
+    dir_entry* de_versions, *de_tmp;
+    if (cloudfs_list_directory(dir_path, &de_versions))
+    {
+      while (de_versions)
+      {
+        if (!exclude_path || !strstr(de_versions->full_name, exclude_path))
+        {
+          dir_entry* tmp = init_dir_entry();
+          tmp->full_name = strdup(de_versions->full_name);
+          tmp->name = "";
+          tmp->isdir = 1;
+          cloudfs_delete_object(tmp);
+          free(tmp);
+          result = true;
+        }
+        else
+        {
+          debugf(DBG_LEVEL_EXT, KMAG "not deleting excluded path %s",
+                 de_versions->full_name);
+        }
+        de_versions = de_versions->next;
+      }
+    }
+  }
+  return result;
+}
+
+/*
+  O_CREAT = 32768
+  O_RDONLY = 32768
+  O_WRONLY = 32769
+  O_RDWR = 32770
+  O_APPEND = 33792
+*/
+void flags_to_openmode(unsigned int flags, char* openmode)
+{
+  int i = 0;
+  if (flags & O_WRONLY)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: write only detected");
+    openmode[i] = 'w';
+    i++;
+  }
+  if (flags & O_APPEND)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: append detected");
+    openmode[i] = 'a';
+    i++;
+  }
+  if (flags & O_RDONLY)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: read only detected");
+    openmode[i] = 'r';
+    i++;
+  }
+  if (flags & O_RDWR)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: read write detected");
+    openmode[i] = 'w';
+    i++;
+    openmode[i] = 'r';
+    i++;
+  }
+  if (flags & O_TRUNC)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: truncate detected");
+    openmode[i] = 'w';
+    i++;
+  }
+  if (flags & O_CREAT)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: create detected");
+    openmode[i] = 'w';
+    i++;
+  }
+  if (flags & O_EXCL)
+    debugf(DBG_LEVEL_EXT, "cfs_open: EXCL detected");
+
+  //default open mode is r
+  if (i == 0)
+  {
+    debugf(DBG_LEVEL_EXT, "cfs_open: unknown mode, assume read");
+    openmode[i] = 'r';
+    i++;
+  }
+  openmode[i] = 0;//null terminate string
+}
+
+void add_lock_file(const char* path, const char* open_flags,
                    FILE* temp_file, int fd)
 {
+  debugf(DBG_LEVEL_EXT, "add_lock_file(%s): mode=%s fd=%d",
+         path, open_flags, fd);
   open_file* of = (open_file*)malloc(sizeof(open_file));
   of->cached_file = temp_file;
   of->fd = fd;
@@ -1573,7 +1656,7 @@ void add_open_file(const char* path, const char* open_flags,
 }
 
 
-bool remove_open_file(const char* path, int fd)
+bool close_lock_file(const char* path, int fd)
 {
   open_file* of = openfile_list;
   open_file* prev = NULL;
@@ -1607,7 +1690,82 @@ bool remove_open_file(const char* path, int fd)
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
     unlink(file_path_safe);
   }
+  debugf(DBG_LEVEL_EXT, "close_lock_file(%s): %d instances were open", path,
+         count);
   return result;
+}
+
+/*
+  verifies if lock can be obtained
+  if file is open for read, a read lock can be obtained
+  if file is open for write, no lock can be obtained
+*/
+bool can_add_lock(const char* path, char* open_flags)
+{
+  open_file* of = openfile_list;
+  while (of)
+  {
+    if (!strcasecmp(of->path, path))
+    {
+      if (strstr(open_flags, "w") || strstr(open_flags, "a"))
+        return false;
+      if (strstr(open_flags, "r")
+          && (strstr(of->open_flags, "w") || strstr(of->open_flags, "a")))
+        return false;
+    }
+    of = of->next;
+  }
+  return true;
+}
+/*
+  creates or opens a lock file in temp folder with flags mode
+  and returns file descriptor.
+  return -1 if lock can't be obtained
+*/
+int open_lock_file(const char* path, unsigned int flags)
+{
+  debugf(DBG_LEVEL_EXT, "open_lock_file(%s): flags=%d", path, flags);
+  FILE* temp_file = NULL;
+  char open_flags[10];
+  char file_path_safe[NAME_MAX];
+  get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
+  flags_to_openmode(flags, open_flags);
+  int i;
+  bool can_add;
+  for (i = 0; i < LOCK_WAIT_SEC; i++)
+  {
+    can_add = can_add_lock(path, open_flags);
+    if (can_add)
+      break;
+    else sleep_ms(1000);
+  }
+
+  if (!can_add)
+  {
+    debugf(DBG_LEVEL_EXT, KRED
+           "open_lock_file(%s): lock not secured, mode=%s", path, open_flags);
+    return -1;
+  }
+  bool file_exist = access(file_path_safe, F_OK) != -1;
+  if (!file_exist)
+  {
+    //create the file in cache
+    fclose(fopen(file_path_safe, "w"));
+  }
+  //this fails if open mode is r, so need to create file first
+  temp_file = fopen(file_path_safe, open_flags);
+  int errsv = errno;
+  if (!temp_file)
+  {
+    debugf(DBG_LEVEL_EXT, KRED
+           "open_lock_file(%s): lock file busy, mode=%s err=%s",
+           path, open_flags, strerror(errsv));
+    return -1;
+  }
+  int fd = fileno(temp_file);
+  assert(fd != -1);
+  add_lock_file(path, open_flags, temp_file, fd);
+  return fd;
 }
 
 void sleep_ms(int milliseconds)
