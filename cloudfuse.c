@@ -389,8 +389,16 @@ static int cfs_create(const char* path, mode_t mode,
   de->chmod = mode;
   de->uid = geteuid();
   de->gid = getegid();
-
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_create(%s)", path);
+  //fill in manifest data etc
+  path_to_de(path, de);
+  //create empty file
+  int result = cloudfs_create_object(de);
+  if (!result)
+  {
+    debugf(DBG_LEVEL_NORM, KRED"exit: cfs_create(%s), create failed", path);
+    return -EIO;
+  }
+  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_create(%s), success", path);
   return 0;
 }
 

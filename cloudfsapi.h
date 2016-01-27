@@ -83,6 +83,7 @@ int cloudfs_object_read_fp(dir_entry* de, FILE* fp);
 int cloudfs_object_write_fp(dir_entry* de, FILE* fp);
 int cloudfs_list_directory(const char* path, dir_entry**);
 int cloudfs_delete_object(dir_entry* de);
+bool cloudfs_create_object(dir_entry* de);
 bool cloudfs_copy_object(dir_entry* de, const char* dst);
 int cloudfs_create_symlink(dir_entry* de, const char* dst);
 bool cloudfs_create_directory(const char* path);

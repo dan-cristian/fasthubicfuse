@@ -19,6 +19,7 @@ typedef enum { false, true } bool;
 #define MAX_SEGMENT_THREADS 5
 #define MAX_DELETE_THREADS 10
 #define MAX_COPY_THREADS 10
+#define REQUEST_RETRIES 10
 
 #define APP_ID "FastHubicFuse_v0_1"
 
