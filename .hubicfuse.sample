@@ -18,3 +18,4 @@ enable_progressive_download = false
 min_speed_limit_progressive = 0
 min_speed_timeout = 3
 read_ahead = 0
+enable_syslog = true

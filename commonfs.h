@@ -11,9 +11,10 @@ typedef enum { false, true } bool;
 #define MAX_URL_SIZE (MAX_PATH_SIZE * 3)
 // 64 bit time + nanoseconds
 #define TIME_CHARS 32
-#define DBG_LEVEL_NORM 0
-#define DBG_LEVEL_EXT 1
-#define DBG_LEVEL_EXTALL 2
+#define DBG_ERR -1
+#define DBG_NORM 0
+#define DBG_EXT 1
+#define DBG_EXTALL 2
 #define INT_CHAR_LEN 16
 #define MD5_DIGEST_HEXA_STRING_LEN  (2 * MD5_DIGEST_LENGTH + 1)
 #define MAX_SEGMENT_THREADS 5

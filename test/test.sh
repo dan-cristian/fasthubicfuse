@@ -1,9 +1,8 @@
 #!/bin/bash
 
 MOUNT_HUBIC=/mnt/hubic2
-HUB_ROOT=$MOUNT_HUBIC/test
-#HUB=/mnt/hubic2/test/t1
-HUB=$MOUNT_HUBIC/default/test/t2
+HUB=$MOUNT_HUBIC/default/test/t1
+HUB2=$MOUNT_HUBIC/default/test/t2
 CACHE_RESET_CMD=$MOUNT_HUBIC/debug-decache
 #HUB_NOCACHE=$MOUNT_HUBIC/test/ref
 SRC=~/test/ref
@@ -136,15 +135,17 @@ function setup_test(){
 	rm -Rf $TMP/*
 	delete_fuse_cache
 	rm -Rf $HUB/*
+	rm -Rf $HUB2/*
 	rmdir $HUB
+	rmdir $HUB2
 
 	echo Preparing temp folders...
 	mkdir -p $TMP
-	mkdir -p $HUB_ROOT
 
 	if test MKDIR "mkdir $HUB"; then return; fi
 	if test RMDIR "rmdir $HUB"; then return; fi
 	if test "create test folder" "mkdir $HUB"; then return; fi
+	if test MKDIR "mkdir $HUB2"; then return; fi
 }
 
 function cache_reset()
@@ -295,8 +296,59 @@ function test_create(){
 	if test "create empty file" "touch $HUB/touch$TINY"; then return 0; fi
 	if test "new file must exist" "stat $HUB/touch$TINY"; then return 0; fi
 	if test "append to new file" "cat $HUB/$TINY >> $HUB/touch$TINY"; then return 0; fi
-	if check_md5 "$HUB/touch$TINY" "$TINY_MD5"; then return; fi
+	if check_md5 "$HUB/touch$TINY" "$TINY_MD5"; then return 0; fi
 	echo Test completed!
+	echo ---------------
+	return 1
+}
+
+function test_delete_small(){
+	echo "Testing delete file..."
+	if test "delete tiny file" "rm $HUB/$TINY"; then return 0; fi
+	if test_not "old file must not exist" "stat $HUB/$TINY"; then return 0; fi
+	if test "delete small file" "rm $HUB/$SMALL"; then return 0; fi
+	if test_not "old file must not exist" "stat $HUB/$SMALL"; then return 0; fi
+	if test "delete medium file" "rm $HUB/$MEDIUM"; then return 0; fi
+	if test_not "old file must not exist" "stat $HUB/$MEDIUM"; then return 0; fi
+	
+	echo Test completed!
+	echo ---------------
+	return 1
+}
+
+#function to run in parallel
+function test_long_running(){
+	if test "upload2 tiny file" "$COPY_CMD $SRC/$TINY $HUB2/"; then return 0; fi
+	if test "upload2 small file" "$COPY_CMD $SRC/$SMALL $HUB2/"; then return 0; fi
+	if test "upload2 medium file" "$COPY_CMD $SRC/$MEDIUM $HUB2/"; then return 0; fi
+	if test "upload2 large file" "$COPY_CMD $SRC/$LARGE $HUB2/"; then return 0; fi
+	
+	if test "rename2 tiny file" "mv $HUB2/$TINY $HUB2/renamed$TINY"; then return 0; fi
+	if test "rename2 small file" "mv $HUB2/$SMALL $HUB2/renamed$SMALL"; then return 0; fi
+	if test "rename2 medium file" "mv $HUB2/$MEDIUM $HUB2/renamed$MEDIUM"; then return 0; fi
+	if test "rename2 large file" "mv $HUB2/$LARGE $HUB2/renamed$LARGE"; then return 0; fi
+	
+	if test "upload2 tiny file" "$COPY_CMD $SRC/$TINY $HUB2/"; then return 0; fi
+	if test "upload2 small file" "$COPY_CMD $SRC/$SMALL $HUB2/"; then return 0; fi
+	if test "upload2 medium file" "$COPY_CMD $SRC/$MEDIUM $HUB2/"; then return 0; fi
+	if test "upload2 large file" "$COPY_CMD $SRC/$LARGE $HUB2/"; then return 0; fi
+	
+	if test "download2 tiny file" "$COPY_CMD $HUB2/renamed$TINY $TMP/"; then return 0; fi
+	if check_md5 "$TMP/renamed$TINY" "$TINY_MD5"; then return 0; fi
+	if test "download2 small file" "$COPY_CMD $HUB2/renamed$SMALL $TMP/"; then return 0; fi
+	if check_md5 "$TMP/renamed$SMALL" "$SMALL_MD5"; then return 0; fi
+	if test "download2 medium file" "$COPY_CMD $HUB2/renamed$MEDIUM $TMP/"; then return 0; fi
+	if check_md5 "$TMP/renamed$MEDIUM" "$MEDIUM_MD5"; then return 0; fi
+	if test "download2 large file" "$COPY_CMD $HUB2/renamed$LARGE $TMP/"; then return 0; fi
+	if check_md5 "$TMP/renamed$LARGE" "$LARGE_MD5"; then return 0; fi
+	
+	if test "delete2 tiny file" "rm $HUB2/$TINY"; then return 0; fi
+	if test "delete2 small file" "rm $HUB2/$SMALL"; then return 0; fi
+	if test "delete2 medium file" "rm $HUB2/$MEDIUM"; then return 0; fi
+	if test "delete2 large file" "rm $HUB2/$LARGE"; then return 0; fi
+	
+	
+	echo Test2 completed!
 	echo ---------------
 	return 1
 }
@@ -323,11 +375,12 @@ while true; do
 		echo New build detected!
 		sleep 5
 		setup_test
-	
+		
+		test_long_running &
 		if test_upload_medium; then exit; fi
 		
 		test_download_medium_copy &
-		test_download_medium
+		if test_download_medium; then exit; fi
 		
 		
 		if test_upload_small; then exit; fi
@@ -342,10 +395,13 @@ while true; do
 		if test_rename_large; then exit; fi
 		
 		if test_upload_small; then exit; fi
+		if test_upload_medium; then exit; fi
 		
 		if test_chmod; then exit; fi
 		if test_chown; then exit; fi
+		if test_delete_small; then exit; fi
 		if test_upload_small; then exit; fi
+		if test_upload_medium; then exit; fi
 		
 		if test_download_small; then exit; fi
 		if test_download_small; then exit; fi

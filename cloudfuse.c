@@ -41,6 +41,7 @@ extern bool option_enable_progressive_download;
 extern long option_min_speed_limit_progressive;
 extern long option_min_speed_timeout;
 extern long option_read_ahead;
+extern bool option_enable_syslog;
 
 FuseOptions options =
 {
@@ -70,7 +71,8 @@ ExtraFuseOptions extra_options =
   .enable_progressive_download = "false",
   .min_speed_limit_progressive = "0",
   .min_speed_timeout = "3",
-  .read_ahead = "0"
+  .read_ahead = "0",
+  .enable_syslog = "0"
 };
 
 bool initialise_options(struct fuse_args args)
@@ -128,7 +130,9 @@ bool initialise_options(struct fuse_args args)
     option_read_ahead = atoll(extra_options.read_ahead);
   if (*extra_options.min_speed_timeout)
     option_min_speed_timeout = atoll(extra_options.min_speed_timeout);
-
+  if (*extra_options.enable_syslog)
+    option_enable_syslog = !strcasecmp(
+                             extra_options.enable_syslog, "true");
   if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
   {
     fprintf(stderr,
@@ -173,6 +177,8 @@ bool initialise_options(struct fuse_args args)
             "  min_speed_timeout=[number of seconds after which slow operation will be aborted and resumed]\n");
     fprintf(stderr,
             "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
+    fprintf(stderr,
+            "  enable_syslog=[Write debug output also to syslog]\n");
     return false;
   }
   return true;
@@ -181,12 +187,12 @@ bool initialise_options(struct fuse_args args)
 
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_getattr(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_getattr(%s)", path);
   if (debug > 0)
   {
     if (!strcasecmp(path, "/debug-decache"))
     {
-      debugf(DBG_LEVEL_NORM, KRED "DEBUG COMMAND: Cache Reset!", path);
+      debugf(DBG_NORM, KRED "DEBUG COMMAND: Cache Reset!", path);
       clear_full_cache();
       //struct fuse_args args;
       //initialise_options(args);
@@ -202,7 +208,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
     stbuf->st_mode = S_IFDIR | 0755;
     stbuf->st_nlink = 2;
     debug_list_cache_content();
-    debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_getattr(%s)", path);
+    debugf(DBG_NORM, KBLU "exit 0: cfs_getattr(%s)", path);
     return 0;
   }
   //get file. if not in cache will be added
@@ -210,7 +216,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   if (!de)
   {
     debug_list_cache_content();
-    debugf(DBG_LEVEL_NORM, KBLU"exit 1: cfs_getattr(%s) file not found "
+    debugf(DBG_NORM, KBLU"exit 1: cfs_getattr(%s) file not found "
            KYEL "not-in-cache/cloud", path);
     return -ENOENT;
   }
@@ -236,11 +242,11 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   stbuf->st_ctim.tv_nsec = de->ctime.tv_nsec;
   char time_str[TIME_CHARS] = "";
   get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: atime=[%s]", time_str);
+  debugf(DBG_EXTALL, KCYN"cfs_getattr: atime=[%s]", time_str);
   get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: mtime=[%s]", time_str);
+  debugf(DBG_EXTALL, KCYN"cfs_getattr: mtime=[%s]", time_str);
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXTALL, KCYN"cfs_getattr: ctime=[%s]", time_str);
+  debugf(DBG_EXTALL, KCYN"cfs_getattr: ctime=[%s]", time_str);
   int default_mode_dir, default_mode_file;
   if (option_enable_chmod & de->chmod != -1)
   {
@@ -275,7 +281,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
     stbuf->st_mode = S_IFREG | default_mode_file;
     stbuf->st_nlink = 1;
   }
-  debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_getattr(%s) size=%lu", path,
+  debugf(DBG_NORM, KBLU "exit 2: cfs_getattr(%s) size=%lu", path,
          de->size);
   return 0;
 }
@@ -283,7 +289,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
 static int cfs_fgetattr(const char* path, struct stat* stbuf,
                         struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_fgetattr(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_fgetattr(%s)", path);
 
   //openfile* of = (openfile*)(uintptr_t)info->fh;
   //if (of)
@@ -293,7 +299,7 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
   if (!de)
   {
     debug_list_cache_content();
-    debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_fgetattr(%s) "
+    debugf(DBG_NORM, KBLU "exit 1: cfs_fgetattr(%s) "
            KYEL "not-in-cache/cloud", path);
     return -ENOENT;
   }
@@ -305,7 +311,7 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
   stbuf->st_size = de->size;//cloudfs_file_size(of->fd);
   stbuf->st_mode = S_IFREG | default_mode_file;
   stbuf->st_nlink = 1;
-  debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_fgetattr(%s)", path);
+  debugf(DBG_NORM, KBLU "exit 0: cfs_fgetattr(%s)", path);
   return 0;
   //}
 }
@@ -313,14 +319,14 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
 static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
                        off_t offset, struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_readdir(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_readdir(%s)", path);
   dir_entry* de;
   //fixme: if this called while an upload is in progress and cache expires,
   //will remove the cache entries and crash as previous segments are deleted
   if (!caching_list_directory(path, &de))
   {
     debug_list_cache_content();
-    debugf(DBG_LEVEL_NORM, KRED "exit 0: cfs_readdir(%s)", path);
+    debugf(DBG_NORM, KRED "exit 0: cfs_readdir(%s)", path);
     return -ENOLINK;
   }
   filldir(buf, ".", NULL, 0);
@@ -328,22 +334,22 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
   for (; de; de = de->next)
     filldir(buf, de->name, NULL, 0);
   debug_list_cache_content();
-  debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_readdir(%s)", path);
+  debugf(DBG_NORM, KBLU "exit 1: cfs_readdir(%s)", path);
   return 0;
 }
 
 static int cfs_mkdir(const char* path, mode_t mode)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_mkdir(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_mkdir(%s)", path);
   int response = cloudfs_create_directory(path);
   if (response)
   {
     update_dir_cache(path, 0, 1, 0);
     debug_list_cache_content();
-    debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_mkdir(%s)", path);
+    debugf(DBG_NORM, KBLU "exit 0: cfs_mkdir(%s)", path);
     return 0;
   }
-  debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_mkdir(%s) response=%d", path,
+  debugf(DBG_NORM, KRED "exit 1: cfs_mkdir(%s) response=%d", path,
          response);
   return
 
@@ -354,7 +360,7 @@ static int cfs_mkdir(const char* path, mode_t mode)
 static int cfs_create(const char* path, mode_t mode,
                       struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_create(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_create(%s)", path);
   int fd = open_lock_file(path, info->flags);
   if (fd == -1)
     return -EBUSY;
@@ -369,7 +375,7 @@ static int cfs_create(const char* path, mode_t mode,
 
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_create(%s) set utimes as now", path);
+  debugf(DBG_EXT, KCYN"cfs_create(%s) set utimes as now", path);
   de->atime.tv_sec = now.tv_sec;
   de->atime.tv_nsec = now.tv_nsec;
   de->mtime.tv_sec = now.tv_sec;
@@ -380,11 +386,11 @@ static int cfs_create(const char* path, mode_t mode,
   de->ctime_local.tv_nsec = now.tv_nsec;
   char time_str[TIME_CHARS] = "";
   get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_create: atime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"cfs_create: atime=[%s]", time_str);
   get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_create: mtime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"cfs_create: mtime=[%s]", time_str);
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
-  debugf(DBG_LEVEL_EXT, KCYN"cfs_create: ctime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"cfs_create: ctime=[%s]", time_str);
   //set chmod & chown
   de->chmod = mode;
   de->uid = geteuid();
@@ -395,10 +401,10 @@ static int cfs_create(const char* path, mode_t mode,
   int result = cloudfs_create_object(de);
   if (!result)
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit: cfs_create(%s), create failed", path);
+    debugf(DBG_NORM, KRED"exit: cfs_create(%s), create failed", path);
     return -EIO;
   }
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_create(%s), success", path);
+  debugf(DBG_NORM, KBLU "exit: cfs_create(%s), success", path);
   return 0;
 }
 
@@ -410,7 +416,7 @@ static int cfs_create(const char* path, mode_t mode,
 */
 static int cfs_open(const char* path, struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU
+  debugf(DBG_NORM, KBLU
          "cfs_open(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
@@ -427,7 +433,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   //non seek must be set to 0 to enable
   // video players work via samba (as they perform a seek to file end)
   info->nonseekable = 0;
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_open(%s)", path);
+  debugf(DBG_NORM, KBLU "exit: cfs_open(%s)", path);
   return 0;
 }
 
@@ -443,7 +449,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   int sem_val, err;
   int rnd = random_at_most(50);
   //if (offset % 100000 == 0)//avoid clutter
-  debugf(DBG_LEVEL_EXT, KBLU
+  debugf(DBG_EXT, KBLU
          "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
   //sleep_ms(rnd);
   int iters = 0;
@@ -463,7 +469,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       assert(de_seg);
       //offset in segment is different than full file offset
       offset_seg = offset - (segment_index * de->segment_size);
-      debugf(DBG_LEVEL_EXTALL, KMAG
+      debugf(DBG_EXTALL, KMAG
              "cfs_read: while seg path=%s off=%lu segment=%d seg_name=%s md5=%s",
              de->name, offset, segment_index, de_seg->name, de_seg->md5sum);
       if (de_seg)
@@ -473,15 +479,15 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         in_cache = open_segment_cache_md5(de, de_seg, &fp_segment, HTTP_GET);
         if (!in_cache)
         {
-          debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): seg %d " KYEL "not in cache",
+          debugf(DBG_EXT, KMAG "cfs_read(%s): seg %d " KYEL "not in cache",
                  de_seg->name, segment_index);
           download_ahead_segment(de_seg, de, fp_segment, true);
           if (de_seg->downld_buf.mutex_initialised)
           {
-            debugf(DBG_LEVEL_EXT, KBLU
+            debugf(DBG_EXT, KBLU
                    "cfs_read: 1-wait lock seg=%s", de_seg->name);
             pthread_mutex_lock(&de_seg->downld_buf.mutex);
-            debugf(DBG_LEVEL_EXT, KBLU
+            debugf(DBG_EXT, KBLU
                    "cfs_read: 1-wait data seg=%s", de_seg->name);
             if (de_seg->downld_buf.sem_list[SEM_FULL])
               sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
@@ -489,21 +495,21 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           }
           else
           {
-            debugf(DBG_LEVEL_EXT, KBLU
+            debugf(DBG_EXT, KBLU
                    "cfs_read: 2-wait data seg=%s", de_seg->name);
             if (de_seg->downld_buf.sem_list[SEM_FULL])
               sem_wait(de_seg->downld_buf.sem_list[SEM_FULL]);
           }
-          debugf(DBG_LEVEL_EXT, KBLU
+          debugf(DBG_EXT, KBLU
                  "cfs_read: got full data seg=%s", de_seg->name);
           fclose(fp_segment);
           fp_segment = NULL;
           in_cache = open_segment_cache_md5(de, de_seg, &fp_segment, HTTP_GET);
           if (!in_cache)
-            debugf(DBG_LEVEL_EXT, KYEL
+            debugf(DBG_EXT, KYEL
                    "cfs_read: read ahead failed seg=%s", de_seg->name);
           else
-            debugf(DBG_LEVEL_EXT, "cfs_read: read ahead OK seg=%s", de_seg->name);
+            debugf(DBG_EXT, "cfs_read: read ahead OK seg=%s", de_seg->name);
         }
 
         if (in_cache)
@@ -514,7 +520,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             result = pread(fno, buf, size, offset_seg);
             err = errno;
             if (offset % 100000 == 0)
-              debugf(DBG_LEVEL_EXT, KBLU
+              debugf(DBG_EXT, KBLU
                      "cfs_read(%s) fno=%d fp=%p part=%d off=%lu res=%lu",
                      de_seg->name, fno, fp_segment, segment_index, offset_seg, result);
             close(fno);
@@ -530,7 +536,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
               return result;
             else
             {
-              debugf(DBG_LEVEL_EXT, KMAG "cfs_read(%s): done serving segment %d",
+              debugf(DBG_EXT, KMAG "cfs_read(%s): done serving segment %d",
                      path, segment_index);
               //force download (or read from cache) of a new segment
               segment_index++;
@@ -541,7 +547,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           }
           else //fno == -1
           {
-            debugf(DBG_LEVEL_NORM, KRED "cfs_read(%s): error seg_fp(%p) fileno=-1",
+            debugf(DBG_NORM, KRED "cfs_read(%s): error seg_fp(%p) fileno=-1",
                    path, fp_segment);//de_seg->downld_buf.local_cache_file);
             fclose(fp_segment);//de_seg->downld_buf.local_cache_file);
             //de_seg->downld_buf.local_cache_file = NULL;
@@ -558,7 +564,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
               && de->downld_buf.fuse_read_size != size)
           {
             //todo: fuse buffer size is changing from time to time (mostly on ops via samba), why?
-            debugf(DBG_LEVEL_EXT, KRED
+            debugf(DBG_EXT, KRED
                    "cfs_read: fuse size changed since last cfs_read, old=%lu new=%lu",
                    de->downld_buf.fuse_read_size, size);
             //sleep_ms(100);
@@ -570,18 +576,18 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           de->downld_buf.readptr = buf;
           sem_getvalue(de->downld_buf.sem_list[SEM_EMPTY], &sem_val);
           //signal we need data, buffer is empty, triggers http data copy to buf
-          debugf(DBG_LEVEL_EXT, KBLU
+          debugf(DBG_EXT, KBLU
                  "cfs_read: post empty data, buf_size=%lu sem=%d",
                  size, sem_val);
           sem_post(de->downld_buf.sem_list[SEM_EMPTY]);
           sem_getvalue(de->downld_buf.sem_list[SEM_FULL], &sem_val);
-          debugf(DBG_LEVEL_EXT, KBLU "cfs_read: wait full data sem=%d",
+          debugf(DBG_EXT, KBLU "cfs_read: wait full data sem=%d",
                  sem_val);
           //wait until data buffer is full
           sem_wait(de->downld_buf.sem_list[SEM_FULL]);
-          debugf(DBG_LEVEL_EXT, KBLU "cfs_read: got full data size=%lu",
+          debugf(DBG_EXT, KBLU "cfs_read: got full data size=%lu",
                  de->downld_buf.work_buf_size);
-          debugf(DBG_LEVEL_EXT, KBLU "cfs_read: exit ret_code=%lu",
+          debugf(DBG_EXT, KBLU "cfs_read: exit ret_code=%lu",
                  de->downld_buf.work_buf_size);
           return de->downld_buf.work_buf_size;
         }
@@ -594,7 +600,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   //non-segmented files
   if (de && !de->is_segmented)
   {
-    debugf(DBG_LEVEL_NORM, "cfs_read(%s): read non segmented file", path);
+    debugf(DBG_NORM, "cfs_read(%s): read non segmented file", path);
     bool in_cache;
     FILE* fp_file = NULL;
     while (result <= 0)
@@ -607,10 +613,10 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         fp_file = NULL;
         in_cache = open_file_cache_md5(de, &fp_file, HTTP_GET);
         if (!in_cache)
-          debugf(DBG_LEVEL_EXT, KYEL
+          debugf(DBG_EXT, KYEL
                  "cfs_read: download failed file=%s", de->name);
         else
-          debugf(DBG_LEVEL_EXT, "cfs_read: download OK file=%s", de->name);
+          debugf(DBG_EXT, "cfs_read: download OK file=%s", de->name);
       }
 
       if (in_cache)
@@ -620,7 +626,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         {
           result = pread(fno, buf, size, offset);
           err = errno;
-          debugf(DBG_LEVEL_EXT, KBLU "cfs_read(%s) fno=%d fp=%p err=%s",
+          debugf(DBG_EXT, KBLU "cfs_read(%s) fno=%d fp=%p err=%s",
                  de->name, fno, fp_file, strerror(err));
           close(fno);
           fclose(fp_file);
@@ -631,7 +637,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
       }
       else
       {
-        debugf(DBG_LEVEL_NORM, KRED "cfs_read(%s): unable to download", de->name);
+        debugf(DBG_NORM, KRED "cfs_read(%s): unable to download", de->name);
         return -ENOENT;
       }
     }//end while
@@ -644,7 +650,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
 //and to only save meta when just attribs are modified.
 static int cfs_flush(const char* path, struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU
+  debugf(DBG_NORM, KBLU
          "cfs_flush(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
@@ -652,7 +658,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   //exit on null paths
   if (!path)
   {
-    debugf(DBG_LEVEL_NORM, KRED "cfs_flush: received NULL path");
+    debugf(DBG_NORM, KRED "cfs_flush: received NULL path");
     return 0;
   }
 
@@ -668,7 +674,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   {
     if (de_upload)
     {
-      debugf(DBG_LEVEL_EXT, KMAG
+      debugf(DBG_EXT, KMAG
              "cfs_flush(%s): upload done, size=%lu", path, de_upload->size);
 
       if (de_upload->is_segmented)
@@ -676,12 +682,12 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
         assert(de_seg);
         //will be blocked until http upload trully terminates
-        debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): seg_count=%d",
+        debugf(DBG_EXT, KMAG "cfs_flush(%s): seg_count=%d",
                de_upload->name, de_upload->segment_count);
         //unblock the last segment wait in http callback
         if (de_seg->upload_buf.sem_list[SEM_FULL])
         {
-          debugf(DBG_LEVEL_EXT, KMAG "cfs_flush(%s): finishing upload operation",
+          debugf(DBG_EXT, KMAG "cfs_flush(%s): finishing upload operation",
                  de->name);
           sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
           //wait until upload and cleanup of previous versions fully completes
@@ -718,7 +724,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     }
     else//not upload
     {
-      debugf(DBG_LEVEL_EXT, KMAG
+      debugf(DBG_EXT, KMAG
              "cfs_flush(%s): non-upload done, size=%lu", path, de->size);
     }
     errsv = 0;
@@ -730,64 +736,64 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     {
       if (/*file_changed_time(de) || */file_changed_md5(de))
       {
-        debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content changed", de->name);
+        debugf(DBG_EXT, "cfs_flush(%s): time/content changed", de->name);
         cloudfs_upload_segment(de, de);
       }
       else
-        debugf(DBG_LEVEL_EXT, "cfs_flush(%s): time/content not changed", de->name);
+        debugf(DBG_EXT, "cfs_flush(%s): time/content not changed", de->name);
     }
   }
 
   close_lock_file(de->full_name, info->fh);
 
-  debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
+  debugf(DBG_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
          strerror(errsv));
   return 0;
 }
 
 static int cfs_release(const char* path, struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU
+  debugf(DBG_NORM, KBLU
          "cfs_release(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
   //if (info->fh != -1)
   //  close(((openfile*)(uintptr_t)info->fh)->fd);
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_release(%s)", path);
+  debugf(DBG_NORM, KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
 
 static int cfs_rmdir(const char* path)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_rmdir(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_rmdir(%s)", path);
   dir_entry* de = check_path_info(path);
   int success = cloudfs_delete_object(de);
   if (success == -1)
   {
-    debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_rmdir(%s)", path);
+    debugf(DBG_NORM, KBLU "exit 0: cfs_rmdir(%s)", path);
     return -ENOTEMPTY;
   }
   if (success)
   {
     dir_decache(path);
-    debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_rmdir(%s)", path);
+    debugf(DBG_NORM, KBLU "exit 1: cfs_rmdir(%s)", path);
     return 0;
   }
-  debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_rmdir(%s)", path);
+  debugf(DBG_NORM, KBLU "exit 2: cfs_rmdir(%s)", path);
   return -ENOENT;
 }
 
 static int cfs_ftruncate(const char* path, off_t size,
                          struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_ftruncate(%s): size=%lu", path, size);
+  debugf(DBG_NORM, KBLU "cfs_ftruncate(%s): size=%lu", path, size);
   /*openfile* of = (openfile*)(uintptr_t)info->fh;
     if (ftruncate(of->fd, size))
     return -errno;
     lseek(of->fd, 0, SEEK_SET);
     update_dir_cache(path, size, 0, 0);
   */
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_ftruncate(%s)", path);
+  debugf(DBG_NORM, KBLU "exit: cfs_ftruncate(%s)", path);
   return 0;
 }
 
@@ -802,10 +808,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
                      off_t offset, struct fuse_file_info* info)
 {
   if (offset == 0)//avoid clutter
-    debugf(DBG_LEVEL_EXT, KBLU
+    debugf(DBG_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   else
-    debugf(DBG_LEVEL_EXT, KBLU
+    debugf(DBG_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   int result, errsv;
   dir_entry* de;// = check_path_info(path);
@@ -836,7 +842,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       free(de->md5sum_local);
       de->md5sum_local = NULL;
     }
-    debugf(DBG_LEVEL_EXT, KBLU "exit 0: cfs_write(%s) result=%s", path,
+    debugf(DBG_EXT, KBLU "exit 0: cfs_write(%s) result=%s", path,
            strerror(errsv));
     return result;
   }
@@ -885,7 +891,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         {
           sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
           prev_seg->upload_buf.signaled_completion = true;
-          debugf(DBG_LEVEL_EXT, KMAG
+          debugf(DBG_EXT, KMAG
                  "cfs_write(%s): signal prev segment %s complete", path, prev_seg->name);
         }
       }
@@ -931,7 +937,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
         //pthread_mutex_unlock(&de_seg->upload_buf.mutex);
 
-        debugf(DBG_LEVEL_EXTALL, KMAG
+        debugf(DBG_EXTALL, KMAG
                "cfs_write(%s:%s): buffer full, work_size=%lu",
                de->name, de_seg->name,
                de_seg->upload_buf.work_buf_size);
@@ -954,7 +960,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       de_seg->upload_buf.fuse_buf_size = length;
 
     if (offset == 0)
-      debugf(DBG_LEVEL_EXTALL,
+      debugf(DBG_EXTALL,
              KMAG "cfs_write(%s): exit, work_size=%lu, seg_count=%d",
              path, de_seg->upload_buf.work_buf_size, de->segment_count);
     return length;
@@ -963,7 +969,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
 
 static int cfs_unlink(const char* path)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_unlink(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_unlink(%s)", path);
   int fd = open_lock_file(path, 0);
   if (fd == -1)
     return -EBUSY;
@@ -972,50 +978,50 @@ static int cfs_unlink(const char* path)
   close_lock_file(path, fd);
   if (success == -1)
   {
-    debugf(DBG_LEVEL_NORM, KRED "exit 0: cfs_unlink(%s)", path);
+    debugf(DBG_NORM, KRED "exit 0: cfs_unlink(%s)", path);
     return -EACCES;
   }
   if (success)
   {
     dir_decache(path);
-    debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_unlink(%s)", path);
+    debugf(DBG_NORM, KBLU "exit 1: cfs_unlink(%s)", path);
     return 0;
   }
-  debugf(DBG_LEVEL_NORM, KRED "exit 2: cfs_unlink(%s)", path);
+  debugf(DBG_NORM, KRED "exit 2: cfs_unlink(%s)", path);
   return -ENOENT;
 }
 
 static int cfs_fsync(const char* path, int idunno,
                      struct fuse_file_info* info)
 {
-  debugf(DBG_LEVEL_NORM, "cfs_fsync(%s)", path);
+  debugf(DBG_NORM, "cfs_fsync(%s)", path);
   return 0;
 }
 
 //todo: implement this
 static int cfs_truncate(const char* path, off_t size)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
+  debugf(DBG_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
   dir_entry* de = check_path_info(path);
   assert(de);
   clock_gettime(CLOCK_REALTIME, &de->ctime_local);
   //cloudfs_object_truncate(de, size);
-  debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_truncate(%s)", path);
+  debugf(DBG_NORM, KBLU "exit: cfs_truncate(%s)", path);
   return 0;
 }
 
 //this is called regularly on copy (via mc), is optimised (cached)
 static int cfs_statfs(const char* path, struct statvfs* stat)
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_statfs(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_statfs(%s)", path);
   if (cloudfs_statfs(path, stat))
   {
-    debugf(DBG_LEVEL_NORM, KBLU "exit 0: cfs_statfs(%s)", path);
+    debugf(DBG_NORM, KBLU "exit 0: cfs_statfs(%s)", path);
     return 0;
   }
   else
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit 1: cfs_statfs(%s) not-found", path);
+    debugf(DBG_NORM, KRED"exit 1: cfs_statfs(%s) not-found", path);
     return -EIO;
   }
 }
@@ -1024,20 +1030,20 @@ static int cfs_chown(const char* path, uid_t uid, gid_t gid)
 {
   if (option_enable_chown)
   {
-    debugf(DBG_LEVEL_NORM, KBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
+    debugf(DBG_NORM, KBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
     dir_entry* de = check_path_info(path);
     if (de)
     {
       if (de->uid != uid || de->gid != gid)
       {
-        debugf(DBG_LEVEL_NORM, "cfs_chown(%s): change from uid:gid %d:%d to %d:%d",
+        debugf(DBG_NORM, "cfs_chown(%s): change from uid:gid %d:%d to %d:%d",
                path, de->uid, de->gid, uid, gid);
         de->uid = uid;
         de->gid = gid;
         int response = cloudfs_update_meta(de);
       }
     }
-    debugf(DBG_LEVEL_NORM, KBLU "exit: cfs_chown(%s,%d,%d)", path, uid, gid);
+    debugf(DBG_NORM, KBLU "exit: cfs_chown(%s,%d,%d)", path, uid, gid);
   }
   return 0;
 }
@@ -1046,26 +1052,26 @@ static int cfs_chmod(const char* path, mode_t mode)
 {
   if (option_enable_chmod)
   {
-    debugf(DBG_LEVEL_NORM, KBLU"cfs_chmod(%s,%d)", path, mode);
+    debugf(DBG_NORM, KBLU"cfs_chmod(%s,%d)", path, mode);
     dir_entry* de = check_path_info(path);
     if (de)
     {
       if (de->chmod != mode)
       {
-        debugf(DBG_LEVEL_NORM, "cfs_chmod(%s): change mode from %d to %d", path,
+        debugf(DBG_NORM, "cfs_chmod(%s): change mode from %d to %d", path,
                de->chmod, mode);
         de->chmod = mode;
         int response = cloudfs_update_meta(de);
       }
     }
-    debugf(DBG_LEVEL_NORM, KBLU"exit: cfs_chmod(%s,%d)", path, mode);
+    debugf(DBG_NORM, KBLU"exit: cfs_chmod(%s,%d)", path, mode);
   }
   return 0;
 }
 
 static int cfs_rename(const char* src, const char* dst)
 {
-  debugf(DBG_LEVEL_NORM, KBLU"cfs_rename(%s, %s)", src, dst);
+  debugf(DBG_NORM, KBLU"cfs_rename(%s, %s)", src, dst);
   int fd_src = open_lock_file(src, FUSE_FLAG_O_RDONLY);
   if (fd_src == -1)
     return -EBUSY;
@@ -1079,12 +1085,12 @@ static int cfs_rename(const char* src, const char* dst)
   dir_entry* src_de = path_info(src);
   if (!src_de)
   {
-    debugf(DBG_LEVEL_NORM, KRED "exit 0: cfs_rename(%s,%s) not-found", src, dst);
+    debugf(DBG_NORM, KRED "exit 0: cfs_rename(%s,%s) not-found", src, dst);
     return -ENOENT;
   }
   if (src_de->isdir)
   {
-    debugf(DBG_LEVEL_NORM, KRED "exit 1: cfs_rename(%s,%s) cannot rename dirs!",
+    debugf(DBG_NORM, KRED "exit 1: cfs_rename(%s,%s) cannot rename dirs!",
            src, dst);
     return -EISDIR;
   }
@@ -1094,46 +1100,46 @@ static int cfs_rename(const char* src, const char* dst)
     cloudfs_delete_object(src_de);
     close_lock_file(src, fd_src);
     close_lock_file(dst, fd_dst);
-    debugf(DBG_LEVEL_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
+    debugf(DBG_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
     return 0;
   }
-  debugf(DBG_LEVEL_NORM, KRED"exit 3: cfs_rename(%s,%s) io error", src, dst);
+  debugf(DBG_NORM, KRED"exit 3: cfs_rename(%s,%s) io error", src, dst);
   return -EIO;
 }
 
 static int cfs_symlink(const char* src, const char* dst)
 {
-  debugf(DBG_LEVEL_NORM, KBLU"cfs_symlink(%s, %s)", src, dst);
+  debugf(DBG_NORM, KBLU"cfs_symlink(%s, %s)", src, dst);
   dir_entry* de = check_path_info(src);
   if (cloudfs_create_symlink(de, dst))
   {
     update_dir_cache(dst, 1, 0, 1);
-    debugf(DBG_LEVEL_NORM, KBLU"exit0: cfs_symlink(%s, %s)", src, dst);
+    debugf(DBG_NORM, KBLU"exit0: cfs_symlink(%s, %s)", src, dst);
     return 0;
   }
-  debugf(DBG_LEVEL_NORM, KRED"exit1: cfs_symlink(%s, %s) io error", src, dst);
+  debugf(DBG_NORM, KRED"exit1: cfs_symlink(%s, %s) io error", src, dst);
   return -EIO;
 }
 
 static int cfs_readlink(const char* path, char* buf, size_t size)
 {
-  debugf(DBG_LEVEL_NORM, KBLU"cfs_readlink(%s)", path);
+  debugf(DBG_NORM, KBLU"cfs_readlink(%s)", path);
   dir_entry* de = check_path_info(path);
   //fixme: use temp file specified in config
   FILE* temp_file = tmpfile();
   int ret = 0;
   if (!cloudfs_object_write_fp(de, temp_file))
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit 1: cfs_readlink(%s) not found", path);
+    debugf(DBG_NORM, KRED"exit 1: cfs_readlink(%s) not found", path);
     ret = -ENOENT;
   }
   if (!pread(fileno(temp_file), buf, size, 0))
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit 2: cfs_readlink(%s) not found", path);
+    debugf(DBG_NORM, KRED"exit 2: cfs_readlink(%s) not found", path);
     ret = -ENOENT;
   }
   fclose(temp_file);
-  debugf(DBG_LEVEL_NORM, KBLU"exit 3: cfs_readlink(%s)", path);
+  debugf(DBG_NORM, KBLU"exit 3: cfs_readlink(%s)", path);
   return ret;
 }
 
@@ -1147,12 +1153,12 @@ static void* cfs_init(struct fuse_conn_info* conn)
 //http://man7.org/linux/man-pages/man2/utimensat.2.html
 static int cfs_utimens(const char* path, const struct timespec times[2])
 {
-  debugf(DBG_LEVEL_NORM, KBLU "cfs_utimens(%s)", path);
+  debugf(DBG_NORM, KBLU "cfs_utimens(%s)", path);
   // looking for file entry in cache
   dir_entry* de = path_info(path);
   if (!de)
   {
-    debugf(DBG_LEVEL_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);
+    debugf(DBG_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);
     return -ENOENT;
   }
   if (de->atime.tv_sec != times[0].tv_sec
@@ -1160,15 +1166,15 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
       de->mtime.tv_sec != times[1].tv_sec
       || de->mtime.tv_nsec != times[1].tv_nsec)
   {
-    debugf(DBG_LEVEL_EXT, KCYN
+    debugf(DBG_EXT, KCYN
            "cfs_utimens: change %s prev: atime=%li.%li mtime=%li.%li new: atime=%li.%li mtime=%li.%li",
            path, de->atime.tv_sec, de->atime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
            times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
     char time_str[TIME_CHARS] = "";
     get_timespec_as_str(&times[1], time_str, sizeof(time_str));
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: set mtime=[%s]", time_str);
+    debugf(DBG_EXT, KCYN"cfs_utimens: set mtime=[%s]", time_str);
     get_timespec_as_str(&times[0], time_str, sizeof(time_str));
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: set atime=[%s]", time_str);
+    debugf(DBG_EXT, KCYN"cfs_utimens: set atime=[%s]", time_str);
     de->atime = times[0];
     de->mtime = times[1];
     // not sure how to best obtain ctime from fuse source file
@@ -1177,8 +1183,8 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     cloudfs_update_meta(de);
   }
   else
-    debugf(DBG_LEVEL_EXT, KCYN"cfs_utimens: a/m/time not changed");
-  debugf(DBG_LEVEL_NORM, KBLU "exit 1: cfs_utimens(%s)", path);
+    debugf(DBG_EXT, KCYN"cfs_utimens: a/m/time not changed");
+  debugf(DBG_NORM, KBLU "exit 1: cfs_utimens(%s)", path);
   return 0;
 }
 
@@ -1186,27 +1192,27 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
 int cfs_setxattr(const char* path, const char* name, const char* value,
                  size_t size, int flags)
 {
-  debugf(DBG_LEVEL_EXT, KBLU "cfs_setxattr(%s): name=%s value=%s",
+  debugf(DBG_EXT, KBLU "cfs_setxattr(%s): name=%s value=%s",
          path, name, value);
   return 0;
 }
 
 int cfs_getxattr(const char* path, const char* name, char* value, size_t size)
 {
-  debugf(DBG_LEVEL_EXT, KBLU "cfs_getxattr(%s): name=%s value=%s",
+  debugf(DBG_EXT, KBLU "cfs_getxattr(%s): name=%s value=%s",
          path, name, value);
   return 0;
 }
 
 int cfs_removexattr(const char* path, const char* name)
 {
-  debugf(DBG_LEVEL_EXT, KBLU "cfs_removexattr(%s): name=%s", path, name);
+  debugf(DBG_EXT, KBLU "cfs_removexattr(%s): name=%s", path, name);
   return 0;
 }
 
 int cfs_listxattr(const char* path, char* list, size_t size)
 {
-  debugf(DBG_LEVEL_EXT, KBLU "cfs_listxattr(%s): name=%s", path);
+  debugf(DBG_EXT, KBLU "cfs_listxattr(%s): name=%s", path);
   return 0;
 }
 
@@ -1242,7 +1248,8 @@ int parse_option(void* data, const char* arg, int key,
              extra_options.min_speed_limit_progressive) ||
       sscanf(arg, " min_speed_timeout = %[^\r\n ]",
              extra_options.min_speed_timeout) ||
-      sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead)
+      sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead) ||
+      sscanf(arg, " enable_syslog = %[^\r\n ]", extra_options.enable_syslog)
      )
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -1261,7 +1268,7 @@ int main(int argc, char** argv)
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if (!initialise_options(args))
     return 1;
-
+  debugf(DBG_ERR, "Starting hubicfuse");
   fuse_opt_parse(&args, &options, NULL, parse_option);
   cloudfs_init();
   if (debug)

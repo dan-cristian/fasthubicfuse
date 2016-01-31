@@ -22,6 +22,7 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <errno.h>
+#include <syslog.h>
 #include "commonfs.h"
 #include "config.h"
 
@@ -50,9 +51,11 @@ bool option_enable_chown = false;
 bool option_enable_chmod = false;
 bool option_enable_progressive_upload = false;
 bool option_enable_progressive_download = false;
+bool option_enable_syslog = false;
 long option_min_speed_limit_progressive = 0;//use long not double
 long option_min_speed_timeout;
 long option_read_ahead = 0;
+
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -89,11 +92,11 @@ time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size)
   loc_time_tm = *localtime(&time_t_val);
   if (time_str != NULL)
   {
-    //debugf(DBG_LEVEL_NORM, 0,"Local len=%d size=%d pass=%d", strlen(time_str), sizeof(time_str), char_buf_size);
+    //debugf(DBG_NORM, 0,"Local len=%d size=%d pass=%d", strlen(time_str), sizeof(time_str), char_buf_size);
     strftime(time_str, char_buf_size, "%c", &loc_time_tm);
-    //debugf(DBG_LEVEL_NORM, 0,"Local timestr=[%s] size=%d", time_str, strlen(time_str));
+    //debugf(DBG_NORM, 0,"Local timestr=[%s] size=%d", time_str, strlen(time_str));
   }
-  //debugf(DBG_LEVEL_NORM, 0,"Local time_t %li", mktime(&loc_time_tm));
+  //debugf(DBG_NORM, 0,"Local time_t %li", mktime(&loc_time_tm));
   return mktime(&loc_time_tm);
 }
 
@@ -105,8 +108,8 @@ int get_time_as_string(time_t time_t_val, long nsec, char* time_str,
   //if time is incorrect (too long) you get segfault, need to check length and trim
   if (time_t_val > INT_MAX)
   {
-    debugf(DBG_LEVEL_NORM,
-           KRED"get_time_as_string: input time length too long, %lu > max=%lu, trimming!",
+    debugf(DBG_NORM, KRED
+           "get_time_as_string: input time too long, %lu > max=%lu, trimming!",
            time_t_val, INT_MAX);
     safe_input_time = 0;//(int)time_t_val;
   }
@@ -175,10 +178,10 @@ char* str2md5(const char* str, int length)
 */
 int file_md5(FILE* file_handle, char* md5_file_str)
 {
-  debugf(DBG_LEVEL_EXT, "file_md5: start compute sum fp=%p", file_handle);
+  debugf(DBG_EXT, "file_md5: start compute sum fp=%p", file_handle);
   if (file_handle == NULL)
   {
-    debugf(DBG_LEVEL_NORM, KRED"file_md5: NULL file handle");
+    debugf(DBG_NORM, KRED"file_md5: NULL file handle");
     return 0;
   }
 
@@ -189,7 +192,12 @@ int file_md5(FILE* file_handle, char* md5_file_str)
   char mdchar[3];//2 chars for md5 + null string terminator
   unsigned char* data_buf = malloc(1024 * sizeof(unsigned char));
   MD5_Init(&mdContext);
-  assert(fseek(file_handle, 0, SEEK_SET) == 0);
+  int seekres = fseek(file_handle, 0, SEEK_SET);
+  if (seekres != 0)
+  {
+    debugf(DBG_EXT, KRED "unable to seek to 0, res=%d", seekres);
+    abort();
+  }
   while ((bytes = fread(data_buf, 1, 1024, file_handle)) != 0)
     MD5_Update(&mdContext, data_buf, bytes);
   MD5_Final(c, &mdContext);
@@ -200,7 +208,7 @@ int file_md5(FILE* file_handle, char* md5_file_str)
     //fprintf(stderr, "%02x", c[i]);
   }
   free(data_buf);
-  debugf(DBG_LEVEL_EXT, "file_md5: end compute sum=%s fp=%p",
+  debugf(DBG_EXT, "file_md5: end compute sum=%s fp=%p",
          md5_file_str, file_handle);
   return 0;
 }
@@ -244,7 +252,7 @@ bool complete_job_md5(thread_job* job)
 
 void free_thread_job(thread_job* job)
 {
-  debugf(DBG_LEVEL_EXT, "free_thread_job: freeing job");
+  debugf(DBG_EXT, "free_thread_job: freeing job");
   free(job->md5str);
   free(job->self_reference);
 }
@@ -368,14 +376,14 @@ void debug_print_flags(int flags)
 {
   int accmode, val;
   accmode = flags & O_ACCMODE;
-  if (accmode == O_RDONLY)            debugf(DBG_LEVEL_EXTALL, KYEL"read only");
-  else if (accmode == O_WRONLY)   debugf(DBG_LEVEL_EXTALL, KYEL"write only");
-  else if (accmode == O_RDWR)     debugf(DBG_LEVEL_EXTALL, KYEL"read write");
-  else debugf(DBG_LEVEL_EXT, KYEL"unknown access mode");
-  if (val & O_APPEND)         debugf(DBG_LEVEL_EXTALL, KYEL", append");
-  if (val & O_NONBLOCK)       debugf(DBG_LEVEL_EXTALL, KYEL", nonblocking");
+  if (accmode == O_RDONLY)            debugf(DBG_EXTALL, KYEL"read only");
+  else if (accmode == O_WRONLY)   debugf(DBG_EXTALL, KYEL"write only");
+  else if (accmode == O_RDWR)     debugf(DBG_EXTALL, KYEL"read write");
+  else debugf(DBG_EXT, KYEL"unknown access mode");
+  if (val & O_APPEND)         debugf(DBG_EXTALL, KYEL", append");
+  if (val & O_NONBLOCK)       debugf(DBG_EXTALL, KYEL", nonblocking");
 #if !defined(_POSIX_SOURCE) && defined(O_SYNC)
-  if (val & O_SYNC)           debugf(DBG_LEVEL_EXT, 0,
+  if (val & O_SYNC)           debugf(DBG_EXT, 0,
                                        KRED ", synchronous writes");
 #endif
 }
@@ -394,11 +402,11 @@ void debug_print_file_name(FILE* fp)
     sprintf(proclnk, "/proc/self/fd/%d", fno);
     r = readlink(proclnk, filename, MAXSIZE);
     if (r < 0)
-      debugf(DBG_LEVEL_EXT, KRED"debug_print_file_name: "KYEL"failed to readlink");
+      debugf(DBG_EXT, KRED"debug_print_file_name: "KYEL"failed to readlink");
     else
     {
       filename[r] = '\0';
-      debugf(DBG_LEVEL_EXT, KMAG"fp -> fno -> filename: %p -> %d -> %s\n",
+      debugf(DBG_EXT, KMAG"fp -> fno -> filename: %p -> %d -> %s\n",
              fp, fno, filename);
     }
   }
@@ -409,7 +417,7 @@ void debug_print_descriptor(struct fuse_file_info* info)
   return;
   char file_path[MAX_PATH_SIZE];
   get_file_path_from_fd(info->fh, file_path, sizeof(file_path));
-  debugf(DBG_LEVEL_EXTALL, KCYN "descriptor localfile=[%s] fd=%d", file_path,
+  debugf(DBG_EXTALL, KCYN "descriptor localfile=[%s] fd=%d", file_path,
          info->fh);
   debug_print_flags(info->flags);
 }
@@ -430,19 +438,19 @@ void debug_list_cache_content()
   dir_entry* de;
   for (cw = dcache; cw; cw = cw->next)
   {
-    debugf(DBG_LEVEL_EXT, "LIST-CACHE: DIR[%s]", cw->path);
+    debugf(DBG_EXT, "LIST-CACHE: DIR[%s]", cw->path);
     for (de = cw->entries; de; de = de->next)
-      debugf(DBG_LEVEL_EXT, "LIST-CACHE:   FOLDER[%s]", de->full_name);
+      debugf(DBG_EXT, "LIST-CACHE:   FOLDER[%s]", de->full_name);
   }
 }
 
 int delete_file(char* path)
 {
-  debugf(DBG_LEVEL_NORM, KYEL"delete_file(%s)", path);
+  debugf(DBG_NORM, KYEL"delete_file(%s)", path);
   char file_path_safe[NAME_MAX] = "";
   get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
   int result = unlink(file_path_safe);
-  debugf(DBG_LEVEL_EXT, KYEL "delete_file(%s): local=%s, result=%s", path,
+  debugf(DBG_EXT, KYEL "delete_file(%s): local=%s, result=%s", path,
          file_path_safe, strerror(result));
   return result;
 }
@@ -450,7 +458,7 @@ int delete_file(char* path)
 //adding a directory in cache
 dir_cache* internal_new_cache(dir_cache** cache, const char* path)
 {
-  debugf(DBG_LEVEL_NORM, KCYN"new_cache(%s)", path);
+  debugf(DBG_NORM, KCYN"new_cache(%s)", path);
   dir_cache* cw = (dir_cache*)calloc(sizeof(dir_cache), 1);
   cw->path = strdup(path);
   cw->prev = NULL;
@@ -464,19 +472,19 @@ dir_cache* internal_new_cache(dir_cache** cache, const char* path)
   cw->next = *cache;
   dir_cache* result;
   result = (*cache = cw);
-  debugf(DBG_LEVEL_EXT, "exit: new_cache(%s)", path);
+  debugf(DBG_EXT, "exit: new_cache(%s)", path);
   return result;
 }
 
 dir_cache* new_cache(const char* path)
 {
-  debugf(DBG_LEVEL_NORM, KCYN"new_cache(%s): access cache", path);
+  debugf(DBG_NORM, KCYN"new_cache(%s): access cache", path);
   return internal_new_cache(&dcache, path);
 }
 
 dir_cache* new_cache_upload(const char* path)
 {
-  debugf(DBG_LEVEL_NORM, KCYN"new_cache(%s): upload cache", path);
+  debugf(DBG_NORM, KCYN"new_cache(%s): upload cache", path);
   return internal_new_cache(&dcache_upload, path);
 }
 
@@ -486,7 +494,7 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
 {
   assert(dir_list);
   //check for NULL as dir might be already removed from cache by other thread
-  debugf(DBG_LEVEL_NORM, KMAG "cloudfs_free_dir_list(%s:%s)",
+  debugf(DBG_NORM, KMAG "cloudfs_free_dir_list(%s:%s)",
          dir_list->full_name, dir_list->name);
   while (dir_list)
   {
@@ -538,7 +546,7 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
     seg_index_cloud = atoi(des->name);
     if (de_segment != seg_index_cloud)
     {
-      debugf(DBG_LEVEL_EXT, KYEL
+      debugf(DBG_EXT, KYEL
              "get_segment(%s:%d) unexpected segment %s at @%d", de->name,
              segment_index, des->name, de_segment);
       abort();
@@ -654,7 +662,7 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
 
   if (!de->segments)
   {
-    debugf(DBG_LEVEL_EXTALL, "get_create_segment(%s:%d): creating first segment",
+    debugf(DBG_EXTALL, "get_create_segment(%s:%d): creating first segment",
            de->name, segment_index);
     de->segments = init_dir_entry();
     de_seg = de->segments;
@@ -670,13 +678,13 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
       {
         if (de_seg->segment_part != segment_index)
           de_seg->segment_part = segment_index;
-        debugf(DBG_LEVEL_EXTALL, "get_create_segment(%s:%d): reusing segment",
+        debugf(DBG_EXTALL, "get_create_segment(%s:%d): reusing segment",
                de->name, segment_index);
         break;
       }
       if (!de_seg->next)
       {
-        debugf(DBG_LEVEL_EXTALL, "get_create_segment(%s:%d): appending segment",
+        debugf(DBG_EXTALL, "get_create_segment(%s:%d): appending segment",
                de->name, segment_index);
         de_seg->next = init_dir_entry();
         de_seg = de_seg->next;
@@ -722,6 +730,24 @@ void dir_decache_segments(dir_entry* de)
   de->segments = NULL;
 }
 
+void lock_mutex(pthread_mutex_t mutex)
+{
+  debugf(DBG_EXT, KYEL "lock_mutex(%p)", &mutex);
+  //int try = pthread_mutex_trylock(&mutex);
+  //if (try == 0)
+  //  debugf(DBG_ERR, KYEL "lock_mutex(%p)", &mutex);
+  //    else
+  pthread_mutex_lock(&mutex);
+  debugf(DBG_ERR, KYEL "lock_mutex(%p): locked", &mutex);
+}
+
+void unlock_mutex(pthread_mutex_t mutex)
+{
+  //if (mutex == dcachemut)
+  debugf(DBG_EXT, KYEL "free_mutex(%p)", &mutex);
+  pthread_mutex_unlock(&mutex);
+}
+
 /*
   removes path from cache, I think only works fine with child objects?
 */
@@ -729,14 +755,15 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
                           const char* path)
 {
   dir_cache* cw;
-  debugf(DBG_LEVEL_NORM, "dir_decache(%s)", path);
-  pthread_mutex_lock(&mutex);
+  debugf(DBG_NORM, "dir_decache(%s)", path);
+  //pthread_mutex_lock(&mutex);
+  lock_mutex(mutex);
   dir_entry* de, *tmpde;
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   for (cw = cache; cw; cw = cw->next)
   {
-    debugf(DBG_LEVEL_EXT, "dir_decache: parse(%s)", cw->path);
+    debugf(DBG_EXT, "dir_decache: parse(%s)", cw->path);
     if (!strcmp(cw->path, path))
     {
       if (cw == cache)
@@ -745,7 +772,7 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
         cw->prev->next = cw->next;
       if (cw->next)
         cw->next->prev = cw->prev;
-      debugf(DBG_LEVEL_EXT, "dir_decache: free_dir1(%s)", cw->path);
+      debugf(DBG_EXT, "dir_decache: free_dir1(%s)", cw->path);
       //fix: this sometimes is NULL and generates segfaults, checking first
       if (cw->entries != NULL)
         cloudfs_free_dir_list(cw->entries);
@@ -759,7 +786,7 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
         de = cw->entries;
         cw->entries = de->next;
         de->next = NULL;
-        debugf(DBG_LEVEL_EXT, "dir_decache: free_dir2()");
+        debugf(DBG_EXT, "dir_decache: free_dir2()");
         cloudfs_free_dir_list(de);
       }
       else for (de = cw->entries; de->next; de = de->next)
@@ -769,25 +796,26 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
             tmpde = de->next;
             de->next = de->next->next;
             tmpde->next = NULL;
-            debugf(DBG_LEVEL_EXT, "dir_decache: free_dir3()", cw->path);
+            debugf(DBG_EXT, "dir_decache: free_dir3()", cw->path);
             cloudfs_free_dir_list(tmpde);
             break;
           }
         }
     }
   }
-  pthread_mutex_unlock(&mutex);
+  //pthread_mutex_unlock(&mutex);
+  unlock_mutex(mutex);
 }
 
 void dir_decache(const char* path)
 {
-  debugf(DBG_LEVEL_EXT, "dir_decache(%s)", path);
+  debugf(DBG_EXT, "dir_decache(%s)", path);
   internal_dir_decache(dcache, dcachemut, path);
 }
 
 void dir_decache_upload(const char* path)
 {
-  debugf(DBG_LEVEL_EXT, "dir_decache_upload(%s)", path);
+  debugf(DBG_EXT, "dir_decache_upload(%s)", path);
   internal_dir_decache(dcache_upload, dcacheuploadmut, path);
 }
 
@@ -795,7 +823,7 @@ void dir_decache_upload(const char* path)
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix)
 {
-  debugf(DBG_LEVEL_EXT, "init_semaphores(%s): prefix=%s len=%d",
+  debugf(DBG_EXT, "init_semaphores(%s): prefix=%s len=%d",
          de->full_name, prefix, strlen(prefix));
   char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + MAX_PATH_SIZE] = "\0";
   int errsv, sem_val, i;
@@ -804,7 +832,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
   {
     if (data_buf->sem_list[i] || data_buf->sem_name_list[i])
     {
-      debugf(DBG_LEVEL_NORM, KYEL
+      debugf(DBG_NORM, KYEL
              "init_semaphores(%s): semaphore %d not null at init, name=%s",
              de->name, i, data_buf->sem_name_list[i]);
       abort();
@@ -817,7 +845,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
       sem_name = "isdone";
     else
     {
-      debugf(DBG_LEVEL_EXTALL, "init_semaphores(%s): " KRED
+      debugf(DBG_EXTALL, "init_semaphores(%s): " KRED
              "unknown semaphore type=%d", de->full_name, i);
       abort();
     }
@@ -826,7 +854,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
              prefix, sem_name, de->full_name_hash, de->name);
     //don't forget to free this
     data_buf->sem_name_list[i] = strdup(semaphore_name);
-    debugf(DBG_LEVEL_EXT, "init_semaphores(%s): sem_name=%s", de->full_name,
+    debugf(DBG_EXT, "init_semaphores(%s): sem_name=%s", de->full_name,
            data_buf->sem_name_list[i]);
     //ensure semaphore does not exist
     //(might be in the system from a previous unclean finished operation)
@@ -835,7 +863,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                                           O_CREAT | O_EXCL, 0644, 0)) == SEM_FAILED)
     {
       errsv = errno;
-      debugf(DBG_LEVEL_NORM, KRED
+      debugf(DBG_NORM, KRED
              "init_semaphores(%s): cannot init isempty semaphore for progressive upload, err=%s",
              de->full_name, strerror(errsv));
       exit(1);
@@ -843,7 +871,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
     else
     {
       sem_getvalue(data_buf->sem_list[i], &sem_val);
-      debugf(DBG_LEVEL_EXT, KCYN
+      debugf(DBG_EXT, KCYN
              "init_semaphores(%s): semaphore[%s] created, size_left=%lu, sem_val=%d",
              de->full_name, data_buf->sem_name_list[i], data_buf->work_buf_size, sem_val);
     }
@@ -854,7 +882,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
 {
   assert(data_buf->sem_list[sem_index]);
-  debugf(DBG_LEVEL_EXT, KCYN "free_semaphores: %s-%d",
+  debugf(DBG_EXT, KCYN "free_semaphores: %s-%d",
          data_buf->sem_name_list[sem_index], sem_index);
   if (data_buf->sem_list[sem_index])
   {
@@ -955,15 +983,15 @@ dir_entry* init_dir_entry()
 
 void free_de_before_get(dir_entry* de)
 {
-  debugf(DBG_LEVEL_EXT, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
+  debugf(DBG_EXT, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
   free(de->md5sum_local);
-  de->md5sum_local = strdup("");
+  de->md5sum_local = strdup("");//why not set to null
   free_de_before_head(de);
 }
 
 void free_de_before_head(dir_entry* de)
 {
-  debugf(DBG_LEVEL_EXT, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
+  debugf(DBG_EXT, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
   //assumes a file might change from segmented to none
   free(de->manifest_cloud);
   de->manifest_cloud = NULL;
@@ -993,10 +1021,11 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
                                bool is_cache_upload,
                                const char* path, off_t size, int isdir, int islink)
 {
-  debugf(DBG_LEVEL_EXTALL, KCYN
+  debugf(DBG_EXT, KCYN
          "update_dir_cache(%s) size=%lu isdir=%d islink=%d isupload=%d",
          path, size, isdir, islink, is_cache_upload);
-  pthread_mutex_lock(&mutex);
+  //pthread_mutex_lock(&mutex);
+  lock_mutex(mutex);
   dir_cache* cw;
   dir_entry* de;
   char dir[MAX_PATH_SIZE];
@@ -1010,8 +1039,9 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
         if (!strcmp(de->full_name, path))
         {
           de->size = size;
-          pthread_mutex_unlock(&mutex);
-          debugf(DBG_LEVEL_EXTALL, "exit 0: update_dir_cache(%s) file found", path);
+          //pthread_mutex_unlock(&mutex);
+          unlock_mutex(mutex);
+          debugf(DBG_EXTALL, "exit 0: update_dir_cache(%s) file found", path);
           return;
         }
       }
@@ -1030,20 +1060,21 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
         de->content_type = strdup("application/octet-stream");
       de->next = cw->entries;
       cw->entries = de;
-      debugf(DBG_LEVEL_EXTALL, "status: update_dir_cache(%s) file added in cache",
+      debugf(DBG_EXTALL, "status: update_dir_cache(%s) file added in cache",
              path);
       if (isdir && !is_cache_upload)
         new_cache(path);
       else if (isdir && is_cache_upload)
         new_cache_upload(path);
       else
-        debugf(DBG_LEVEL_EXTALL, "update_dir_cache(%s): no dir added in cache",
+        debugf(DBG_EXTALL, "update_dir_cache(%s): no dir added in cache",
                path);
       break;
     }
   }
-  debugf(DBG_LEVEL_EXTALL, "exit 1: update_dir_cache(%s) file not found", path);
-  pthread_mutex_unlock(&mutex);
+  debugf(DBG_EXTALL, "exit 1: update_dir_cache(%s) file not found", path);
+  //pthread_mutex_unlock(&mutex);
+  unlock_mutex(mutex);
 }
 
 //check for file in cache, if found size will be updated, if not found
@@ -1073,25 +1104,25 @@ void update_dir_cache_upload(const char* path, off_t size, int isdir,
 //returns first file entry in linked list. if not in cache will be downloaded.
 int caching_list_directory(const char* path, dir_entry** list)
 {
-  debugf(DBG_LEVEL_EXTALL, "caching_list_directory(%s)", path);
-  pthread_mutex_lock(&dcachemut);
+  debugf(DBG_EXT, "caching_list_directory(%s)", path);
+  //pthread_mutex_lock(&dcachemut);
+  lock_mutex(dcachemut);
   bool new_entry = false;
-  if (!strcmp(path, "/"))
-    path = "";
+  if (!strcmp(path, "/"))path = "";
   dir_cache* cw;
   for (cw = dcache; cw; cw = cw->next)
   {
     if (cw->was_deleted == true)
     {
-      debugf(DBG_LEVEL_EXTALL, KMAG
+      debugf(DBG_EXTALL, KMAG
              "caching_list_directory status: dir(%s) empty as cached expired, reload",
              cw->path);
       if (!cloudfs_list_directory(cw->path, list))
-        debugf(DBG_LEVEL_EXTALL, KMAG
+        debugf(DBG_EXTALL, KMAG
                "caching_list_directory status: cannot reload dir(%s)", cw->path);
       else
       {
-        debugf(DBG_LEVEL_EXTALL, KMAG
+        debugf(DBG_EXTALL, KMAG
                "caching_list_directory status: reloaded dir(%s)", cw->path);
         //cw->entries = *list;
         cw->was_deleted = false;
@@ -1100,7 +1131,7 @@ int caching_list_directory(const char* path, dir_entry** list)
     }
     if (cw->was_deleted == false)
     {
-      debugf(DBG_LEVEL_EXTALL, KYEL
+      debugf(DBG_EXTALL, KYEL
              "caching_list_directory: compare cache=[%s] and [%s]", cw->path, path);
       if (!strcmp(cw->path, path))
         break;
@@ -1112,25 +1143,27 @@ int caching_list_directory(const char* path, dir_entry** list)
     if (!cloudfs_list_directory(path, list))
     {
       //download was not ok
-      pthread_mutex_unlock(&dcachemut);
-      debugf(DBG_LEVEL_EXTALL,
+      //pthread_mutex_unlock(&dcachemut);
+      unlock_mutex(dcachemut);
+      debugf(DBG_EXTALL,
              "exit 0: caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
       return  0;
     }
-    debugf(DBG_LEVEL_EXTALL,
+    debugf(DBG_EXTALL,
            "caching_list_directory: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
     cw = new_cache(path);
     new_entry = true;
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
-    debugf(DBG_LEVEL_NORM, KYEL
+    debugf(DBG_NORM, KYEL
            "caching_list_directory(%s): Cache expired, cleaning!", path);
     if (!cloudfs_list_directory(path, list))
     {
       //mutex unlock was forgotten
-      pthread_mutex_unlock(&dcachemut);
-      debugf(DBG_LEVEL_EXTALL, "exit 1: caching_list_directory(%s)", path);
+      //pthread_mutex_unlock(&dcachemut);
+      unlock_mutex(dcachemut);
+      debugf(DBG_EXTALL, "exit 1: caching_list_directory(%s)", path);
       return  0;
     }
     //fixme: this frees dir subentries but leaves the dir parent entry,
@@ -1140,57 +1173,59 @@ int caching_list_directory(const char* path, dir_entry** list)
       cloudfs_free_dir_list(cw->entries);
       cw->was_deleted = true;
       cw->cached = time(NULL);
-      debugf(DBG_LEVEL_EXTALL, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]",
+      debugf(DBG_EXTALL, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]",
              path);
     }
     else
     {
-      debugf(DBG_LEVEL_EXTALL,
+      debugf(DBG_EXTALL,
              "got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED w NULL]", path);
-      pthread_mutex_unlock(&dcachemut);
+      //pthread_mutex_unlock(&dcachemut);
+      unlock_mutex(dcachemut);
       return 0;
     }
   }
   else
   {
-    debugf(DBG_LEVEL_EXTALL, "caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]",
+    debugf(DBG_EXTALL, "caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]",
            path);
     *list = cw->entries;
   }
   //adding new dir file list to global cache, now this dir becomes visible in cache
-  debugf(DBG_LEVEL_EXTALL, KCYN
+  debugf(DBG_EXTALL, KCYN
          "caching_list_directory(%s): added dir starting with %s",
          path, (*list) ? (*list)->full_name : "nil!");
   cw->entries = *list;
-  pthread_mutex_unlock(&dcachemut);
-  debugf(DBG_LEVEL_EXTALL, "exit 2: caching_list_directory(%s)", path);
+  unlock_mutex(dcachemut);
+  //pthread_mutex_unlock(&dcachemut);
+  debugf(DBG_EXTALL, "exit 2: caching_list_directory(%s)", path);
   return 1;
 }
 
 dir_entry* path_info(const char* path)
 {
-  debugf(DBG_LEVEL_EXTALL, "path_info(%s)", path);
+  debugf(DBG_EXTALL, "path_info(%s)", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry* tmp;
   if (!caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXTALL, "exit 0: path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
+    debugf(DBG_EXTALL, "exit 0: path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
     return NULL;
   }
   else
-    debugf(DBG_LEVEL_EXTALL, "path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
+    debugf(DBG_EXTALL, "path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
   //iterate in file list obtained from cache or downloaded
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_LEVEL_EXTALL, "exit 1: path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
+      debugf(DBG_EXTALL, "exit 1: path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
       return tmp;
     }
   }
   //miss in case the file is not found on a cached folder
-  debugf(DBG_LEVEL_EXTALL, "exit 2: path_info(%s) "KYEL"[CACHE-MISS]", path);
+  debugf(DBG_EXTALL, "exit 2: path_info(%s) "KYEL"[CACHE-MISS]", path);
   return NULL;
 }
 
@@ -1217,8 +1252,9 @@ bool append_dir_entry(dir_entry* de)
 int internal_check_caching_list_directory(dir_cache* cache,
     pthread_mutex_t mutex, const char* path, dir_entry** list)
 {
-  debugf(DBG_LEVEL_EXTALL, "check_caching_list_directory(%s)", path);
-  pthread_mutex_lock(&mutex);
+  debugf(DBG_EXT, "check_caching_list_directory(%s)", path);
+  //pthread_mutex_lock(&mutex);
+  lock_mutex(mutex);
   if (!strcmp(path, "/"))
     path = "";
   dir_cache* cw;
@@ -1226,13 +1262,15 @@ int internal_check_caching_list_directory(dir_cache* cache,
     if (!strcmp(cw->path, path))
     {
       *list = cw->entries;
-      pthread_mutex_unlock(&mutex);
-      debugf(DBG_LEVEL_EXTALL, "exit 0: check_caching_list_directory(%s) "
+      //pthread_mutex_unlock(&mutex);
+      unlock_mutex(mutex);
+      debugf(DBG_EXTALL, "exit 0: check_caching_list_directory(%s) "
              KGRN "[CACHE-DIR-HIT]", path);
       return 1;
     }
-  pthread_mutex_unlock(&mutex);
-  debugf(DBG_LEVEL_EXTALL, "exit 1: check_caching_list_directory(%s) "
+  //pthread_mutex_unlock(&mutex);
+  unlock_mutex(mutex);
+  debugf(DBG_EXTALL, "exit 1: check_caching_list_directory(%s) "
          KYEL "[CACHE-DIR-MISS]", path);
   return 0;
 }
@@ -1274,7 +1312,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
 /*
   dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
   {
-  debugf(DBG_LEVEL_EXTALL, "replace_cache_object(%s:%s)", de->name,
+  debugf(DBG_EXTALL, "replace_cache_object(%s:%s)", de->name,
          de_new->name);
   char dir[MAX_PATH_SIZE];
   dir_for(de->full_name, dir);
@@ -1282,7 +1320,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
   //get parent folder cache entry
   if (!check_caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXTALL,
+    debugf(DBG_EXTALL,
            "exit 0: replace_cache_object(%s) " KYEL "[CACHE-MISS]",
            de->full_name);
     return false;
@@ -1292,7 +1330,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
   {
     if (!strcmp(tmp->full_name, de->full_name))
     {
-      debugf(DBG_LEVEL_EXTALL, "exit 1: replace_cache_object(%s) "KGRN"[CACHE-HIT]",
+      debugf(DBG_EXTALL, "exit 1: replace_cache_object(%s) "KGRN"[CACHE-HIT]",
              de->name);
       if (!prev)
         prev = de_new;
@@ -1313,7 +1351,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
 */
 dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
 {
-  debugf(DBG_LEVEL_EXTALL, "check_path_info(%s): upload=%d", path,
+  debugf(DBG_EXTALL, "check_path_info(%s): upload=%d", path,
          check_upload_cache);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
@@ -1321,13 +1359,13 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
   //get parent folder cache entry
   if (!check_upload_cache && !check_caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXTALL, "exit 0: check_path_info(%s) " KYEL "[CACHE-MISS]",
+    debugf(DBG_EXTALL, "exit 0: check_path_info(%s) " KYEL "[CACHE-MISS]",
            path);
     return NULL;
   }
   if (check_upload_cache && !check_caching_list_dir_upload(dir, &tmp))
   {
-    debugf(DBG_LEVEL_EXTALL, "exit 0: check_path_info(%s) " KYEL
+    debugf(DBG_EXTALL, "exit 0: check_path_info(%s) " KYEL
            "[CACHE-MISS-UPLOAD]", path);
     return NULL;
   }
@@ -1335,16 +1373,16 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_LEVEL_EXTALL, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]",
+      debugf(DBG_EXTALL, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]",
              path);
       return tmp;
     }
   }
   if (!strcmp(path, "/"))
-    debugf(DBG_LEVEL_EXTALL,
+    debugf(DBG_EXTALL,
            "exit 2: check_path_info(%s) "KYEL"ignoring root [CACHE-MISS]", path);
   else
-    debugf(DBG_LEVEL_EXTALL, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]",
+    debugf(DBG_EXTALL, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]",
            path);
   return NULL;
 }
@@ -1388,12 +1426,12 @@ bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
                       (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
   int err = errno;
   assert(*fp_segment);
-  debugf(DBG_LEVEL_EXTALL,
+  debugf(DBG_EXTALL,
          KMAG"open_segment_from_cache: open segment fp=%p segindex=%d",
          *fp_segment, de_seg->segment_part);
   if (file_exist)
   {
-    debugf(DBG_LEVEL_EXTALL,
+    debugf(DBG_EXTALL,
            KMAG"open_segment_from_cache: found segment %d md5=%s",
            de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
@@ -1414,7 +1452,7 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
 
   if (file_exist)
   {
-    debugf(DBG_LEVEL_EXTALL,
+    debugf(DBG_EXTALL,
            KMAG "open_segment_from_cache: found segment %d md5=%s",
            de_seg->segment_part, de_seg->md5sum);
     //check if segment is in cache, with md5sum ok
@@ -1426,18 +1464,18 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
       assert(de_seg->md5sum_local);
     }
     else
-      debugf(DBG_LEVEL_EXTALL, KMAG
+      debugf(DBG_EXTALL, KMAG
              "open_segment_from_cache: segment md5sum_local=%s md5sum=%s",
              de_seg->md5sum_local, de_seg->md5sum);
     //fixme: sometimes md5 local is NULL
     if (!de_seg->md5sum_local)
-      debugf(DBG_LEVEL_NORM, KRED
+      debugf(DBG_NORM, KRED
              "open_segment_from_cache: Unexpected md5local NULL");
     bool match = (de_seg && de_seg->md5sum != NULL && de_seg->md5sum_local
                   && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
     if (!match)
     {
-      debugf(DBG_LEVEL_EXT, "open_segment_from_cache: "
+      debugf(DBG_EXT, "open_segment_from_cache: "
              KYEL "no match, md5sum_local=%s md5sum=%s",
              de_seg->md5sum_local, de_seg->md5sum);
       free(de_seg->md5sum_local);
@@ -1482,7 +1520,7 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
   assert(*fp);
   if (file_exist)
   {
-    debugf(DBG_LEVEL_EXTALL, KMAG "open_file_in_cache(%s) ok", file_path);
+    debugf(DBG_EXTALL, KMAG "open_file_in_cache(%s) ok", file_path);
     int fno = fileno(*fp);
     assert(fno != -1);
   }
@@ -1497,10 +1535,10 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
 {
   bool file_exist = open_file_in_cache(de, fp, method);
-  debugf(DBG_LEVEL_EXTALL, KMAG"open_file_cache_md5: open fp=%p", *fp);
+  debugf(DBG_EXTALL, KMAG"open_file_cache_md5: open fp=%p", *fp);
   if (file_exist)
   {
-    debugf(DBG_LEVEL_EXTALL, KMAG "open_file_cache_md5: found file md5=%s",
+    debugf(DBG_EXTALL, KMAG "open_file_cache_md5: found file md5=%s",
            de->md5sum);
     //check if segment is in cache, with md5sum ok
     if (de->md5sum_local == NULL)
@@ -1510,14 +1548,14 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
       de->md5sum_local = strdup(md5_file_hash_str);
     }
     else
-      debugf(DBG_LEVEL_EXTALL, KMAG
+      debugf(DBG_EXTALL, KMAG
              "open_file_cache_md5: md5sum_local=%s md5sum=%s",
              de->md5sum_local, de->md5sum);
     bool match = (de && de->md5sum != NULL
                   && (!strcasecmp(de->md5sum_local, de->md5sum)));
     if (!match)
     {
-      debugf(DBG_LEVEL_EXT, "open_file_cache_md5: "
+      debugf(DBG_EXT, "open_file_cache_md5: "
              KYEL "no match, md5sum_local=%s md5sum=%s",
              de->md5sum_local, de->md5sum);
       free(de->md5sum_local);
@@ -1530,7 +1568,7 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
 
 bool cleanup_older_segments(char* dir_path, char* exclude_path)
 {
-  debugf(DBG_LEVEL_EXT, "cleanup_older_segments(%s - %s)", dir_path,
+  debugf(DBG_EXT, "cleanup_older_segments(%s - %s)", dir_path,
          exclude_path);
   assert(dir_path);
   bool result = false;
@@ -1565,7 +1603,7 @@ bool cleanup_older_segments(char* dir_path, char* exclude_path)
         }
         else
         {
-          debugf(DBG_LEVEL_EXT, KMAG "not deleting excluded path %s",
+          debugf(DBG_EXT, KMAG "not deleting excluded path %s",
                  de_versions->full_name);
         }
         de_versions = de_versions->next;
@@ -1587,25 +1625,25 @@ void flags_to_openmode(unsigned int flags, char* openmode)
   int i = 0;
   if (flags & O_WRONLY)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: write only detected");
+    debugf(DBG_EXT, "cfs_open: write only detected");
     openmode[i] = 'w';
     i++;
   }
   if (flags & O_APPEND)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: append detected");
+    debugf(DBG_EXT, "cfs_open: append detected");
     openmode[i] = 'a';
     i++;
   }
   if (flags & O_RDONLY)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: read only detected");
+    debugf(DBG_EXT, "cfs_open: read only detected");
     openmode[i] = 'r';
     i++;
   }
   if (flags & O_RDWR)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: read write detected");
+    debugf(DBG_EXT, "cfs_open: read write detected");
     openmode[i] = 'w';
     i++;
     openmode[i] = 'r';
@@ -1613,23 +1651,23 @@ void flags_to_openmode(unsigned int flags, char* openmode)
   }
   if (flags & O_TRUNC)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: truncate detected");
+    debugf(DBG_EXT, "cfs_open: truncate detected");
     openmode[i] = 'w';
     i++;
   }
   if (flags & O_CREAT)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: create detected");
+    debugf(DBG_EXT, "cfs_open: create detected");
     openmode[i] = 'w';
     i++;
   }
   if (flags & O_EXCL)
-    debugf(DBG_LEVEL_EXT, "cfs_open: EXCL detected");
+    debugf(DBG_EXT, "cfs_open: EXCL detected");
 
   //default open mode is r
   if (i == 0)
   {
-    debugf(DBG_LEVEL_EXT, "cfs_open: unknown mode, assume read");
+    debugf(DBG_EXT, "cfs_open: unknown mode, assume read");
     openmode[i] = 'r';
     i++;
   }
@@ -1639,7 +1677,7 @@ void flags_to_openmode(unsigned int flags, char* openmode)
 void add_lock_file(const char* path, const char* open_flags,
                    FILE* temp_file, int fd)
 {
-  debugf(DBG_LEVEL_EXT, "add_lock_file(%s): mode=%s fd=%d",
+  debugf(DBG_EXT, "add_lock_file(%s): mode=%s fd=%d",
          path, open_flags, fd);
   open_file* of = (open_file*)malloc(sizeof(open_file));
   of->cached_file = temp_file;
@@ -1691,7 +1729,7 @@ bool close_lock_file(const char* path, int fd)
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
     unlink(file_path_safe);
   }
-  debugf(DBG_LEVEL_EXT, "close_lock_file(%s): %d instances were open", path,
+  debugf(DBG_EXT, "close_lock_file(%s): %d instances were open", path,
          count);
   return result;
 }
@@ -1725,7 +1763,7 @@ bool can_add_lock(const char* path, char* open_flags)
 */
 int open_lock_file(const char* path, unsigned int flags)
 {
-  debugf(DBG_LEVEL_EXT, "open_lock_file(%s): flags=%d", path, flags);
+  debugf(DBG_EXT, "open_lock_file(%s): flags=%d", path, flags);
   FILE* temp_file = NULL;
   char open_flags[10];
   char file_path_safe[NAME_MAX];
@@ -1743,7 +1781,7 @@ int open_lock_file(const char* path, unsigned int flags)
 
   if (!can_add)
   {
-    debugf(DBG_LEVEL_EXT, KRED
+    debugf(DBG_EXT, KRED
            "open_lock_file(%s): lock not secured, mode=%s", path, open_flags);
     return -1;
   }
@@ -1758,7 +1796,7 @@ int open_lock_file(const char* path, unsigned int flags)
   int errsv = errno;
   if (!temp_file)
   {
-    debugf(DBG_LEVEL_EXT, KRED
+    debugf(DBG_EXT, KRED
            "open_lock_file(%s): lock file busy, mode=%s err=%s",
            path, open_flags, strerror(errsv));
     return -1;
@@ -1796,7 +1834,7 @@ char* get_home_dir()
 //allows memory leaks inspections
 void interrupt_handler(int sig)
 {
-  debugf(DBG_LEVEL_NORM, "Got interrupt signal %d, cleaning memory", sig);
+  debugf(DBG_NORM, "Got interrupt signal %d, cleaning memory", sig);
   //TODO: clean memory allocations
   //http://www.cprogramming.com/debugging/valgrind.html
   cloudfs_free();
@@ -1810,7 +1848,7 @@ void interrupt_handler(int sig)
 void sigpipe_callback_handler(int signum)
 {
 
-  debugf(DBG_LEVEL_NORM, KRED "Caught signal SIGPIPE, ignoring %d", signum);
+  debugf(DBG_NORM, KRED "Caught signal SIGPIPE, ignoring %d", signum);
 }
 
 void clear_full_cache()
@@ -1837,9 +1875,12 @@ void print_options()
           option_min_speed_limit_progressive);
   fprintf(stderr, "min_speed_timeout = %d\n", option_min_speed_timeout);
   fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
+  fprintf(stderr, "enable_syslog = %d\n", option_enable_syslog);
 }
+
 void debugf(int level, char* fmt, ...)
 {
+
   if (debug)
   {
     if (level <= option_debug_level)
@@ -1851,18 +1892,29 @@ void debugf(int level, char* fmt, ...)
 #error "SYS_gettid unavailable on this system"
 #endif
       va_list args;
-      char prefix[] = "==DBG %d [%s]:%d==";
-      char line[4096];
+      char prefix[] = "==DBG%d [%s]:%d==";
+      char startstr[4096];
+      char endstr[4096];
       char time_str[TIME_CHARS];
       get_time_now_as_str(time_str, sizeof(time_str));
-      sprintf(line, prefix, level, time_str, thread_id);
-      fputs(line, stderr);
+      sprintf(startstr, prefix, level, time_str, thread_id);
+      fputs(startstr, stderr);
       va_start(args, fmt);
-      vfprintf(stderr, fmt, args);
+      //vfprintf(stderr, fmt, args);
+      vsprintf(endstr, fmt, args);
       va_end(args);
+      fputs(endstr, stderr);
       fputs(KNRM, stderr);
       putc('\n', stderr);
       putc('\r', stderr);
+      if (level == DBG_ERR && option_enable_syslog)
+      {
+        char msgstr[4096];
+        snprintf(msgstr, 4096, "%s%s", startstr, endstr);
+        openlog(APP_ID, LOG_PID, LOG_USER);
+        syslog(LOG_INFO, msgstr);
+        closelog();
+      }
     }
   }
 }
