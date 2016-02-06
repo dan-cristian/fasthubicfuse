@@ -675,7 +675,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     if (de_upload)
     {
       debugf(DBG_EXT, KMAG
-             "cfs_flush(%s): upload done, size=%lu", path, de_upload->size);
+             "cfs_flush(%s): signal upload done, size=%lu", path, de_upload->size);
 
       if (de_upload->is_segmented)
       {
@@ -687,7 +687,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         //unblock the last segment wait in http callback
         if (de_seg->upload_buf.sem_list[SEM_FULL])
         {
-          debugf(DBG_EXT, KMAG "cfs_flush(%s): finishing upload operation",
+          debugf(DBG_EXT, KMAG "cfs_flush(%s): wait upload completion",
                  de->name);
           sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
           //wait until upload and cleanup of previous versions fully completes
@@ -698,7 +698,28 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
           //free_semaphores(&de_seg->upload_buf, SEM_FULL);
 
+          //check if all previous segment uploads are done (except last)
+          //sometimes prev uploads are still in progress
+          int seg_index;
+          dir_entry* de_seg_tmp;
+          for (seg_index = 0; seg_index < de_upload->segment_count;
+               seg_index++)
+          {
+            de_seg_tmp = get_segment(de_upload, seg_index);
+            assert(de_seg_tmp);
+            if (de_seg_tmp->upload_buf.sem_list[SEM_EMPTY])
+            {
+              debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
+                     de->name, de_seg_tmp->name);
+              sem_wait(de_seg_tmp->upload_buf.sem_list[SEM_EMPTY]);
+              debugf(DBG_EXT, KMAG "cfs_flush(%s): pending upload %s done",
+                     de->name, de_seg_tmp->name);
+            }
+          }
+
           close_lock_file(de_upload->full_name, info->fh);
+          debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
+                 de->name);
 
           //update cache (move from upload to access)
           dir_decache_upload(de_upload->full_name);
@@ -712,6 +733,8 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       }
       else
       {
+        debugf(DBG_EXT, KYEL "cfs_flush(%s): strange, no need to wait",
+               de->name);
         //signal completion of read/write operation
         //signal last data available in buffer for upload
         if (de->upload_buf.sem_list[SEM_FULL])
@@ -848,7 +871,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   }
   else
   {
-
     dir_entry* de_seg;
     int seg_index = 0;
     int sem_val_full, sem_val_empty;
@@ -892,7 +914,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
           prev_seg->upload_buf.signaled_completion = true;
           debugf(DBG_EXT, KMAG
-                 "cfs_write(%s): signal prev segment %s complete", path, prev_seg->name);
+                 "cfs_write(%s): signal prev segment %s complete",
+                 path, prev_seg->name);
         }
       }
     }
@@ -909,6 +932,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     //loop until entire buffer was uploaded
     while (de_seg->upload_buf.work_buf_size > 0)
     {
+      debugf(DBG_EXT, KMAG
+             "cfs_write(%s:%s): looping", de->name, de_seg->name);
       //index in buffer to resume upload in a new segment
       //(when buffer did not fit in the current segment)
       ptr_offset = length - de_seg->upload_buf.work_buf_size;
@@ -1282,8 +1307,8 @@ int main(int argc, char** argv)
     return 1;
   }
 #ifndef HAVE_OPENSSL
-//#warning Compiling without libssl, will run single-threaded.
-//fuse_opt_add_arg(&args, "-s");
+#warning Compiling without libssl, will run single-threaded.
+  fuse_opt_add_arg(&args, "-s");
 #endif
 //https://www.cs.hmc.edu/~geoff/classes/hmc.cs135.201001/homework/fuse/fuse_doc.html
   struct fuse_operations cfs_oper =

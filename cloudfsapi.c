@@ -226,7 +226,7 @@ static size_t header_get_segment_meta(void* ptr, size_t size, size_t nmemb,
   char* value = (char*)alloca(memsize + 1);
   memcpy(header, (char*)ptr, memsize);
   header[memsize] = '\0';
-  static char storage[MAX_HEADER_SIZE];
+  char storage[MAX_HEADER_SIZE];
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     //sometimes etag is formated on hubic with "" (for segmented files?), check inconsistency!
@@ -301,7 +301,7 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
   char* value = (char*)alloca(memsize + 1);
   memcpy(header, (char*)ptr, memsize);
   header[memsize] = '\0';
-  static char storage[MAX_HEADER_SIZE];
+  char storage[MAX_HEADER_SIZE];
   if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
   {
     //sometimes etag is formated on hubic with "" (for segmented files?), check inconsistency!
@@ -757,11 +757,25 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   //set segment actual size
   de->size = upload_buf->size_processed;
 
-  //signal we're done, usefull for cfs_flush etc
-  if (de->upload_buf.sem_list[SEM_EMPTY])
-    sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
+  //signal cfs_write we're done
+  //if (de->upload_buf.sem_list[SEM_EMPTY])
+  //  sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
 
   return 0;
+}
+
+int progressive_closesocket_callback(void* clientp, curl_socket_t item)
+{
+  debugf(DBG_EXT, KMAG "progressive_closesocket_callback: closing");
+
+  dir_entry* de = (dir_entry*)clientp;
+  assert(de);
+
+  //signal cfs_write we're done
+  if (de->upload_buf.sem_list[SEM_EMPTY])
+    sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
+  debugf(DBG_EXT, KMAG "progressive_closesocket_callback: closed %s",
+         de->name);
 }
 
 /*
@@ -925,6 +939,9 @@ static int send_request_size(const char* method, const char* encoded_path,
 
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)de_seg);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_segment_meta);
+        curl_easy_setopt(curl, CURLOPT_CLOSESOCKETDATA, (void*)de_seg);
+        curl_easy_setopt(curl, CURLOPT_CLOSESOCKETFUNCTION,
+                         &progressive_closesocket_callback);
 
       }
       else//not progressive
@@ -1838,10 +1855,34 @@ const char* get_file_mimetype ( const char* path )
     magic_compile( magic, NULL );
     mime = magic_file( magic, path );
     magic_close( magic );
+    debugf(DBG_EXT, "get_file_mimetype(%s): got mime=%s", path, mime);
     return mime;
   }
+  debugf(DBG_EXT, KYEL "get_file_mimetype(%s): cannot get mime", path);
   const char* error = "application/octet-stream";
   return error;
+}
+
+bool get_file_mimetype_from_path(dir_entry* de, char* mime)
+{
+  bool result = true;
+  if (strstr(de->name, ".mpg"))
+    snprintf(mime, MAX_PATH_SIZE, "%s", "video/mpeg");
+  else if (strstr(de->name, ".jpg"))
+    snprintf(mime, MAX_PATH_SIZE, "%s", "image/jpeg");
+  else if (strstr(de->name, ".mp4"))
+    snprintf(mime, MAX_PATH_SIZE, "%s", "video/mp4");
+  else if (strstr(de->name, ".avi"))
+    snprintf(mime, MAX_PATH_SIZE, "%s", "video/x-msvideo");
+  else if (strstr(de->name, ".mkv"))
+    snprintf(mime, MAX_PATH_SIZE, "%s", "video/x-matroska");
+  else
+  {
+    snprintf(mime, MAX_PATH_SIZE, "%s", "application/octet-stream");
+    result = false;
+  }
+  debugf(DBG_EXT, "get_file_mimetype_from_path(%s): mime=%s", de->name, mime);
+  return result;
 }
 
 /*
@@ -1852,6 +1893,8 @@ void internal_upload_segment_progressive(void* arg)
   struct thread_job* job = arg;
   debugf(DBG_EXT, "internal_upload_segment_progressive(%s): seg=%s md5=%s",
          job->de->name, job->de_seg->full_name, job->de->md5sum);
+  char* dbg_de_name = strdup(job->de->name);
+  char* dbg_de_seg_name = strdup(job->de_seg->name);
   //increment before upload finishes to avoid cfs_flush to miss last segment
   job->de->segment_count++;
   //mark file size = 1 to signal we have some data coming in
@@ -1932,7 +1975,8 @@ void internal_upload_segment_progressive(void* arg)
            "internal_upload_segment_prog(%s): creating 0 size parent, de_seg=%s",
            job->de->name, job->de_seg->full_name);
     curl_slist* headers = NULL;
-    const char* filemimetype = get_file_mimetype(job->de->full_name);
+    char filemimetype[MAX_PATH_SIZE] = "";
+    get_file_mimetype_from_path(job->de, filemimetype);
     add_header(&headers, HEADER_TEXT_MANIFEST, job->de->manifest_time);
     add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
     add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
@@ -1989,6 +2033,8 @@ void internal_upload_segment_progressive(void* arg)
   //sometimes, de will be freed by now by cfs_flush
   debugf(DBG_EXT, "exit: internal_upload_segment_progressive");
   free_thread_job(job);
+  free(dbg_de_name);
+  free(dbg_de_seg_name);
   pthread_exit(NULL);
 }
 
@@ -2627,7 +2673,7 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   else
   {
     // this was generating 404 err on non segmented files (small files)
-    response = send_request("GET", container, NULL, xmlctx, NULL, NULL, NULL);
+    response = send_request(HTTP_GET, container, NULL, xmlctx, NULL, NULL, NULL);
   }
   if (response >= 200 && response < 300)
     xmlParseChunk(xmlctx, "", 0, 1);
@@ -2976,7 +3022,8 @@ bool cloudfs_create_object(dir_entry* de)
 {
   debugf(DBG_EXT, "cloudfs_create_object(%s)", de->full_name);
   curl_slist* headers = NULL;
-  const char* filemimetype = get_file_mimetype(de->full_name);
+  char filemimetype[MAX_PATH_SIZE] = "";
+  get_file_mimetype_from_path(de, filemimetype);
   add_header(&headers, HEADER_TEXT_MANIFEST, de->manifest_time);
   add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
   add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
@@ -3113,7 +3160,8 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
       //create new dest manifest file
       //note: manifest cannot be set on X-Copy operations?
       curl_slist* headers = NULL;
-      const char* filemimetype = get_file_mimetype(new_de->full_name);
+      char filemimetype[MAX_PATH_SIZE] = "";
+      get_file_mimetype_from_path(new_de, filemimetype);
       add_header(&headers, HEADER_TEXT_MANIFEST, new_de->manifest_time);
       add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
       add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
@@ -3217,9 +3265,12 @@ int cloudfs_update_meta(dir_entry* de)
     int response = cloudfs_copy_object(de->full_name, de->full_name);
     return response;
   */
+
   //POST version
-  int response = cloudfs_post_object(de);
-  return response;
+  //fixme: this is loosing the segmented meta data. add all fields before post!!!
+  //int response = cloudfs_post_object(de);
+  //return response;
+  return 0;
 }
 
 //optimised with cache

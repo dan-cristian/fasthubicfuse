@@ -732,19 +732,19 @@ void dir_decache_segments(dir_entry* de)
 
 void lock_mutex(pthread_mutex_t mutex)
 {
-  debugf(DBG_EXT, KYEL "lock_mutex(%p)", &mutex);
+  debugf(DBG_EXTALL, KYEL "lock_mutex(%p)", &mutex);
   //int try = pthread_mutex_trylock(&mutex);
   //if (try == 0)
   //  debugf(DBG_ERR, KYEL "lock_mutex(%p)", &mutex);
   //    else
   pthread_mutex_lock(&mutex);
-  debugf(DBG_ERR, KYEL "lock_mutex(%p): locked", &mutex);
+  debugf(DBG_EXTALL, KYEL "lock_mutex(%p): locked", &mutex);
 }
 
 void unlock_mutex(pthread_mutex_t mutex)
 {
   //if (mutex == dcachemut)
-  debugf(DBG_EXT, KYEL "free_mutex(%p)", &mutex);
+  debugf(DBG_EXTALL, KYEL "unlock_mutex(%p)", &mutex);
   pthread_mutex_unlock(&mutex);
 }
 
@@ -1021,7 +1021,7 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
                                bool is_cache_upload,
                                const char* path, off_t size, int isdir, int islink)
 {
-  debugf(DBG_EXT, KCYN
+  debugf(DBG_EXTALL, KCYN
          "update_dir_cache(%s) size=%lu isdir=%d islink=%d isupload=%d",
          path, size, isdir, islink, is_cache_upload);
   //pthread_mutex_lock(&mutex);
