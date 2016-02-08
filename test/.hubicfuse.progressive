@@ -5,8 +5,8 @@ refresh_x_token = xxxx
 verify_ssl = true
 cache_timeout = 0
 temp_dir = /media/temp/hubicfuse
-segment_size = 10485760
-segment_above = 10485759
+segment_size = 10485759
+segment_above = 10485758
 
 get_extended_metadata = true
 curl_verbose = true

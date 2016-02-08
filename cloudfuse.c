@@ -655,7 +655,8 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       debugf(DBG_EXT, KMAG
              "cfs_flush(%s): signal upload done, size=%lu", path, de_upload->size);
 
-      if (de_upload->is_segmented)
+      //on cfs_create empty file segment count is 0, no need to enter here
+      if (de_upload->is_segmented && de_upload->segment_count > 0)
       {
         dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
         assert(de_seg);
@@ -827,8 +828,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     debugf(DBG_EXT, KBLU
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   int result, errsv;
+  char debugstr[256];
   dir_entry* de = check_path_info_upload(path);
   //assert(de);
+
   if (!de)
   {
     //update only once otherwise memory leaks
@@ -837,15 +840,17 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     de = check_path_info_upload(path);
     create_dir_entry(de, path, 0666);
   }
-  /*if (offset == 0)
-    {
+
+  if (offset == 0)
+  {
+    assert(de->size == 0);
     //clear manifest meta to avoid overwrite of same segments
     //and force creation of a new version (in the same session)
-    free(de->manifest_seg);
-    de->manifest_seg = NULL;
-    free(de->manifest_time);
-    de->manifest_time = NULL;
-    }*/
+    //free(de->manifest_seg);
+    //de->manifest_seg = NULL;
+    //free(de->manifest_time);
+    //de->manifest_time = NULL;
+  }
   assert(de);
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
@@ -891,9 +896,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       //creates the segment to be uploaded as dir_entry
       //and sets minimum required fields
       seg_index = seg_size_processed / segment_size;
-
-
-
       if (seg_index != last_seg_index)
       {
         //just switched to a new segment, or got new fuse data (cfs_write called)
@@ -921,6 +923,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         de_seg = get_create_segment(de, seg_index);
         assert(get_segment(de, seg_index));
         assert(de->manifest_seg);
+
         de_seg->upload_buf.fuse_buf_size = length;
         //this is called once per segment
         if (!de_seg->upload_buf.mutex_initialised)
@@ -951,9 +954,19 @@ static int cfs_write(const char* path, const char* buf, size_t length,
              de_seg->upload_buf.size_processed);
       //index in buffer to resume upload in a new segment
       //(when buffer did not fit in the current segment)
-      ptr_offset = length - de_seg->upload_buf.work_buf_size;
-      //de_seg->upload_buf.readptr = buf + ptr_offset;
+      //ptr_offset = length - de_seg->upload_buf.work_buf_size;
+
+      ptr_offset = de->size - offset;
+
       de_seg->upload_buf.readptr = buf + ptr_offset;
+
+      if (false && de_seg->upload_buf.size_processed >= 10354688)
+      {
+        snprintf(debugstr, 256, "%s", buf + ptr_offset);
+        debugf(DBG_EXT, KGRN "1[%s]len=%lu,ptr=%lu",
+               debugstr, strlen(debugstr), ptr_offset);
+        sleep_ms(5000);
+      }
 
       //start a new segment upload thread if needed//, just once in loop
       if ((de_seg->upload_buf.size_processed == 0)
@@ -972,6 +985,13 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
       seg_size_uploaded = seg_size_to_upload - de_seg->upload_buf.work_buf_size;
 
+      if (false && de_seg->upload_buf.size_processed >= 10354688)
+      {
+        snprintf(debugstr, 256, "%s", buf + ptr_offset);
+        debugf(DBG_EXT, KGRN "2[%s]len=%lu,ptr=%lu",
+               debugstr, strlen(debugstr), ptr_offset);
+        sleep_ms(5000);
+      }
 
       //write data to segment cache file in case upload retry is needed
       //but no more than segment size
@@ -980,11 +1000,12 @@ static int cfs_write(const char* path, const char* buf, size_t length,
                                 de_seg->upload_buf.local_cache_file);
       assert(write_len == seg_size_uploaded);
 
-      //keep increase the segment size as we upload more data
-      de->size = offset + de_seg->upload_buf.size_processed;
       //add what was planned for upload and subtract was did not get uploaded
       seg_size_processed += seg_size_uploaded;
       fuse_size_uploaded += seg_size_uploaded;
+      //keep increase the segment size as we upload more data
+      de->size += seg_size_uploaded;
+
       debugf(DBG_EXT, KMAG
              "cfs_write(%s:%s): buffer empty work=%lu upld=%lu left=%lu fusz=%lu",
              de->name, de_seg->name, de_seg->upload_buf.work_buf_size,
@@ -1037,9 +1058,11 @@ static int cfs_fsync(const char* path, int idunno,
 static int cfs_truncate(const char* path, off_t size)
 {
   debugf(DBG_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
-  dir_entry* de = check_path_info(path);
-  assert(de);
-  clock_gettime(CLOCK_REALTIME, &de->ctime_local);
+  //dir_entry* de = check_path_info(path);
+  //dir_entry* de = check_path_info_upload(path);
+  //assert(de);
+  //de->size = 0;
+  //clock_gettime(CLOCK_REALTIME, &de->ctime_local);
   //cloudfs_object_truncate(de, size);
   debugf(DBG_NORM, KBLU "exit: cfs_truncate(%s)", path);
   return 0;

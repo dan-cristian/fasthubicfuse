@@ -1013,7 +1013,7 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
 {
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
-  debugf(DBG_EXT, KCYN"cfs_create(%s) set utimes as now", path);
+  debugf(DBG_EXT, KCYN"create_dir_entry(%s)", path);
   de->atime.tv_sec = now.tv_sec;
   de->atime.tv_nsec = now.tv_nsec;
   de->mtime.tv_sec = now.tv_sec;
@@ -1024,15 +1024,16 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
   de->ctime_local.tv_nsec = now.tv_nsec;
   char time_str[TIME_CHARS] = "";
   get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
-  debugf(DBG_EXT, KCYN"cfs_create: atime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"create_dir_entry: atime=[%s]", time_str);
   get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-  debugf(DBG_EXT, KCYN"cfs_create: mtime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"create_dir_entry: mtime=[%s]", time_str);
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
-  debugf(DBG_EXT, KCYN"cfs_create: ctime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"create_dir_entry: ctime=[%s]", time_str);
   //set chmod & chown
   de->chmod = mode;
   de->uid = geteuid();
   de->gid = getegid();
+  de->size = 0;
   //fill in manifest data etc
   path_to_de(path, de);
   if (option_enable_progressive_upload)
@@ -1040,10 +1041,17 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
 }
 
 /*
-  duplicate a dir_entry
+  duplicate a dir_entry, does not overwrite name fields
 */
 void copy_dir_entry(dir_entry* src, dir_entry* dst)
 {
+  if (!dst->name && src->name)
+    dst->name = strdup(src->name);
+  if (!dst->full_name && src->full_name)
+    dst->full_name = strdup(src->full_name);
+  if (!dst->full_name_hash && src->full_name_hash)
+    dst->full_name_hash = strdup(src->full_name_hash);
+
   dst->atime.tv_sec = src->atime.tv_sec;
   dst->atime.tv_nsec = src->atime.tv_nsec;
   dst->mtime.tv_sec = src->mtime.tv_sec;
@@ -1079,6 +1087,7 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
   if (src->content_type)
     dst->content_type = strdup(src->content_type);
 
+  //fixme: segments not copied ok
   if (src->segments)
   {
     assert(!dst->segments);
@@ -1318,18 +1327,22 @@ dir_entry* path_info(const char* path)
 */
 bool append_dir_entry(dir_entry* de)
 {
+  debugf(DBG_EXT, KMAG "append_dir_entry(%s)", de->full_name);
+  bool result;
   dir_entry* tmp;
   char new_dir[MAX_PATH_SIZE];
   dir_for(de->full_name, new_dir);
   if (!caching_list_directory(new_dir, &tmp))
-    return false;
+    result = false;
   else
   {
     while (tmp->next)
       tmp = tmp->next;
     tmp->next = de;
   }
-  return true;
+  result = true;
+  debugf(DBG_EXT, KMAG "append_dir_entry(%s): res=%d", de->full_name, result);
+  return result;
 }
 //retrieve folder from local cache if exists, return null if does not exist (rather than download)
 int internal_check_caching_list_directory(dir_cache* cache,

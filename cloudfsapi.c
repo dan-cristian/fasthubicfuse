@@ -2950,6 +2950,7 @@ int cloudfs_delete_object(dir_entry* de)
          de->full_name, de->isdir, de->is_segmented, de->metadata_downloaded);
   //dir_entries don't have full meta downloaded
   //so we don't know if files are segmented etc.
+
   if (!de->metadata_downloaded)
     get_file_metadata(de);
 
@@ -3159,8 +3160,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
 
   int result = true;
   int active_threads = 0;
-  pthread_t* threads = (pthread_t*)malloc(MAX_COPY_THREADS * sizeof(
-      pthread_t));
+  pthread_t* threads = (pthread_t*)malloc(MAX_COPY_THREADS * sizeof(pthread_t));
   thread_copy_job* thread_jobs[MAX_COPY_THREADS];
   if (de->is_segmented)
   {
@@ -3288,43 +3288,21 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
         abort();
       else
       {
-        assert(!new_de->manifest_cloud);
         //delete all segments from source
         char manifest_root[MAX_URL_SIZE];
-        char new_manifest_root[MAX_URL_SIZE];
-        //snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
-        //         de->manifest_seg, de->name);
-
-        //cleanup_older_segments(manifest_root, NULL);
         snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
                  new_de->manifest_seg, new_de->name);
-        snprintf(new_manifest_root, MAX_URL_SIZE, "/%s", new_de->manifest_time);
-        new_de->manifest_cloud = strdup(new_manifest_root);
         //delete older segments from destination, except recent one
-        cleanup_older_segments(manifest_root, new_manifest_root);
+        cleanup_older_segments(manifest_root, new_de->manifest_cloud);
 
         //check if all segments are visible in cloud after copy
         dir_entry* new_dir_entry;
-        int retries = 0;
-        do
-        {
-          if (update_segments(new_de))
-          {
-            if (new_de->segment_count != de->segment_count)
-            {
-              debugf(DBG_EXT, KRED
-                     "cloudfs_copy_object(%s): last segment missing, retry",
-                     de->name);
-            }
-          }
-          retries++;
-          sleep_ms(1000 * retries);
-        }
-        while (new_de->segment_count != de->segment_count
-               && retries < REQUEST_RETRIES);
-
+        update_segments(new_de);
         if (new_de->segment_count != de->segment_count)
         {
+          debugf(DBG_EXT, KRED
+                 "cloudfs_copy_object(%s): last segment missing, retry",
+                 de->name);
           //still not visible, what to do?
           abort();
         }
@@ -3356,10 +3334,13 @@ int cloudfs_post_object(dir_entry* de)
   char* encoded = curl_escape(de->full_name, 0);
   curl_slist* headers = NULL;
   add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
-  char manifest_str[MAX_PATH_SIZE];
-  //remove "/" prefix from manifest path
-  snprintf(manifest_str, MAX_PATH_SIZE, "%s", de->manifest_cloud + 1);
-  add_header(&headers, HEADER_TEXT_MANIFEST, manifest_str);
+  if (de->is_segmented)
+  {
+    char manifest_str[MAX_PATH_SIZE];
+    //remove "/" prefix from manifest path
+    snprintf(manifest_str, MAX_PATH_SIZE, "%s", de->manifest_cloud + 1);
+    add_header(&headers, HEADER_TEXT_MANIFEST, manifest_str);
+  }
   int response = send_request_size(HTTP_POST, encoded, NULL, NULL, headers,
                                    0, de->is_segmented, de, NULL);
   curl_free(encoded);
