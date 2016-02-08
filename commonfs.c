@@ -615,7 +615,8 @@ void get_manifest_path(dir_entry* de, char* manifest_path)
 }
 
 /*
-  set de manifest related fields using now date
+  set dir_entry name, full_name
+  and manifest related fields using now date
 */
 void path_to_de(const char* path, dir_entry* de)
 {
@@ -643,12 +644,19 @@ void path_to_de(const char* path, dir_entry* de)
   if (de->manifest_time)
     free(de->manifest_time);
   de->manifest_time = strdup(manifest);
+  if (!de->manifest_cloud)
+  {
+    snprintf(manifest, MAX_URL_SIZE, "/%s", de->manifest_time);
+    de->manifest_cloud = strdup(manifest);
+  }
   if (!de->name)
     de->name = strdup(object);
   if (strlen(object) > 0)
     assert(!strcasecmp(object, de->name));
   if (!de->full_name)
     de->full_name = strdup(path);
+  if (!de->full_name_hash)
+    de->full_name_hash = strdup(str2md5(de->full_name, strlen(de->full_name)));
 }
 /*
   returns the segment.
@@ -662,7 +670,7 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
 
   if (!de->segments)
   {
-    debugf(DBG_EXTALL, "get_create_segment(%s:%d): creating first segment",
+    debugf(DBG_EXT, "get_create_segment(%s:%d): creating first segment",
            de->name, segment_index);
     de->segments = init_dir_entry();
     de_seg = de->segments;
@@ -678,13 +686,13 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
       {
         if (de_seg->segment_part != segment_index)
           de_seg->segment_part = segment_index;
-        debugf(DBG_EXTALL, "get_create_segment(%s:%d): reusing segment",
+        debugf(DBG_EXT, "get_create_segment(%s:%d): reusing segment",
                de->name, segment_index);
         break;
       }
       if (!de_seg->next)
       {
-        debugf(DBG_EXTALL, "get_create_segment(%s:%d): appending segment",
+        debugf(DBG_EXT, "get_create_segment(%s:%d): appending segment",
                de->name, segment_index);
         de_seg->next = init_dir_entry();
         de_seg = de_seg->next;
@@ -951,7 +959,7 @@ dir_entry* init_dir_entry()
   de->downld_buf.local_cache_file = NULL;
   de->downld_buf.fuse_read_size = -1;
   de->downld_buf.work_buf_size = -1;
-  de->downld_buf.offset = -1;
+  //de->downld_buf.offset = -1;
   de->downld_buf.mutex_initialised = false;
   de->upload_buf.mutex_initialised = false;
   de->downld_buf.sem_list[SEM_EMPTY] = NULL;
@@ -978,6 +986,7 @@ dir_entry* init_dir_entry()
   de->segment_part = -1;
   de->segment_size = 0;
   de->size_on_cloud = 0;
+  de->has_unvisible_segments = false;
   return de;
 }
 
@@ -997,6 +1006,42 @@ void free_de_before_head(dir_entry* de)
   de->manifest_cloud = NULL;
 }
 
+/*
+  create and initialise a dir_entry with now values
+*/
+void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
+{
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  debugf(DBG_EXT, KCYN"cfs_create(%s) set utimes as now", path);
+  de->atime.tv_sec = now.tv_sec;
+  de->atime.tv_nsec = now.tv_nsec;
+  de->mtime.tv_sec = now.tv_sec;
+  de->mtime.tv_nsec = now.tv_nsec;
+  de->ctime.tv_sec = now.tv_sec;
+  de->ctime.tv_nsec = now.tv_nsec;
+  de->ctime_local.tv_sec = now.tv_sec;
+  de->ctime_local.tv_nsec = now.tv_nsec;
+  char time_str[TIME_CHARS] = "";
+  get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
+  debugf(DBG_EXT, KCYN"cfs_create: atime=[%s]", time_str);
+  get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
+  debugf(DBG_EXT, KCYN"cfs_create: mtime=[%s]", time_str);
+  get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
+  debugf(DBG_EXT, KCYN"cfs_create: ctime=[%s]", time_str);
+  //set chmod & chown
+  de->chmod = mode;
+  de->uid = geteuid();
+  de->gid = getegid();
+  //fill in manifest data etc
+  path_to_de(path, de);
+  if (option_enable_progressive_upload)
+    de->is_segmented = true;
+}
+
+/*
+  duplicate a dir_entry
+*/
 void copy_dir_entry(dir_entry* src, dir_entry* dst)
 {
   dst->atime.tv_sec = src->atime.tv_sec;
@@ -1005,14 +1050,52 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
   dst->mtime.tv_nsec = src->mtime.tv_nsec;
   dst->ctime.tv_sec = src->ctime.tv_sec;
   dst->ctime.tv_nsec = src->ctime.tv_nsec;
+  dst->last_modified = src->last_modified;
   dst->chmod = src->chmod;
-
-  dst->is_segmented = src->is_segmented;//todo: check if really needed
-  if (src->md5sum != NULL)
+  dst->uid = src->uid;
+  dst->gid = src->gid;
+  if (src->md5sum)
   {
-    //TODO: copy md5sum
+    assert(!dst->md5sum);
+    dst->md5sum = strdup(src->md5sum);
   }
-  //dst->md5sum = src->md5sum;
+  if (src->md5sum_local)
+  {
+    assert(!dst->md5sum_local);
+    dst->md5sum_local = strdup(src->md5sum_local);
+  }
+
+  dst->has_unvisible_segments = src->has_unvisible_segments;
+  dst->size = src->size;
+  dst->size_on_cloud = src->size_on_cloud;
+  dst->is_segmented = src->is_segmented;
+  dst->segment_count = src->segment_count;
+  dst->segment_full_count = src->segment_full_count;
+  dst->segment_part = src->segment_part;
+  dst->segment_remaining = src->segment_remaining;
+  dst->segment_size = src->segment_size;
+  dst->isdir = src->isdir;
+  dst->islink = src->islink;
+  if (src->content_type)
+    dst->content_type = strdup(src->content_type);
+
+  if (src->segments)
+  {
+    assert(!dst->segments);
+    dir_entry* src_seg = src->segments;
+    dir_entry* dst_seg = init_dir_entry();
+    dst->segments = dst_seg;
+    while (src_seg)
+    {
+      copy_dir_entry(src_seg, dst_seg);
+      src_seg = src_seg->next;
+      if (src_seg)
+      {
+        dst_seg->next = init_dir_entry();
+        dst_seg = dst_seg->next;
+      }
+    }
+  }
 }
 
 //check for file in cache, if found size will be updated, if not found
@@ -1252,7 +1335,7 @@ bool append_dir_entry(dir_entry* de)
 int internal_check_caching_list_directory(dir_cache* cache,
     pthread_mutex_t mutex, const char* path, dir_entry** list)
 {
-  debugf(DBG_EXT, "check_caching_list_directory(%s)", path);
+  debugf(DBG_EXTALL, "check_caching_list_directory(%s)", path);
   //pthread_mutex_lock(&mutex);
   lock_mutex(mutex);
   if (!strcmp(path, "/"))
@@ -1405,6 +1488,29 @@ dir_entry* check_path_info_upload(const char* path)
 }
 
 /*
+  unlink a segment file from cache
+*/
+bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
+{
+  char segment_file_path[NAME_MAX] = { 0 };
+  char segment_file_dir[NAME_MAX] = { 0 };
+  get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
+                           temp_dir, de_seg->segment_part);
+  bool file_exist = access(segment_file_path, F_OK) != -1;
+  int result = 0;
+  if (file_exist)
+  {
+    result = unlink(segment_file_path);
+    int err = errno;
+    if (result != 0)
+    {
+      debugf(DBG_EXT, KYEL "delete_segment_cache(%s): cannot unlink, err=%s",
+             de_seg->full_name, strerror(err));
+    }
+  }
+  return result == 0;
+}
+/*
   look for segment in cache
   if exists, returns file handle to file in cache
   if does not exist, create file and return handle
@@ -1426,13 +1532,13 @@ bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
                       (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
   int err = errno;
   assert(*fp_segment);
-  debugf(DBG_EXTALL,
-         KMAG"open_segment_from_cache: open segment fp=%p segindex=%d",
-         *fp_segment, de_seg->segment_part);
+  debugf(DBG_EXT, KMAG
+         "open_segment_from_cache(%s): open segment fp=%p segindex=%d",
+         de_seg->name, *fp_segment, de_seg->segment_part);
   if (file_exist)
   {
-    debugf(DBG_EXTALL,
-           KMAG"open_segment_from_cache: found segment %d md5=%s",
+    debugf(DBG_EXTALL, KMAG
+           "open_segment_from_cache: found segment %d md5=%s",
            de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
     assert(fno != -1);
@@ -1830,6 +1936,14 @@ char* get_home_dir()
   return "~";
 }
 
+off_t get_file_size(FILE* fp)
+{
+  struct stat st;
+  int fd = fileno(fp);
+  assert(fd != -1);
+  assert(fstat(fd, &st) == 0);
+  return st.st_size;
+}
 
 //allows memory leaks inspections
 void interrupt_handler(int sig)

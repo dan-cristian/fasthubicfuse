@@ -20,7 +20,8 @@ typedef enum { false, true } bool;
 #define MAX_SEGMENT_THREADS 5
 #define MAX_DELETE_THREADS 10
 #define MAX_COPY_THREADS 10
-#define REQUEST_RETRIES 10
+#define REQUEST_RETRIES 5
+#define BUFFER_READ_SIZE 128 * 1024
 
 #define APP_ID "FastHubicFuse_v0_1"
 
@@ -39,7 +40,7 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_IS_SEGMENTED "X-Object-Meta-Is-Segmented"
 #define HEADER_TEXT_PRODUCED_BY "X-Object-Meta-Produced-By"
 #define HEADER_TEXT_MANIFEST "X-Object-Manifest"
-#define HEADER_TEXT_SEGMENT_SIZE "X-Object-Segment-Size"
+#define HEADER_TEXT_SEGMENT_SIZE "X-Object-Meta-Segment-Size"
 #define HEADER_TEXT_CONTENT_LEN "Content-Length"
 #define HEADER_TEXT_CONTENT_TYPE "Content-Type"
 
@@ -91,7 +92,7 @@ typedef struct progressive_data_buf
 {
   const char* readptr;
   size_t work_buf_size;
-  off_t offset;
+  //off_t offset;
   size_t size_processed;
   //bool upload_completed;
   //bool write_completed;
@@ -145,7 +146,8 @@ typedef struct dir_entry
   struct thread_job* job;
   bool is_progressive;
   bool is_single_thread;
-
+  //some segments uploaded ok are not yet visible in the cloud
+  bool has_unvisible_segments;
   // end change
   int isdir;
   int islink;
@@ -233,6 +235,7 @@ dir_entry* init_dir_entry();
 void free_de_before_get(dir_entry* de);
 void free_de_before_head(dir_entry* de);
 void free_thread_job(thread_job* job);
+void create_dir_entry(dir_entry* de, const char* path, mode_t mode);
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);
@@ -257,6 +260,7 @@ void dir_decache_upload(const char* path);
 void cloudfs_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
 int caching_list_directory(const char* path, dir_entry** list);
+bool delete_segment_cache(dir_entry* de, dir_entry* de_seg);
 bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
                            FILE** fp_segment, const char* method);
 bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
@@ -266,6 +270,7 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
 bool cleanup_older_segments(char* dir_path, char* exclude_path);
 void sleep_ms(int milliseconds);
+off_t get_file_size(FILE* fp);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);

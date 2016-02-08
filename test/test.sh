@@ -108,6 +108,27 @@ function check_chown(){
 }
 export -f check_chown
 
+# $1=file name, $2=target time
+function check_utimens(){
+	echo -n $(date +"%H:%m:%S")" $! Testing: utimens check" $1 "..."
+	access=$(stat -c "%x" $1)
+	modified=$(stat -c "%y" $1)
+	if [[ "$access" == *"$2"* ]]; then
+		if [[ "$modified" == *"$2"* ]]; then
+			echo -e $PASSED_MSG $!
+			return 1
+		else
+			echo -n " $modified!=$2 "
+			echo -e $FAILED_MSG $!
+			return 0
+		fi
+	else
+		echo -n " $access!=$2 "
+		echo -e $FAILED_MSG $!
+		return 0
+	fi
+}
+
 function setup_config_progressive(){
 	echo
 	echo Setting hubicfuse progressive config...
@@ -253,6 +274,18 @@ function test_chown(){
 	return 1
 }
 
+function test_utimens(){
+	echo "Testing utimens..."
+	if test "utimens set" "touch -a -m -d '2011-03-06 00:15:16.000000000 +0200' $HUB/$TINY"; then return 0; fi
+	cache_reset
+	if check_utimens "$HUB/$TINY" "2011-03-06 00:15:16.000000000 +0200"; then return 0; fi
+	#check size to ensure meta was not lost
+	if test "download tiny file" "$COPY_CMD $HUB/$TINY $TMP/"; then return; fi
+	if check_md5 "$TMP/$TINY" "$TINY_MD5"; then return; fi
+	echo Test completed!
+	echo ---------------
+	return 1
+}
 
 function test_rename_small(){
 	echo "Testing rename small files..."
@@ -375,6 +408,9 @@ while true; do
 		echo New build detected!
 		sleep 5
 		setup_test
+		
+		if test_upload_small; then exit; fi
+		if test_utimens; then exit; fi
 		
 		test_long_running &
 		if test_upload_medium; then exit; fi
