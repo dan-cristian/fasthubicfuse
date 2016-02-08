@@ -705,8 +705,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
                  de->name);
 
-          dir_decache_upload(de_upload->full_name);
-
           //fixme: sometimes last segment is not yet visible on cloud
           //copy dir_entry rather than forcing meta download from cloud
           if (de_upload->has_unvisible_segments)
@@ -720,6 +718,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
             de->metadata_downloaded = false;
             get_file_metadata(de);
           }
+          dir_decache_upload(de_upload->full_name);
         }
       }
       else

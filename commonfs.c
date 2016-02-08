@@ -1045,6 +1045,8 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
 */
 void copy_dir_entry(dir_entry* src, dir_entry* dst)
 {
+  debugf(DBG_EXT, KCYN"copy_dir_entry(%s:%s)",
+         src->name ? src->name : "nul", dst->name ? dst->name : "nul");
   if (!dst->name && src->name)
     dst->name = strdup(src->name);
   if (!dst->full_name && src->full_name)
@@ -1086,6 +1088,13 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
   dst->islink = src->islink;
   if (src->content_type)
     dst->content_type = strdup(src->content_type);
+
+  if (!dst->manifest_cloud && src->manifest_cloud)
+    dst->manifest_cloud = strdup(src->manifest_cloud);
+  if (!dst->manifest_time && src->manifest_time)
+    dst->manifest_time = strdup(src->manifest_time);
+  if (!dst->manifest_seg && src->manifest_seg)
+    dst->manifest_seg = strdup(src->manifest_seg);
 
   //fixme: segments not copied ok
   if (src->segments)
