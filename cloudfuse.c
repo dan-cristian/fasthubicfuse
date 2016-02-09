@@ -213,6 +213,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   }
   //get file. if not in cache will be added
   dir_entry* de = path_info(path);
+  update_cache_access(de);
   if (!de)
   {
     debug_list_cache_content();
@@ -296,6 +297,7 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
   //{
   //get file. if not in cache will be downloaded.
   dir_entry* de = path_info(path);
+  update_cache_access(de);
   if (!de)
   {
     debug_list_cache_content();
@@ -400,6 +402,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
          info->fh);
   bool file_cache_ok = false;
   dir_entry* de = path_info(path);
+  update_cache_access(de);
   if (!de)
     return -ENOENT;
   //create/open file in cache so we can manage concurrent operations on same file
@@ -435,6 +438,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   bool in_cache = false;
 
   dir_entry* de = check_path_info(path);
+  update_cache_access(de);
 
   if (de && de->is_segmented)
   {
@@ -643,6 +647,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   debug_print_descriptor(info);
   int errsv = 0;
   dir_entry* de = check_path_info(path);
+  update_cache_access(de);
   dir_entry* de_upload = check_path_info_upload(path);
 
   if (!de_upload)
@@ -770,8 +775,8 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
          "cfs_release(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
          info->fh);
-  //if (info->fh != -1)
-  //  close(((openfile*)(uintptr_t)info->fh)->fd);
+  dir_entry* de = check_path_info(path);
+  update_cache_access(de);
   debugf(DBG_NORM, KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
@@ -972,6 +977,9 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           || (de_seg->upload_buf.size_processed == de_seg->size))
       {
         assert(de->manifest_seg);
+        //if previous upload failed before uploading any data (401 httperr)
+        //need to wait until thread does cleanup to retry upload
+        pthread_mutex_lock(&de_seg->upload_buf.mutex);
         bool op_ok = cloudfs_create_segment(de_seg, de);
         assert(op_ok);
       }
@@ -979,7 +987,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       //signal there is data available in buffer for upload
       if (de_seg->upload_buf.sem_list[SEM_FULL])
         sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
-      //wait until previous buffer data is uploaded
+      //wait until previous buffer data is uploaded via curl callback
       if (de_seg->upload_buf.sem_list[SEM_EMPTY])
         sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
       seg_size_uploaded = seg_size_to_upload - de_seg->upload_buf.work_buf_size;
@@ -997,7 +1005,15 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       size_t write_len = fwrite(buf + ptr_offset,
                                 1, seg_size_uploaded,
                                 de_seg->upload_buf.local_cache_file);
-      assert(write_len == seg_size_uploaded);
+      errsv = errno;
+      if (write_len != seg_size_uploaded)
+      {
+        //probably disk is full
+        debugf(DBG_EXT, KRED "cfs_write(%s): cache write error=%s",
+               path, strerror(errsv));
+        dir_decache(de->full_name);
+        return -EIO;
+      }
 
       //add what was planned for upload and subtract was did not get uploaded
       seg_size_processed += seg_size_uploaded;
@@ -1213,6 +1229,7 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
   debugf(DBG_NORM, KBLU "cfs_utimens(%s)", path);
   // looking for file entry in cache
   dir_entry* de = path_info(path);
+  update_cache_access(de);
   if (!de)
   {
     debugf(DBG_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);

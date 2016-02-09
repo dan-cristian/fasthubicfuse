@@ -18,6 +18,8 @@ struct curl_progress
 {
   double lastruntime;
   CURL* curl;
+  char method;
+  int tries;
 };
 
 typedef struct options

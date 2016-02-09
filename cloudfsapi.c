@@ -645,6 +645,16 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
   curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &curtime);
   curl_easy_getinfo(curl, CURLINFO_SPEED_DOWNLOAD, &dspeed);
   curl_easy_getinfo(curl, CURLINFO_SPEED_UPLOAD, &uspeed);
+
+  //chaos test monkey
+  if (ultotal == 0 && myp->method == 'P'
+      && myp->tries == 1 && random_at_most(50) == 1)
+  {
+    //force connection close
+    //debugf(DBG_EXT, KRED "TEST ABORT");
+    //return 1;
+  }
+
   /* under certain circumstances it may be desirable for certain functionality
      to only run every N seconds, in order to do this the transaction time can
      be used */
@@ -767,8 +777,12 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   return 0;
 }
 
-int progressive_closesocket_callback(void* clientp, curl_socket_t item)
-{
+/*
+  called when connection is closed, both on success or error
+*/
+/*
+  int progressive_closesocket_callback(void* clientp, curl_socket_t item)
+  {
   debugf(DBG_EXT, KMAG "progressive_closesocket_callback: closing");
 
   dir_entry* de = (dir_entry*)clientp;
@@ -778,13 +792,14 @@ int progressive_closesocket_callback(void* clientp, curl_socket_t item)
   if (de->upload_buf.sem_list[SEM_EMPTY])
   {
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
-    sleep_ms(100);
+    //sleep_ms(100);
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
-    sleep_ms(100);
+    //sleep_ms(100);
   }
   debugf(DBG_EXT, KMAG "progressive_closesocket_callback: closed %s",
          de->name);
-}
+  }
+*/
 
 /*
    if de_seg != null assumes this sends a segment request
@@ -842,6 +857,12 @@ static int send_request_size(const char* method, const char* encoded_path,
     path++;
 
   snprintf(url, sizeof(url), "%s/%s", storage_url, path);
+  //for progress reporting
+  //http://curl.haxx.se/libcurl/c/progressfunc.html
+  struct curl_progress prog;
+  prog.lastruntime = 0;
+  prog.tries = 0;
+
   // retry on HTTP failures
   for (tries = 0; tries < REQUEST_RETRIES; tries++)
   {
@@ -948,9 +969,10 @@ static int send_request_size(const char* method, const char* encoded_path,
 
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)de_seg);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_segment_meta);
-        curl_easy_setopt(curl, CURLOPT_CLOSESOCKETDATA, (void*)de_seg);
-        curl_easy_setopt(curl, CURLOPT_CLOSESOCKETFUNCTION,
-                         &progressive_closesocket_callback);
+        //don't use as can't differentiate between close ok or due to error
+        //curl_easy_setopt(curl, CURLOPT_CLOSESOCKETDATA, (void*)de_seg);
+        //curl_easy_setopt(curl, CURLOPT_CLOSESOCKETFUNCTION,
+        //                 &progressive_closesocket_callback);
 
       }
       else//not progressive
@@ -1074,11 +1096,10 @@ static int send_request_size(const char* method, const char* encoded_path,
     //common code for all operations
     if (option_curl_progress_state)
     {
-      //enable progress reporting
+      //for progress reporting
       //http://curl.haxx.se/libcurl/c/progressfunc.html
-      struct curl_progress prog;
-      prog.lastruntime = 0;
       prog.curl = curl;
+      prog.method = method[0];
       curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progress_callback);
       /* pass the struct pointer into the progress function */
       curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, &prog);
@@ -1095,6 +1116,7 @@ static int send_request_size(const char* method, const char* encoded_path,
            orig_path, url);
 
     signal(SIGPIPE, sigpipe_callback_handler);
+    prog.tries++;
     curl_easy_perform(curl);
 
     char* effective_url;
@@ -1136,21 +1158,32 @@ static int send_request_size(const char* method, const char* encoded_path,
 
     if (is_upload)
     {
-      //
+      //signal request completion (replaces callback option)
+      if ((option_enable_progressive_upload && file_size > 0) && de_seg)
+      {
+        //signal cfs_write and cfs_flush we're done
+        if (de->upload_buf.sem_list[SEM_EMPTY])
+        {
+          sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
+          //sleep_ms(100);
+          sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
+          //sleep_ms(100);
+        }
+      }
     }
 
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE")
         && response == 409))
     {
       debugf(DBG_NORM,
-             "exit 0: send_request_size(%s) speed=%.1f sec res=%d dwn=%.0f upld=%.0f"
+             "status: send_req_size(%s) speed=%.1f sec res=%d dwn=%.0f upld=%.0f"
              KCYN "(%s) " KGRN "[HTTP OK]", print_path, total_time, response,
              size_downloaded, size_uploaded, method);
       break;
     }
     if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
     {
-      debugf(DBG_NORM, KYEL"exit 1: send_request_size(%s) (%s) [HTTP REAUTH]",
+      debugf(DBG_NORM, KYEL"status: send_req_size(%s) (%s) [HTTP REAUTH]",
              print_path, method);
       break;
     }
@@ -1166,7 +1199,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     if (response == 404)
     {
       debugf(DBG_NORM,
-             "send_request_size: not found error for (%s)(%s), ignored "
+             "send_req_size: not found error for (%s)(%s), ignored "
              KYEL "[HTTP 404]", method, print_path);
       break;
     }
@@ -1185,7 +1218,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   }//end for
   if (encoded_path == NULL)
     curl_free(orig_path);
-  debugf(DBG_NORM, "exit 2: send_request_size(%s)" KCYN
+  debugf(DBG_NORM, "exit: send_request_size(%s)" KCYN
          "(%s) response=%d total_time=%.1f seconds",
          print_path, method, response, total_time);
 
@@ -2124,6 +2157,9 @@ void internal_upload_segment_progressive(void* arg)
   }
   //sometimes, de will be freed by now by cfs_flush
   debugf(DBG_EXT, "exit: internal_upload_segment_progressive");
+  job->de_seg->job = NULL;
+  //unlock to allow another upload segment to retry a failed transfer
+  pthread_mutex_unlock(&job->de_seg->upload_buf.mutex);
   free_thread_job(job);
   free(dbg_de_name);
   free(dbg_de_seg_name);

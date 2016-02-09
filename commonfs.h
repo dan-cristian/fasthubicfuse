@@ -210,6 +210,7 @@ int get_time_as_string(time_t time_t_val, long nsec, char* time_str,
 time_t get_time_now();
 int get_timespec_as_str(const struct timespec* times, char* time_str,
                         int time_str_len);
+void update_cache_access(dir_entry* de);
 char* str2md5(const char* str, int length);
 int file_md5(FILE* file_handle, char* md5_file_str);
 int file_md5_by_name(const char* file_name_str, char* md5_file_str);

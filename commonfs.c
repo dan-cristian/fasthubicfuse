@@ -86,6 +86,10 @@ time_t get_time_from_str_as_gmt(char* time_str)
   return val_time_t;
 }
 
+/*
+  return time as time_t, and if time_str != NULL returns also a string
+  representation in time_str
+*/
 time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size)
 {
   struct tm loc_time_tm;
@@ -147,6 +151,15 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
 {
   return get_time_as_string(times->tv_sec, times->tv_nsec, time_str,
                             time_str_len);
+}
+
+/*
+  set dir_entry access time to now
+*/
+void update_cache_access(dir_entry* de)
+{
+  if (de)
+    de->accessed_in_cache = get_time_now();
 }
 
 //solution from http://stackoverflow.com/questions/7627723/how-to-create-a-md5-hash-of-a-string-in-c
