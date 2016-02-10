@@ -20,6 +20,7 @@ struct curl_progress
   CURL* curl;
   char method;
   int tries;
+  int response;
 };
 
 typedef struct options

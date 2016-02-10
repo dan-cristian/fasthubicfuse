@@ -428,7 +428,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   int result = -1;
   off_t offset_seg;
   int sem_val, err;
-  int rnd = random_at_most(50);
+  //int rnd = random_at_most(50);
   //if (offset % 100000 == 0)//avoid clutter
   debugf(DBG_EXT, KBLU
          "cfs_read(%s) buffsize=%lu offset=%lu ", path, size, offset);
@@ -682,8 +682,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
           //signal free of semaphores is safe now
           free_semaphores(&de_seg->upload_buf, SEM_DONE);
-          //free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
-          //free_semaphores(&de_seg->upload_buf, SEM_FULL);
 
           //check if all previous segment uploads are done (except last)
           //sometimes prev uploads are still in progress
@@ -696,11 +694,11 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           {
             de_seg_tmp = get_segment(de_upload, seg_index);
             assert(de_seg_tmp);
-            if (de_seg_tmp->upload_buf.sem_list[SEM_EMPTY])
+            if (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
             {
               debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
                      de->name, de_seg_tmp->name);
-              sem_wait(de_seg_tmp->upload_buf.sem_list[SEM_EMPTY]);
+              sem_wait(de_seg_tmp->upload_buf.sem_list[SEM_DONE]);
               debugf(DBG_EXT, KMAG "cfs_flush(%s): pending upload %s done",
                      de->name, de_seg_tmp->name);
             }
@@ -821,6 +819,9 @@ static int cfs_ftruncate(const char* path, off_t size,
 
   todo: implement versioning?
   https://docs.hpcloud.com/publiccloud/api/swift-api.html
+
+  error codes
+  http://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
 */
 static int cfs_write(const char* path, const char* buf, size_t length,
                      off_t offset, struct fuse_file_info* info)
@@ -1012,7 +1013,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         debugf(DBG_EXT, KRED "cfs_write(%s): cache write error=%s",
                path, strerror(errsv));
         dir_decache(de->full_name);
-        return -EIO;
+        return -ENOSPC;
       }
 
       //add what was planned for upload and subtract was did not get uploaded

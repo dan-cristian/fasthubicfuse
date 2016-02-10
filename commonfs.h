@@ -228,6 +228,7 @@ void get_manifest_path(dir_entry* de, char* manifest_path);
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
                              const int segment_part);
+void unblock_semaphore(sem_t* semaphore);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index);

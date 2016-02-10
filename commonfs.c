@@ -699,7 +699,7 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
       {
         if (de_seg->segment_part != segment_index)
           de_seg->segment_part = segment_index;
-        debugf(DBG_EXT, "get_create_segment(%s:%d): reusing segment",
+        debugf(DBG_EXTALL, "get_create_segment(%s:%d): reusing segment",
                de->name, segment_index);
         break;
       }
@@ -838,6 +838,31 @@ void dir_decache_upload(const char* path)
 {
   debugf(DBG_EXT, "dir_decache_upload(%s)", path);
   internal_dir_decache(dcache_upload, dcacheuploadmut, path);
+}
+
+/*
+  post a semaphore and waits until semaphore count changes
+  or exits after a period of time (500 milisecond)
+*/
+void unblock_semaphore(sem_t* semaphore)
+{
+  if (semaphore)
+  {
+    int sem_val1, sem_val2, i;
+    sem_getvalue(semaphore, &sem_val1);
+    sem_post(semaphore);
+    for (i = 0; i < 500; i++)
+    {
+      sem_getvalue(semaphore, &sem_val2);
+      if (sem_val1 != sem_val2)
+        break;
+      sleep_ms(1);
+    }
+    debugf(DBG_EXT, KMAG "unblock_semaphore in %d milisec, val %d->%d",
+           i, sem_val1, sem_val2);
+  }
+  else
+    debugf(DBG_EXT, "unblock_semaphore was null");
 }
 
 //data_buf exists for dowload and upload

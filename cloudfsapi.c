@@ -648,10 +648,11 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
 
   //chaos test monkey
   if (ultotal == 0 && myp->method == 'P'
-      && myp->tries == 1 && random_at_most(50) == 1)
+      && myp->tries == 1)// && random_at_most(50) == 1)
   {
     //force connection close
     //debugf(DBG_EXT, KRED "TEST ABORT");
+    //myp->response = 401;
     //return 1;
   }
 
@@ -1117,7 +1118,9 @@ static int send_request_size(const char* method, const char* encoded_path,
 
     signal(SIGPIPE, sigpipe_callback_handler);
     prog.tries++;
+    prog.response = -1;//for debug
     curl_easy_perform(curl);
+
 
     char* effective_url;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
@@ -1131,6 +1134,15 @@ static int send_request_size(const char* method, const char* encoded_path,
     curl_slist_free_all(headers);
     curl_easy_reset(curl);
     return_connection(curl);
+
+    //used for debug/error codes simulation
+    if (prog.response != -1)
+    {
+      debugf(DBG_NORM, KYEL
+             "status: send_request_size(%s) force debug response=%d",
+             orig_path, prog.response);
+      response = prog.response;
+    }
 
     if (response != 404 && (response >= 400 || response < 200))
     {
@@ -1162,13 +1174,8 @@ static int send_request_size(const char* method, const char* encoded_path,
       if ((option_enable_progressive_upload && file_size > 0) && de_seg)
       {
         //signal cfs_write and cfs_flush we're done
-        if (de->upload_buf.sem_list[SEM_EMPTY])
-        {
-          sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
-          //sleep_ms(100);
-          sem_post(de->upload_buf.sem_list[SEM_EMPTY]);
-          //sleep_ms(100);
-        }
+        unblock_semaphore(de->upload_buf.sem_list[SEM_EMPTY]);
+        unblock_semaphore(de->upload_buf.sem_list[SEM_EMPTY]);
       }
     }
 
@@ -2069,8 +2076,10 @@ void internal_upload_segment_progressive(void* arg)
     free_semaphores(&job->de_seg->upload_buf, SEM_FULL);
   //don't free DONE semaphore on last segment upload, is freed in cfsflush
   if (job->de_seg->segment_part != job->de->segment_count - 1)
-    if (job->de_seg->upload_buf.sem_list[SEM_DONE])
-      free_semaphores(&job->de_seg->upload_buf, SEM_DONE);
+  {
+    unblock_semaphore(job->de_seg->upload_buf.sem_list[SEM_DONE]);
+    free_semaphores(&job->de_seg->upload_buf, SEM_DONE);
+  }
 
   if (!op_ok)
   {
@@ -2677,7 +2686,8 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
       assert(ftruncate(fd, 0) == 0);
     }
   }
-  sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
+  unblock_semaphore(de_seg->downld_buf.sem_list[SEM_FULL]);
+  //sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
   free_semaphores(&de_seg->downld_buf, SEM_EMPTY);
   free_semaphores(&de_seg->downld_buf, SEM_FULL);
   pthread_mutex_unlock(&de_seg->downld_buf.mutex);
