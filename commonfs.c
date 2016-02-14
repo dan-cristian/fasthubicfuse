@@ -232,6 +232,8 @@ int file_md5(FILE* file_handle, char* md5_file_str)
 */
 bool init_job_md5(thread_job* job)
 {
+  if (job->md5str)
+    free(job->md5str);
   job->md5str = NULL;
   return (MD5_Init(&job->mdContext) == 1);
 }
@@ -734,9 +736,11 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   de_seg->full_name = strdup(seg_path);
   de_seg->full_name_hash = strdup(str2md5(de_seg->full_name,
                                           strlen(de_seg->full_name)));;
+
+  //need to set seg_size so upload knows how much data to upload in a segment
   if (de_seg->segment_part < de->segment_full_count)
-    de_seg->size = de->segment_size;
-  else de_seg->size = de->segment_remaining;
+    de_seg->segment_size = de->segment_size;
+  else de_seg->segment_size = de->segment_remaining;
 
   return de_seg;
 }
@@ -844,25 +848,27 @@ void dir_decache_upload(const char* path)
   post a semaphore and waits until semaphore count changes
   or exits after a period of time (500 milisecond)
 */
-void unblock_semaphore(sem_t* semaphore)
+void unblock_semaphore(sem_t* semaphore, char* name)
 {
   if (semaphore)
   {
     int sem_val1, sem_val2, i;
     sem_getvalue(semaphore, &sem_val1);
+    debugf(DBG_EXT, KMAG "unblock_semaphore(%s) start, val=%d",
+           name, sem_val1);
     sem_post(semaphore);
-    for (i = 0; i < 500; i++)
+    for (i = 0; i < 250; i++)
     {
       sem_getvalue(semaphore, &sem_val2);
-      if (sem_val1 != sem_val2)
+      if (sem_val2 <= sem_val1)
         break;
       sleep_ms(1);
     }
-    debugf(DBG_EXT, KMAG "unblock_semaphore in %d milisec, val %d->%d",
-           i, sem_val1, sem_val2);
+    debugf(DBG_EXT, KMAG "unblock_semaphore(%s) in %d milisec, val %d->%d",
+           name, i, sem_val1, sem_val2);
   }
   else
-    debugf(DBG_EXT, "unblock_semaphore was null");
+    debugf(DBG_EXT, KMAG "unblock_semaphore(%s) was null", name);
 }
 
 //data_buf exists for dowload and upload
@@ -1016,6 +1022,7 @@ dir_entry* init_dir_entry()
   de->upload_buf.size_processed = 0;
   de->upload_buf.fuse_buf_size = 0;
   de->upload_buf.signaled_completion = false;
+  de->upload_buf.feed_from_cache = false;
   de->downld_buf.ahead_thread_count = 0;
   de->full_name_hash = NULL;
   de->is_segmented = false;
@@ -1658,7 +1665,7 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
 {
   bool result = false;
-  char segment_file_path[NAME_MAX] = { 0 };
+  char segment_file_path[PATH_MAX] = { 0 };
   get_safe_cache_file_path(de->full_name, segment_file_path, NULL,
                            temp_dir, de_seg->segment_part);
   bool file_exist = access(segment_file_path, F_OK) != -1;
@@ -1971,6 +1978,26 @@ int open_lock_file(const char* path, unsigned int flags)
   assert(fd != -1);
   add_lock_file(path, open_flags, temp_file, fd);
   return fd;
+}
+
+/*
+  delete all segment cached files from disk
+*/
+void unlink_cache_segments(dir_entry* de)
+{
+  char segment_file_path[PATH_MAX] = { 0 };
+  char segment_parent_dir_path[PATH_MAX] = { 0 };
+  dir_entry* de_seg = de->segments;
+
+  while (de_seg)
+  {
+    get_safe_cache_file_path(de->full_name, segment_file_path,
+                             segment_parent_dir_path,
+                             temp_dir, de_seg->segment_part);
+    unlink(segment_file_path);
+    de_seg = de_seg->next;
+  }
+  rmdir(segment_parent_dir_path);
 }
 
 void sleep_ms(int milliseconds)

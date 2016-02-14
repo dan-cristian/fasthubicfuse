@@ -21,6 +21,8 @@ struct curl_progress
   char method;
   int tries;
   int response;
+  dir_entry* de;
+  bool donotstop;
 };
 
 typedef struct options
@@ -81,6 +83,7 @@ char* override_storage_url;
 char* public_container;
 
 int file_is_readable(const char* fname);
+bool int_cfs_write_cache_data_feed(dir_entry* de_seg);
 const char* get_file_mimetype (const char* filename);
 
 int cloudfs_object_read_fp(dir_entry* de, FILE* fp);
@@ -97,7 +100,7 @@ int cloudfs_statfs(const char* path, struct statvfs* stat);
 void cloudfs_verify_ssl(int dbg);
 void cloudfs_option_get_extended_metadata(int option);
 void cloudfs_option_curl_verbose(int option);
-void get_file_metadata(dir_entry* de);
+bool get_file_metadata(dir_entry* de);
 int cloudfs_update_meta(dir_entry* de);
 //int cloudfs_object_upload_progressive(dir_entry* de, dir_entry* de_seg);
 void* cloudfs_object_downld_progressive(void* path);

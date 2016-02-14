@@ -107,6 +107,7 @@ typedef struct progressive_data_buf
   size_t fuse_read_size;
   FILE* local_cache_file;
   size_t fuse_buf_size;
+  bool feed_from_cache;
 } progressive_data_buf;
 
 //linked list with files in a directory
@@ -228,7 +229,7 @@ void get_manifest_path(dir_entry* de, char* manifest_path);
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
                              const int segment_part);
-void unblock_semaphore(sem_t* semaphore);
+void unblock_semaphore(sem_t* semaphore, char* name);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
@@ -271,6 +272,7 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
 bool cleanup_older_segments(char* dir_path, char* exclude_path);
+void unlink_cache_segments(dir_entry* de);
 void sleep_ms(int milliseconds);
 off_t get_file_size(FILE* fp);
 char* get_home_dir();
