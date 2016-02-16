@@ -58,6 +58,7 @@ extern long option_min_speed_limit_progressive;
 extern long option_min_speed_timeout;
 extern char* temp_dir;
 extern long option_read_ahead;
+extern bool option_enable_chaos_test_monkey;
 static int rhel5_mode = 0;
 static struct statvfs statcache =
 {
@@ -360,8 +361,6 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
           debugf(DBG_NORM, "header_get_meta_dispatch: " KYEL
                  "hash difference, cache=%s cloud=%s",
                  de->md5sum, value);
-          //fixme: sometimes etag on hubic is incorrect,
-          //noticed on segmented files or newly uploaded files (rigth after PUT)
           free(de->md5sum);
           de->md5sum = strdup(value);//this is ok for PUT
           debugf(DBG_EXT, "header_get_meta_dispatch: set md5sum=%s",
@@ -655,12 +654,12 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
   if (myp->de && myp->de->upload_buf.feed_from_cache)
     myp->donotstop = true;
 
-  if (ulnow >= 500000 && myp->method == 'P'
+  if (option_enable_chaos_test_monkey && ulnow >= 500000 && myp->method == 'P'
       && myp->tries == 1 && (!myp->donotstop))
     // && random_at_most(50) == 1)
   {
     //force connection close
-    debugf(DBG_EXT, KRED "TEST ABORT");
+    debugf(DBG_TEST, "Aborting upload transfer at %lu bytes", ulnow);
     //sleep_ms(5000);
     myp->response = 0;
     return 1;
@@ -764,7 +763,11 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
     //http://sourceforge.net/p/fuse/mailman/message/29119987/
     //copy to http upload buffer
     memcpy(ptr, upload_buf->readptr, max_size_to_upload);
+    //compute segment md5sum
     assert(update_job_md5(de->job, upload_buf->readptr, max_size_to_upload));
+    //compute whole file md5sum
+    assert(update_job_md5(de->parent->job2, upload_buf->readptr,
+                          max_size_to_upload));
     upload_buf->readptr += max_size_to_upload;
     upload_buf->work_buf_size -= max_size_to_upload;
     upload_buf->size_processed += max_size_to_upload;
@@ -1989,7 +1992,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
     read_len = fread(cache_buf, 1, BUFFER_READ_SIZE,
                      de_seg->upload_buf.local_cache_file);
     debugf(DBG_EXT, KMAG
-           "int_cfs_write_cache_data_feed(%s): read file size=%lu",
+           "int_cfs_write_cache(%s): read file size=%lu",
            de_seg->name, read_len);
     if (read_len > 0)
     {
@@ -1997,11 +2000,10 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
       while (de_seg->upload_buf.work_buf_size > 0)
       {
         debugf(DBG_EXT, KMAG
-               "int_cfs_write_cache_data_feed(%s): looping workbufsize=%lu",
+               "int_cfs_write_cache(%s): looping workbufsize=%lu",
                de_seg->name, de_seg->upload_buf.work_buf_size);
         //index in buffer to resume upload in a new segment
-        //(when buffer did not fit in the current segment)
-        ptr_offset = BUFFER_READ_SIZE - de_seg->upload_buf.work_buf_size;
+        ptr_offset = read_len - de_seg->upload_buf.work_buf_size;
         de_seg->upload_buf.readptr = cache_buf + ptr_offset;
         //signal there is data available in buffer for upload
         if (de_seg->upload_buf.sem_list[SEM_FULL])
@@ -2010,19 +2012,18 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
         if (de_seg->upload_buf.sem_list[SEM_EMPTY])
           sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
         debugf(DBG_EXT, KMAG
-               "int_cfs_write_cache_data_feed(%s): buf empty proc=%lu worksize=%lu",
+               "int_cfs_write_cache(%s): wait done, empty proc=%lu worksize=%lu",
                de_seg->name, de_seg->upload_buf.size_processed,
                de_seg->upload_buf.work_buf_size);
       }
     }
     else
       debugf(DBG_EXT, KMAG
-             "int_cfs_write_cache_data_feed(%s): cache read done",
-             de_seg->name);
+             "int_cfs_write_cache(%s): cache read done", de_seg->name);
   }
   while (read_len > 0);
   debugf(DBG_EXT, KMAG
-         "int_cfs_write_cache_data_feed(%s): exit cache feed proc=%lu",
+         "int_cfs_write_cache(%s): exit cache feed proc=%lu",
          de_seg->name, de_seg->upload_buf.size_processed);
   free(cache_buf);
 }
@@ -2054,17 +2055,17 @@ void internal_upload_segment_progressive(void* arg)
   char* dbg_de_seg_name = strdup(job->de_seg->name);
   bool cache_file_exist;
   //increment before upload finishes to avoid cfs_flush to miss last segment
-  job->de->segment_count++;
+  //job->de->segment_count++;
   int response, i;
   bool op_ok = false, md5err = false;
-
+  save_job_md5(job->de->job2);//saves a snapshot in case error resume is needed
   //multiple attempts, one to create root storage, rest for md5sum failures
   for (i = 0; i < 1 + REQUEST_RETRIES; i++)
   {
     if (md5err)
     {
-      job->de_seg->upload_buf.feed_from_cache = true;
-      //wait until cache data is read and ready for feed
+      restore_job_md5(job->de->job2);
+      //wait until cache data is read and ready to feed into http
       sem_wait(job->de_seg->upload_buf.sem_list[SEM_FULL]);
     }
     assert(init_job_md5(job));
@@ -2079,7 +2080,7 @@ void internal_upload_segment_progressive(void* arg)
     if (!op_ok && job->de_seg->segment_part == 0 && response == 404)
     {
       debugf(DBG_EXT, KYEL
-             "internal_upload_segment_prog(%s): error response=%d",
+             "int_upload_seg_prog(%s): error response=%d",
              job->de->name, response);
       //first: try to create parent segment storage
       if (i == 0)
@@ -2093,12 +2094,16 @@ void internal_upload_segment_progressive(void* arg)
       {
         //most likely upload was interrupted by server/network, need to retry
         debugf(DBG_EXT, KRED
-               "internal_upload_segment_prog(%s): md5sum NOT OK de_seg=%s try=%d",
-               job->de_seg->name, job->de_seg->name, i);
+               "int_upload_seg_prog(%s): md5sum ERROR de_seg=%s try=%d sizeproc=%lu",
+               job->de->name, job->de_seg->name, i, job->de_seg->upload_buf.size_processed);
+        job->de_seg->upload_buf.feed_from_cache = true;
         //if file is not deleted quick upload over same file can determine
         //wrong file size (data appended?)
-        cloudfs_delete_object(job->de_seg);
+        //cloudfs_delete_object(job->de_seg);
         md5err = true;
+        debugf(DBG_EXT,
+               "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
+               job->de_seg->name, job->de_seg->upload_buf.size_processed);
         //unblock cfs_write to go into cache data feed
         sem_post(job->de_seg->upload_buf.sem_list[SEM_EMPTY]);
         op_ok = false;
@@ -2120,10 +2125,8 @@ void internal_upload_segment_progressive(void* arg)
       else
       {
         debugf(DBG_EXT, KMAG
-               "internal_upload_segment_prog(%s): md5sum/size OK de_seg=%s try=%d",
+               "int_upload_seg_prog(%s): de_seg=%s try=%d "KGRN"md5sum/size OK",
                job->de_seg->name, job->de_seg->full_name, i);
-        //update md5sum for the whole file
-        update_job_md5(job->de->job, job->md5str, strlen(job->md5str));
         md5err = false;
         break;
       }
@@ -2151,7 +2154,7 @@ void internal_upload_segment_progressive(void* arg)
     //decrement seg count as upload was not ok
     job->de->segment_count--;
     debugf(DBG_NORM, KRED
-           "internal_upload_segment_progressive(%s:%s): upload failed",
+           "int_upload_seg_prog(%s:%s): upload failed",
            job->de->name, job->de_seg->full_name);
     //todo: signal error to running threads
     abort();
@@ -2166,8 +2169,9 @@ void internal_upload_segment_progressive(void* arg)
   if (job->de_seg->segment_part == job->de->segment_count - 1)
   {
     debugf(DBG_EXT, KMAG
-           "internal_upload_segment_prog(%s): creating 0 size parent, de_seg=%s",
-           job->de->name, job->de_seg->full_name);
+           "int_upload_seg_prog(%s:%s): create manifest, part=%d count=%d",
+           job->de->name, job->de_seg->name, job->de_seg->segment_part,
+           job->de->segment_count);
     curl_slist* headers = NULL;
     char filemimetype[MAX_PATH_SIZE] = "";
     get_file_mimetype_from_path(job->de, filemimetype);
@@ -2255,25 +2259,18 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   assert(de_seg);
   assert(de);
   debugf(DBG_EXT, "cloudfs_create_segment(%s:%s)", de_seg->name, de->name);
-  struct timespec now;
-  int response;
-  int i;
-  long remaining = de->size % segment_size;
-  int full_segments = de->size / segment_size;
-  int segments = full_segments + (remaining > 0);
   if (de_seg->segment_part == 0)
   {
-    de->segment_count = 0;
+    de->segment_count = 1;//we have at least 1 segment
     de->is_segmented = true;
     de->segment_size = segment_size;
     de->segment_remaining = segment_size;
   }
   //launch async upload for this segment
   init_semaphores(&de_seg->upload_buf, de_seg, "upload");
-  struct thread_job* job = malloc(sizeof(struct thread_job));
+  struct thread_job* job = init_thread_job();
   job->de = de;
   job->de_seg = de_seg;
-  job->md5str = NULL;
   job->de_seg->job = job; //cyclic ref. for md5 sum update in curl callbacks
   job->self_reference = job;//freed in internal_upload_segment_progressive
 

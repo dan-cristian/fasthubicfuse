@@ -42,7 +42,7 @@ extern long option_min_speed_limit_progressive;
 extern long option_min_speed_timeout;
 extern long option_read_ahead;
 extern bool option_enable_syslog;
-
+extern bool option_enable_chaos_test_monkey;
 FuseOptions options =
 {
   .cache_timeout = "600",
@@ -72,7 +72,8 @@ ExtraFuseOptions extra_options =
   .min_speed_limit_progressive = "0",
   .min_speed_timeout = "3",
   .read_ahead = "0",
-  .enable_syslog = "0"
+  .enable_syslog = "0",
+  .enable_chaos_test_monkey = "false"
 };
 
 bool initialise_options(struct fuse_args args)
@@ -133,6 +134,9 @@ bool initialise_options(struct fuse_args args)
   if (*extra_options.enable_syslog)
     option_enable_syslog = !strcasecmp(
                              extra_options.enable_syslog, "true");
+  if (*extra_options.enable_chaos_test_monkey)
+    option_enable_chaos_test_monkey = !strcasecmp(
+                                        extra_options.enable_chaos_test_monkey, "true");
   if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
   {
     fprintf(stderr,
@@ -178,7 +182,9 @@ bool initialise_options(struct fuse_args args)
     fprintf(stderr,
             "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
     fprintf(stderr,
-            "  enable_syslog=[Write debug output also to syslog]\n");
+            "  enable_syslog=[Write error output to syslog]\n");
+    fprintf(stderr,
+            "  enable_chaos_test_monkey=[Enable creation of random errors to test program stability]\n");
     return false;
   }
   return true;
@@ -699,6 +705,9 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           //TODO: replace this with thread JOIN
           int seg_index;
           dir_entry* de_seg_tmp;
+          //calculate md5sum
+          struct thread_job* job = init_thread_job();
+          init_job_md5(job);
           for (seg_index = 0; seg_index < de_upload->segment_count;
                seg_index++)
           {
@@ -712,13 +721,37 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
               debugf(DBG_EXT, KMAG "cfs_flush(%s): pending upload %s done",
                      de->name, de_seg_tmp->name);
             }
+            debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
+                   de->name, de_seg_tmp->name, de_seg_tmp->md5sum);
+            //update md5sum for the whole file
+            update_job_md5(job, de_seg_tmp->md5sum, strlen(de_seg_tmp->md5sum));
           }
-          //complete md5sum compute for this file
+          //complete md5sum compute for this file using cumulative segment etags
+          complete_job_md5(job);
+          if (de_upload->md5sum_local)
+            free(de_upload->md5sum_local);
+          de_upload->md5sum_local = strdup(job->md5str);
+          free_thread_job(job);
+          //complete md5sum using fuse provided content
           complete_job_md5(de_upload->job);
-          de_upload->md5sum_local = strdup(de_upload->job->md5str);
+          //complete md5sum using http uploaded content
+          complete_job_md5(de_upload->job2);
 
-          free(de_upload->job);
           close_lock_file(de_upload->full_name, info->fh);
+
+          if (strcasecmp(de_upload->job->md5str, de_upload->job2->md5str))
+          {
+            //md5sums are different, upload is corrupt
+            debugf(DBG_EXT, KRED
+                   "cfs_flush(%s): md5sum not match between fuse(%s) and http(%s)",
+                   de_upload->name, de_upload->job->md5str, de_upload->job2->md5str);
+            result = -EILSEQ;
+            abort();
+          }
+          else
+            debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
+                   de_upload->name, de_upload->job->md5str);
+
           debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
                  de->name);
 
@@ -734,13 +767,18 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
           {
             //md5sums are different, upload is corrupt
-            debugf(DBG_EXT, KRED "cfs_flush(%s): md5sum not match, corrupted file",
+            debugf(DBG_EXT, KRED
+                   "cfs_flush(%s): segments md5sum not match, corrupted file",
                    de_upload->name);
             result = -EILSEQ;
             abort();
           }
           else
-            debugf(DBG_EXT, KMAG "cfs_flush(%s): md5sum OK!", de_upload->name);
+            debugf(DBG_EXT, KGRN "cfs_flush(%s): segment md5sum OK (%s)",
+                   de_upload->name, de_upload->md5sum_local);
+          //free md5sum holders
+          free_thread_job(de_upload->job);
+          free_thread_job(de_upload->job2);
           dir_decache_upload(de_upload->full_name);
         }
       }
@@ -856,7 +894,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   char debugstr[256];
   dir_entry* de = check_path_info_upload(path);
   //assert(de);
-
+  struct thread_job* job_fuse_md5 = NULL;
   if (!de)
   {
     //update only once otherwise memory leaks
@@ -866,7 +904,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     create_dir_entry(de, path, 0666);
   }
   assert(de);
-  struct thread_job* job = NULL;
   if (offset == 0)
   {
     assert(de->size == 0);
@@ -876,16 +913,20 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     //de->manifest_seg = NULL;
     //free(de->manifest_time);
     //de->manifest_time = NULL;
-    job = malloc(sizeof(struct thread_job));
-    job->de = de;
-    job->md5str = NULL;
-    job->de->job = job;
-    init_job_md5(job);
-  }
 
+    //job for fuse content check
+    job_fuse_md5 = init_thread_job();
+    de->job = job_fuse_md5;
+    init_job_md5(job_fuse_md5);
+    //job for uploaded data content check
+    struct thread_job* job_http_md5 = init_thread_job();
+    init_job_md5(job_http_md5);
+    de->job2 = job_http_md5;
+  }
+  update_job_md5(de->job, buf, length);
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
-  de->segment_remaining = segment_size;
+  de->segment_remaining = segment_size; //we don't know remaining size
 
   if (!option_enable_progressive_upload)
   {
@@ -922,6 +963,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
 
     int last_seg_index = -1;
     int loops = 0;
+    dir_entry* prev_seg = NULL;
     while (seg_size_processed < offset + length)
     {
       //creates the segment to be uploaded as dir_entry
@@ -932,7 +974,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         //just switched to a new segment, or got new fuse data (cfs_write called)
         if (seg_index > 0)
         {
-          dir_entry* prev_seg = get_segment(de, seg_index - 1);
+          prev_seg = get_segment(de, seg_index - 1);
           assert(prev_seg);
           if (prev_seg->upload_buf.sem_list[SEM_FULL]
               && !prev_seg->upload_buf.signaled_completion)
@@ -986,7 +1028,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       ptr_offset = de->size - offset;
       de_seg->upload_buf.readptr = buf + ptr_offset;
 
-      if (false && de_seg->upload_buf.size_processed >= 10354688)
+      if (option_enable_chaos_test_monkey
+          && false && de_seg->upload_buf.size_processed == 393216)
       {
         snprintf(debugstr, 256, "%s", buf + ptr_offset);
         debugf(DBG_EXT, KGRN "1[%s]len=%lu,ptr=%lu",
@@ -1009,6 +1052,15 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         //debug
 
         pthread_mutex_lock(&de_seg->upload_buf.mutex);
+        //increment to avoid sudden completion
+        de->segment_count++;
+        while (prev_seg && prev_seg->upload_buf.sem_list[SEM_DONE])
+        {
+          debugf(DBG_EXT, KYEL
+                 "cfs_write(%s): prev segment (%s) not fully uploaded, waiting",
+                 de_seg->name, prev_seg->name);
+          sleep_ms(1000);
+        }
         bool op_ok = cloudfs_create_segment(de_seg, de);
         assert(op_ok);
       }
@@ -1066,7 +1118,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
                de->name, de_seg->name, de_seg->upload_buf.work_buf_size);
       }
 
-      if (false && de_seg->upload_buf.size_processed >= 10354688)
+      if (option_enable_chaos_test_monkey
+          && false && de_seg->upload_buf.size_processed == 393216)
       {
         snprintf(debugstr, 256, "%s", buf + ptr_offset);
         debugf(DBG_EXT, KGRN "2[%s]len=%lu,ptr=%lu",
@@ -1376,7 +1429,9 @@ int parse_option(void* data, const char* arg, int key,
       sscanf(arg, " min_speed_timeout = %[^\r\n ]",
              extra_options.min_speed_timeout) ||
       sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead) ||
-      sscanf(arg, " enable_syslog = %[^\r\n ]", extra_options.enable_syslog)
+      sscanf(arg, " enable_syslog = %[^\r\n ]", extra_options.enable_syslog) ||
+      sscanf(arg, " enable_chaos_test_monkey = %[^\r\n ]",
+             extra_options.enable_chaos_test_monkey)
      )
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))

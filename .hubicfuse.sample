@@ -20,3 +20,4 @@ min_speed_timeout = 3
 read_ahead = 0
 enable_syslog = true
 cache_max_size = 1048576000
+enable_chaos_test_monkey = false

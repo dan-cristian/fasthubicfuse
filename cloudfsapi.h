@@ -54,6 +54,7 @@ typedef struct extra_options
   char min_speed_timeout[OPTION_SIZE];
   char read_ahead[OPTION_SIZE];
   char enable_syslog[OPTION_SIZE];
+  char enable_chaos_test_monkey[OPTION_SIZE];
 } ExtraFuseOptions;
 
 void cloudfs_init(void);

@@ -55,6 +55,7 @@ bool option_enable_syslog = false;
 long option_min_speed_limit_progressive = 0;//use long not double
 long option_min_speed_timeout;
 long option_read_ahead = 0;
+bool option_enable_chaos_test_monkey = false;//create random errors for testing
 
 
 // needed to get correct GMT / local time, as it does not work
@@ -235,15 +236,46 @@ bool init_job_md5(thread_job* job)
   if (job->md5str)
     free(job->md5str);
   job->md5str = NULL;
+  job->is_mdcontext_saved = false;
   return (MD5_Init(&job->mdContext) == 1);
 }
 
+/*
+  updates md5sum based on data received
+*/
 bool update_job_md5(thread_job* job, const unsigned char* data_buf,
                     int buf_len)
 {
   return (MD5_Update(&job->mdContext, data_buf, buf_len) == 1);
 }
 
+/*
+  saves a snapshot of md5 context
+*/
+void save_job_md5(thread_job* job)
+{
+  memcpy(&job->mdContext_saved, &job->mdContext, sizeof(MD5_CTX));
+  /*job->mdContext_saved.A = job->mdContext.A;
+    job->mdContext_saved.B = job->mdContext.B;
+    job->mdContext_saved.C = job->mdContext.C;
+    job->mdContext_saved.D = job->mdContext.D;*/
+  job->is_mdcontext_saved = true;
+}
+/*
+  restores the snapshot of md5 context
+*/
+void restore_job_md5(thread_job* job)
+{
+  assert(job->is_mdcontext_saved);
+  memcpy(&job->mdContext, &job->mdContext_saved, sizeof(MD5_CTX));
+  /*job->mdContext.A = job->mdContext_saved.A;
+    job->mdContext.B = job->mdContext_saved.B;
+    job->mdContext.C = job->mdContext_saved.C;
+    job->mdContext.D = job->mdContext_saved.D;*/
+}
+/*
+  generates final md5sum for data received so far
+*/
 bool complete_job_md5(thread_job* job)
 {
   int result = 0;
@@ -265,11 +297,21 @@ bool complete_job_md5(thread_job* job)
   return result;
 }
 
+thread_job* init_thread_job()
+{
+  thread_job* job = malloc(sizeof(struct thread_job));
+  job->md5str = NULL;
+  job->self_reference = NULL;
+  return job;
+}
+
 void free_thread_job(thread_job* job)
 {
   debugf(DBG_EXT, "free_thread_job: freeing job");
-  free(job->md5str);
-  free(job->self_reference);
+  if (job->md5str)
+    free(job->md5str);
+  if (job->self_reference)
+    free(job->self_reference);
 }
 /*
   determines if local cache content equals cloud content
@@ -741,7 +783,8 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   if (de_seg->segment_part < de->segment_full_count)
     de_seg->segment_size = de->segment_size;
   else de_seg->segment_size = de->segment_remaining;
-
+  //set parent
+  de_seg->parent = de;
   return de_seg;
 }
 
@@ -1032,12 +1075,15 @@ dir_entry* init_dir_entry()
   de->segment_size = 0;
   de->size_on_cloud = 0;
   de->has_unvisible_segments = false;
+  de->job = NULL;
+  de->job2 = NULL;
+  de->parent = NULL;
   return de;
 }
 
 void free_de_before_get(dir_entry* de)
 {
-  debugf(DBG_EXT, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
+  debugf(DBG_EXTALL, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
   free(de->md5sum_local);
   de->md5sum_local = strdup("");//why not set to null
   free_de_before_head(de);
@@ -1045,7 +1091,7 @@ void free_de_before_get(dir_entry* de)
 
 void free_de_before_head(dir_entry* de)
 {
-  debugf(DBG_EXT, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
+  debugf(DBG_EXTALL, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
   //assumes a file might change from segmented to none
   free(de->manifest_cloud);
   de->manifest_cloud = NULL;
@@ -2077,14 +2123,16 @@ void print_options()
   fprintf(stderr, "min_speed_timeout = %d\n", option_min_speed_timeout);
   fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
   fprintf(stderr, "enable_syslog = %d\n", option_enable_syslog);
+  fprintf(stderr, "enable_chaos_test_monkey = %d\n",
+          option_enable_chaos_test_monkey);
 }
+
 
 void debugf(int level, char* fmt, ...)
 {
-
   if (debug)
   {
-    if (level <= option_debug_level)
+    if (level <= option_debug_level || level == DBG_TEST)
     {
 #ifdef SYS_gettid
       pid_t thread_id = syscall(SYS_gettid);
@@ -2093,7 +2141,13 @@ void debugf(int level, char* fmt, ...)
 #error "SYS_gettid unavailable on this system"
 #endif
       va_list args;
-      char prefix[] = "==DBG%d [%s]:%d==";
+      //char prefix[] = "==DBG%d [%s]:%d==";
+      char* prefix;
+      if (level != DBG_TEST)
+        prefix = "==DBG%d [%s]:%d==";
+      else
+        prefix = "==DBG%d [%s]:%d=="KBRED KWHT"Chaos Testing: ";
+
       char startstr[4096];
       char endstr[4096];
       char time_str[TIME_CHARS];

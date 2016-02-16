@@ -11,6 +11,7 @@ typedef enum { false, true } bool;
 #define MAX_URL_SIZE (MAX_PATH_SIZE * 3)
 // 64 bit time + nanoseconds
 #define TIME_CHARS 32
+#define DBG_TEST -2
 #define DBG_ERR -1
 #define DBG_NORM 0
 #define DBG_EXT 1
@@ -58,6 +59,7 @@ typedef enum { false, true } bool;
 #define HTTP_DELETE "DELETE"
 
 #define KNRM  "\x1B[0m"
+//foreground colors
 #define KRED  "\x1B[31m"
 #define KGRN  "\x1B[32m"
 #define KYEL  "\x1B[33m"
@@ -65,6 +67,15 @@ typedef enum { false, true } bool;
 #define KMAG  "\x1B[35m"
 #define KCYN  "\x1B[36m"
 #define KWHT  "\x1B[37m"
+//background colors
+#define KBRED "\x1B[41m"
+#define KBGRN "\x1B[42m"
+#define KBYEL "\x1B[43m"
+#define KBBLU "\x1B[44m"
+#define KBMAG "\x1B[45m"
+#define KBCYN "\x1B[46m"
+#define KBWHT "\x1B[47m"
+
 
 #define min(x, y) ({                \
   typeof(x) _min1 = (x);          \
@@ -145,6 +156,7 @@ typedef struct dir_entry
   struct progressive_data_buf upload_buf;
   struct progressive_data_buf downld_buf;
   struct thread_job* job;
+  struct thread_job* job2;//needed for multiple md5sum checks
   bool is_progressive;
   bool is_single_thread;
   //some segments uploaded ok are not yet visible in the cloud
@@ -153,6 +165,7 @@ typedef struct dir_entry
   int isdir;
   int islink;
   struct dir_entry* next;
+  struct dir_entry* parent;
 } dir_entry;
 
 typedef struct thread_job
@@ -166,6 +179,8 @@ typedef struct thread_job
   void* self_reference;
   bool is_single_thread;
   MD5_CTX mdContext;
+  MD5_CTX mdContext_saved;//save interim md5 snapshot to enable restore point
+  bool is_mdcontext_saved;
   char* md5str;
 } thread_job;
 
@@ -218,6 +233,8 @@ int file_md5_by_name(const char* file_name_str, char* md5_file_str);
 bool init_job_md5(thread_job* job);
 bool update_job_md5(thread_job* job, const unsigned char* data_buf,
                     int buf_len);
+void save_job_md5(thread_job* job);
+void restore_job_md5(thread_job* job);
 bool complete_job_md5(thread_job* job);
 void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
@@ -237,6 +254,7 @@ long random_at_most(long max);
 dir_entry* init_dir_entry();
 void free_de_before_get(dir_entry* de);
 void free_de_before_head(dir_entry* de);
+thread_job* init_thread_job();
 void free_thread_job(thread_job* job);
 void create_dir_entry(dir_entry* de, const char* path, mode_t mode);
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
