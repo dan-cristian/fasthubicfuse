@@ -691,7 +691,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         if (de_seg->upload_buf.sem_list[SEM_FULL])
         {
           debugf(DBG_EXT, KMAG "cfs_flush(%s): wait upload completion",
-                 de->name);
+                 de_upload->name);
           sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
           //wait until upload and cleanup of previous versions fully completes
           //otherwise errors will be thrown by rsync (due to early rename)
@@ -722,7 +722,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                      de->name, de_seg_tmp->name);
             }
             debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
-                   de->name, de_seg_tmp->name, de_seg_tmp->md5sum);
+                   de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
             //update md5sum for the whole file
             update_job_md5(job, de_seg_tmp->md5sum, strlen(de_seg_tmp->md5sum));
           }
@@ -753,7 +753,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                    de_upload->name, de_upload->job->md5str);
 
           debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
-                 de->name);
+                 de_upload->name);
 
           //fixme: sometimes last segment is not yet visible on cloud
           //copy dir_entry for to have segment list complete
@@ -1054,11 +1054,11 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         pthread_mutex_lock(&de_seg->upload_buf.mutex);
         //increment to avoid sudden completion
         de->segment_count++;
-        while (prev_seg && prev_seg->upload_buf.sem_list[SEM_DONE])
+        while (prev_seg && prev_seg->size != prev_seg->segment_size)
         {
           debugf(DBG_EXT, KYEL
-                 "cfs_write(%s): prev segment (%s) not fully uploaded, waiting",
-                 de_seg->name, prev_seg->name);
+                 "cfs_write(%s): prev seg(%s) still uploading, %lu/%lu",
+                 de_seg->name, prev_seg->name, prev_seg->size, prev_seg->segment_size);
           sleep_ms(1000);
         }
         bool op_ok = cloudfs_create_segment(de_seg, de);
