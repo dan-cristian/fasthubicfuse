@@ -646,9 +646,7 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
   curl_easy_getinfo(curl, CURLINFO_SPEED_DOWNLOAD, &dspeed);
   curl_easy_getinfo(curl, CURLINFO_SPEED_UPLOAD, &uspeed);
 
-  //size include headers so is unreliable
-  //if (myp->method == 'P')
-  //  myp->de->size_on_cloud = ulnow;
+
 
   //chaos test monkey
   if (myp->de && myp->de->upload_buf.feed_from_cache)
@@ -665,6 +663,35 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
     return 1;
   }
 
+  if (myp->last_ulnow != ulnow)
+  {
+    myp->last_ultime = curtime;
+    myp->last_ulnow = ulnow;
+  }
+
+  if (myp->last_dlnow != dlnow)
+  {
+    myp->last_dltime = curtime;
+    myp->last_dlnow = dlnow;
+  }
+
+  if (myp->method == 'P' && (curtime - myp->last_ultime > INTERNET_TIMEOUT_SEC))
+  {
+    debugf(DBG_NORM, KRED
+           "progress_callback_xfer(%s): interrupting stalled upload",
+           myp->de->name);
+    myp->response = 408;
+    return 1;
+  }
+
+  if (myp->method == 'G' && (curtime  - myp->last_dltime > INTERNET_TIMEOUT_SEC))
+  {
+    debugf(DBG_NORM, KRED
+           "progress_callback_xfer(%s): interrupting stalled download",
+           myp->de->name);
+    myp->response = 408;
+    return 1;
+  }
   /* under certain circumstances it may be desirable for certain functionality
      to only run every N seconds, in order to do this the transaction time can
      be used */
@@ -679,10 +706,10 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
     point = dlnow + ulnow;
     frac = (double)point / (double)total;
     percent = frac * 100.0f;
-    debugf(DBG_EXT, "TOTAL TIME: %.0f sec Down=%.0f Kbps UP=%.0f Kbps",
-           curtime, dspeed / 1024, uspeed / 1024);
-    debugf(DBG_EXT, "UP: %lld of %lld DOWN: %lld/%lld Completion %.1f %%",
-           ulnow, ultotal, dlnow, dltotal, percent);
+    debugf(DBG_EXT, "TOTAL TIME(%s): %.0f sec Down=%.0f Kbps UP=%.0f Kbps",
+           myp->de->name, curtime, dspeed / 1024, uspeed / 1024);
+    debugf(DBG_EXT, "UP(%s): %lld of %lld DOWN: %lld/%lld Completion %.1f %%",
+           myp->de->name, ulnow, ultotal, dlnow, dltotal, percent);
   }
   return 0;
 }
@@ -881,6 +908,8 @@ static int send_request_size(const char* method, const char* encoded_path,
   prog.tries = 0;
   prog.de = de_seg ? de_seg : de;
   prog.donotstop = false;
+  prog.last_ulnow = 0;
+  prog.last_dlnow = 0;
   // retry on HTTP failures
   for (tries = 0; tries < REQUEST_RETRIES; tries++)
   {
@@ -905,6 +934,11 @@ static int send_request_size(const char* method, const char* encoded_path,
     assert(curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20L) == CURLE_OK);
     assert(curl_easy_setopt(curl, CURLOPT_VERBOSE,
                             option_curl_verbose ? 1L : 0L) == CURLE_OK);
+
+    assert(curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE, 60L) == CURLE_OK);
+    assert(curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 60L) == CURLE_OK);
+
     //assert(curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1) == CURLE_OK);
     //disable sigpipe errors, http://curl.haxx.se/mail/lib-2013-03/0123.html
     //assert(curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK);
@@ -1138,7 +1172,6 @@ static int send_request_size(const char* method, const char* encoded_path,
     prog.response = -1;//for debug
     curl_easy_perform(curl);
 
-
     char* effective_url;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
     curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effective_url);
@@ -1159,6 +1192,28 @@ static int send_request_size(const char* method, const char* encoded_path,
              "status: send_request_size(%s) force debug response=%d",
              orig_path, prog.response);
       response = prog.response;
+    }
+
+    //check if internet is down
+    if (response == 408)
+    {
+      debugf(DBG_NORM, KYEL
+             "send_request_size(%s): waiting for internet to resume, retry forever",
+             print_path);
+      sleep_ms(1000);
+      //retry forever until internet is back
+      tries--;
+      //fixme: unblock potential sem_wait deadlocks
+    }
+
+    //something went really wrong
+    if (response == 0)
+    {
+      debugf(DBG_NORM, KRED
+             "status: send_request_size(%s:%s) unexpected error, retry forever",
+             print_path, method);
+      sleep_ms(1000);
+      tries--;
     }
 
     if (response != 404 && (response >= 400 || response < 200))
@@ -1194,6 +1249,7 @@ static int send_request_size(const char* method, const char* encoded_path,
           && de_seg->upload_buf.size_processed > 0)
       {
         //do not retry as data on upload will be lost
+        debugf(DBG_EXT, "send_request_size(%s): upload exit", print_path);
         break;
 
         //signal cfs_write and cfs_flush we're done
@@ -1219,14 +1275,7 @@ static int send_request_size(const char* method, const char* encoded_path,
              print_path, method);
       break;
     }
-    //something went really wrong
-    if (response == 0)
-    {
-      debugf(DBG_NORM, KRED
-             "status: send_request_size(%s:%s) unexpected error",
-             print_path, method);
-      //abort();
-    }
+
     //handle cases when file is not found, no point in retrying, should exit
     if (response == 404)
     {
@@ -2127,6 +2176,9 @@ void internal_upload_segment_progressive(void* arg)
         debugf(DBG_EXT, KMAG
                "int_upload_seg_prog(%s): de_seg=%s try=%d "KGRN"md5sum/size OK",
                job->de_seg->name, job->de_seg->full_name, i);
+        //in case segment meta download failed set md5sum for later check in cfs_flush
+        if (!job->de_seg->md5sum)
+          job->de_seg->md5sum = strdup(job->md5str);
         md5err = false;
         break;
       }

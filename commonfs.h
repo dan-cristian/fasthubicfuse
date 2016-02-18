@@ -23,6 +23,8 @@ typedef enum { false, true } bool;
 #define MAX_COPY_THREADS 10
 #define REQUEST_RETRIES 5
 #define BUFFER_READ_SIZE 128 * 1024
+#define INTERNET_TIMEOUT_SEC 100
+
 
 #define APP_ID "FastHubicFuse_v0_1"
 

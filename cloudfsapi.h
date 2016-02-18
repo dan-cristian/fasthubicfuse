@@ -23,6 +23,10 @@ struct curl_progress
   int response;
   dir_entry* de;
   bool donotstop;
+  curl_off_t last_ulnow;
+  curl_off_t last_dlnow;
+  double last_ultime;
+  double last_dltime;
 };
 
 typedef struct options
