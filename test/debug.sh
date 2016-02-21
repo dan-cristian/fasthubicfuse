@@ -11,7 +11,7 @@ sudo make install
 if [ "$?" == "0" ]; then
 	rm -Rf /mnt/hubic2/*
 	touch newbuild
-	gdb --eval-command=run --args hubicfuse /mnt/hubic2 -o noauto_cache,sync_read,allow_other,big_writes,large_read,max_write=131072,max_read=131072 -f
+	gdb --eval-command=run handle SIGPIPE nostop noprint pass --args hubicfuse /mnt/hubic2 -o noauto_cache,sync_read,allow_other,big_writes,large_read,max_write=131072,max_read=131072 -f
 else
 	echo error make
 fi

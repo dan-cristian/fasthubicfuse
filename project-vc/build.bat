@@ -19,6 +19,8 @@ xcopy  "..\..\commonfs.c" %TD% /Y /D
 xcopy  "..\..\cloudfsapi.h" %TD% /Y /D 
 xcopy "..\..\commonfs.h" %TD% /Y /D 
 xcopy "..\..\test\test.sh" %TD% /Y /D
+xcopy "..\..\test\test_functions.sh" %TD% /Y /D
+xcopy "..\..\test\test_multithread.sh" %TD% /Y /D
 xcopy "..\..\test\debug.sh" %TD% /Y /D
 xcopy "..\..\test\.hubicfuse.*" %TD% /Y /D
 touch %TD%newsrc

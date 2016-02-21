@@ -25,6 +25,9 @@ typedef enum { false, true } bool;
 #define BUFFER_READ_SIZE 128 * 1024
 #define INTERNET_TIMEOUT_SEC 100
 
+#define FILE_OPEN_MODE_READ 32768
+#define FILE_OPEN_MODE_WRITE 32769
+#define FILE_OPEN_MODE_READ_EXCL 32770
 
 #define APP_ID "FastHubicFuse_v0_1"
 
@@ -43,7 +46,8 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_IS_SEGMENTED "X-Object-Meta-Is-Segmented"
 #define HEADER_TEXT_PRODUCED_BY "X-Object-Meta-Produced-By"
 #define HEADER_TEXT_MANIFEST "X-Object-Manifest"
-#define HEADER_TEXT_SEGMENT_SIZE "X-Object-Meta-Segment-Size"
+//#define HEADER_TEXT_SEGMENT_SIZE "X-Object-Meta-Segment-Size"
+#define HEADER_TEXT_FILE_SIZE "X-Object-Meta-File-Size"
 #define HEADER_TEXT_CONTENT_LEN "Content-Length"
 #define HEADER_TEXT_CONTENT_TYPE "Content-Type"
 
@@ -59,6 +63,7 @@ typedef enum { false, true } bool;
 #define HTTP_PUT "PUT"
 #define HTTP_POST "POST"
 #define HTTP_DELETE "DELETE"
+#define MD5SUM_EMPTY_FILE "d41d8cd98f00b204e9800998ecf8427e"
 
 #define KNRM  "\x1B[0m"
 //foreground colors
@@ -84,6 +89,12 @@ typedef enum { false, true } bool;
   typeof(y) _min2 = (y);          \
   (void)(&_min1 == &_min2);      \
   _min1 < _min2 ? _min1 : _min2; })
+
+#define max(x, y) ({                \
+  typeof(x) _max1 = (x);          \
+  typeof(y) _max2 = (y);          \
+  (void)(&_max1 == &_max2);      \
+  _max1 > _max2 ? _max1 : _max2; })
 
 #define SEM_EMPTY 0
 #define SEM_FULL 1
@@ -163,6 +174,9 @@ typedef struct dir_entry
   bool is_single_thread;
   //some segments uploaded ok are not yet visible in the cloud
   bool has_unvisible_segments;
+  //if true segments were not loaded from cloud, size was taken from meta headers
+  //used to increase speed, avoid one http call
+  bool lazy_segment_load;
   // end change
   int isdir;
   int islink;
@@ -301,6 +315,8 @@ bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
 bool close_lock_file(const char* path, int fd);
 int open_lock_file(const char* path, unsigned int flags);
+bool update_lock_file(const char* path, int fd, const char* search_flag,
+                      const char* new_flag);
 void interrupt_handler(int sig);
 void sigpipe_callback_handler(int signum);
 void clear_full_cache();

@@ -147,6 +147,22 @@ size_t get_time_now_as_str(char* time_str, int time_str_len)
   return result;
 }
 
+/*
+  get current time with milisecond precision
+  return size of time string
+*/
+size_t get_time_now_milisec_as_str(char* time_str, int time_str_len)
+{
+  struct timeval tv;
+  time_t curtime;
+  char tmp_time_str[TIME_CHARS];
+  gettimeofday(&tv, NULL);
+  curtime = tv.tv_sec;
+  strftime(tmp_time_str, time_str_len, HUBIC_DATE_FORMAT, localtime(&curtime));
+  int res = snprintf(time_str, time_str_len, "%s%ld", tmp_time_str, tv.tv_usec);
+  return res;
+}
+
 int get_timespec_as_str(const struct timespec* times, char* time_str,
                         int time_str_len)
 {
@@ -583,6 +599,12 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
       cloudfs_free_dir_list(de->segments);
       de->segments = NULL;
     }
+    if (de->upload_buf.sem_list[SEM_EMPTY])
+      free_semaphores(&de->upload_buf, SEM_EMPTY);
+    if (de->upload_buf.sem_list[SEM_FULL])
+      free_semaphores(&de->upload_buf, SEM_FULL);
+    if (de->upload_buf.sem_list[SEM_DONE])
+      free_semaphores(&de->upload_buf, SEM_DONE);
     //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
     free(de);
   }
@@ -712,6 +734,7 @@ void path_to_de(const char* path, dir_entry* de)
     assert(!strcasecmp(object, de->name));
   if (!de->full_name)
     de->full_name = strdup(path);
+  //generate hash if was not generated on directory list (on copy_object)
   if (!de->full_name_hash)
     de->full_name_hash = strdup(str2md5(de->full_name, strlen(de->full_name)));
 }
@@ -832,7 +855,7 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
   for (cw = cache; cw; cw = cw->next)
   {
     debugf(DBG_EXT, "dir_decache: parse(%s)", cw->path);
-    if (!strcmp(cw->path, path))
+    if (!strcmp(cw->path, path) || path[0] == '*')
     {
       if (cw == cache)
         dcache = cw->next;
@@ -1075,6 +1098,7 @@ dir_entry* init_dir_entry()
   de->segment_size = 0;
   de->size_on_cloud = 0;
   de->has_unvisible_segments = false;
+  de->lazy_segment_load = false;
   de->job = NULL;
   de->job2 = NULL;
   de->parent = NULL;
@@ -1167,6 +1191,7 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
   }
 
   dst->has_unvisible_segments = src->has_unvisible_segments;
+  dst->lazy_segment_load = src->lazy_segment_load;
   dst->size = src->size;
   dst->size_on_cloud = src->size_on_cloud;
   dst->is_segmented = src->is_segmented;
@@ -1177,14 +1202,21 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
   dst->segment_size = src->segment_size;
   dst->isdir = src->isdir;
   dst->islink = src->islink;
+  if (!dst->content_type)
+    free(dst->content_type);
   if (src->content_type)
     dst->content_type = strdup(src->content_type);
-
-  if (!dst->manifest_cloud && src->manifest_cloud)
+  if (!dst->manifest_cloud)
+    free(dst->manifest_cloud);
+  if (src->manifest_cloud)
     dst->manifest_cloud = strdup(src->manifest_cloud);
-  if (!dst->manifest_time && src->manifest_time)
+  if (!dst->manifest_time)
+    free(dst->manifest_time);
+  if (src->manifest_time)
     dst->manifest_time = strdup(src->manifest_time);
-  if (!dst->manifest_seg && src->manifest_seg)
+  if (!dst->manifest_seg)
+    free(dst->manifest_seg);
+  if (src->manifest_seg)
     dst->manifest_seg = strdup(src->manifest_seg);
 
   //fixme: segments not copied ok
@@ -1844,25 +1876,25 @@ void flags_to_openmode(unsigned int flags, char* openmode)
   int i = 0;
   if (flags & O_WRONLY)
   {
-    debugf(DBG_EXT, "cfs_open: write only detected");
+    debugf(DBG_EXT, "flags_to_openmode: write only detected");
     openmode[i] = 'w';
     i++;
   }
   if (flags & O_APPEND)
   {
-    debugf(DBG_EXT, "cfs_open: append detected");
+    debugf(DBG_EXT, "flags_to_openmode: append detected");
     openmode[i] = 'a';
     i++;
   }
   if (flags & O_RDONLY)
   {
-    debugf(DBG_EXT, "cfs_open: read only detected");
+    debugf(DBG_EXT, "flags_to_openmode: read only detected");
     openmode[i] = 'r';
     i++;
   }
   if (flags & O_RDWR)
   {
-    debugf(DBG_EXT, "cfs_open: read write detected");
+    debugf(DBG_EXT, "flags_to_openmode: read write detected");
     openmode[i] = 'w';
     i++;
     openmode[i] = 'r';
@@ -1870,28 +1902,33 @@ void flags_to_openmode(unsigned int flags, char* openmode)
   }
   if (flags & O_TRUNC)
   {
-    debugf(DBG_EXT, "cfs_open: truncate detected");
+    debugf(DBG_EXT, "flags_to_openmode: truncate detected");
     openmode[i] = 'w';
     i++;
   }
   if (flags & O_CREAT)
   {
-    debugf(DBG_EXT, "cfs_open: create detected");
+    debugf(DBG_EXT, "flags_to_openmode: create detected");
     openmode[i] = 'w';
     i++;
   }
   if (flags & O_EXCL)
-    debugf(DBG_EXT, "cfs_open: EXCL detected");
+  {
+    debugf(DBG_EXT, "flags_to_openmode: EXCL detected");
+    openmode[i] = '!';
+    i++;
+  }
 
   //default open mode is r
   if (i == 0)
   {
-    debugf(DBG_EXT, "cfs_open: unknown mode, assume read");
+    debugf(DBG_EXT, "flags_to_openmode: unknown mode, assume SOFT read");
     openmode[i] = 'r';
     i++;
   }
   openmode[i] = 0;//null terminate string
 }
+
 
 void add_lock_file(const char* path, const char* open_flags,
                    FILE* temp_file, int fd)
@@ -1946,6 +1983,8 @@ bool close_lock_file(const char* path, int fd)
   {
     char file_path_safe[NAME_MAX] = "";
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
+    debugf(DBG_EXT, "close_lock_file(%s): deleting %s", path,
+           file_path_safe);
     unlink(file_path_safe);
   }
   debugf(DBG_EXT, "close_lock_file(%s): %d instances were open", path,
@@ -1965,8 +2004,11 @@ bool can_add_lock(const char* path, char* open_flags)
   {
     if (!strcasecmp(of->path, path))
     {
-      if (strstr(open_flags, "w") || strstr(open_flags, "a"))
+      //if try to open for write and hard lock exists, fail
+      if ((strstr(open_flags, "w") || strstr(open_flags, "a"))
+          && strstr(of->open_flags, "r!"))
         return false;
+      //if try to open for read and write lock exist, fail
       if (strstr(open_flags, "r")
           && (strstr(of->open_flags, "w") || strstr(of->open_flags, "a")))
         return false;
@@ -1975,6 +2017,8 @@ bool can_add_lock(const char* path, char* open_flags)
   }
   return true;
 }
+
+
 /*
   creates or opens a lock file in temp folder with flags mode
   and returns file descriptor.
@@ -2026,6 +2070,25 @@ int open_lock_file(const char* path, unsigned int flags)
   return fd;
 }
 
+bool update_lock_file(const char* path, int fd, const char* search_flag,
+                      const char* new_flag)
+{
+  open_file* of = openfile_list;
+  while (of)
+  {
+    if (!strcasecmp(of->path, path) && of->fd == fd)
+    {
+      if (strstr(of->open_flags, search_flag))
+      {
+        free(of->open_flags);
+        of->open_flags = strdup(new_flag);
+        return true;
+      }
+    }
+    of = of->next;
+  }
+  return false;
+}
 /*
   delete all segment cached files from disk
 */
@@ -2100,7 +2163,7 @@ void sigpipe_callback_handler(int signum)
 
 void clear_full_cache()
 {
-  dir_decache("");
+  dir_decache("*");
 }
 
 void print_options()
@@ -2151,7 +2214,7 @@ void debugf(int level, char* fmt, ...)
       char startstr[4096];
       char endstr[4096];
       char time_str[TIME_CHARS];
-      get_time_now_as_str(time_str, sizeof(time_str));
+      get_time_now_milisec_as_str(time_str, sizeof(time_str));
       sprintf(startstr, prefix, level, time_str, thread_id);
       fputs(startstr, stderr);
       va_start(args, fmt);
