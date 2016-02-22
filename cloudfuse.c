@@ -414,9 +414,13 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   //create/open file in cache so we can manage concurrent operations on same file
   int fd = open_lock_file(path, info->flags);
   if (fd == -1)
+  {
+    debugf(DBG_ERR, KRED "exit: cfs_open(%s) lock failed", path);
     return -EBUSY;
+  }
   //download metadata if needed.sometimes getattr is not called.
-  if (option_get_extended_metadata && !de->metadata_downloaded)
+  if (option_get_extended_metadata &&
+      (!de->metadata_downloaded || de->lazy_segment_load))
     get_file_metadata(de, true);
 
   info->fh = (uintptr_t)fd;
@@ -864,10 +868,13 @@ static int cfs_ftruncate(const char* path, off_t size,
                          struct fuse_file_info* info)
 {
   debugf(DBG_NORM, KBLU "cfs_ftruncate(%s): size=%lu, ignored", path, size);
-  dir_entry* de = check_path_info();
+
+  dir_entry* de = check_path_info_upload(path);
+  if (!de)
+    de = check_path_info(path);
   if (de && de->size != size)
     debugf(DBG_ERR, KRED "cfs_ftruncate(%s): file size (%lu) != truncate (%lu)",
-           de->size, size);
+           path, de->size, size);
   /*openfile* of = (openfile*)(uintptr_t)info->fh;
     if (ftruncate(of->fd, size))
     return -errno;
@@ -1186,10 +1193,12 @@ static int cfs_fsync(const char* path, int idunno,
 static int cfs_truncate(const char* path, off_t size)
 {
   debugf(DBG_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
-  dir_entry* de = check_path_info();
+  dir_entry* de = check_path_info_upload(path);
+  if (!de)
+    de = check_path_info(path);
   if (de && de->size != size)
     debugf(DBG_ERR, KRED "cfs_truncate(%s): file size (%lu) != truncate (%lu)",
-           de->size, size);
+           path, de->size, size);
   //dir_entry* de = check_path_info(path);
   //dir_entry* de = check_path_info_upload(path);
   //assert(de);

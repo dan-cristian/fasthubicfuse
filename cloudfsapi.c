@@ -1853,10 +1853,10 @@ bool update_segments(dir_entry* de)
       {
         if (de->lazy_segment_load && (de->size != total_size))
         {
-          debugf(DBG_NORM, KRED
+          debugf(DBG_ERR, KRED
                  "update_segments(%s): inconsistent size, meta=%lu, segs=%lu",
                  de->name, de->size, total_size);
-          abort();
+          //abort();
         }
         de->size = total_size;
         de->lazy_segment_load = false;

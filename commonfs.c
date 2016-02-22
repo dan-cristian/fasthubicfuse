@@ -2037,13 +2037,13 @@ int open_lock_file(const char* path, unsigned int flags)
   flags_to_openmode(flags, open_flags);
   int i;
   bool can_add;
-  for (i = 0; i < LOCK_WAIT_SEC; i++)
-  {
-    can_add = can_add_lock(path, open_flags);
-    if (can_add)
+  //for (i = 0; i < LOCK_WAIT_SEC; i++)
+  //{
+  can_add = can_add_lock(path, open_flags);
+  /*  if (can_add)
       break;
     else sleep_ms(1000);
-  }
+    }*/
 
   if (!can_add)
   {
