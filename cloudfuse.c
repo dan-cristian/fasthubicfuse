@@ -318,32 +318,10 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
 static int cfs_fgetattr(const char* path, struct stat* stbuf,
                         struct fuse_file_info* info)
 {
-  debugf(DBG_NORM, KBLU "cfs_fgetattr(%s)", path);
-
-  //openfile* of = (openfile*)(uintptr_t)info->fh;
-  //if (of)
-  //{
-  //get file. if not in cache will be downloaded.
-  dir_entry* de = path_info(path);
-  update_cache_access(de);
-  if (!de)
-  {
-    debug_list_cache_content();
-    debugf(DBG_NORM, KBLU "exit 1: cfs_fgetattr(%s) "
-           KYEL "not-in-cache/cloud", path);
-    return -ENOENT;
-  }
-  int default_mode_file;
-  if (option_enable_chmod && de->chmod != -1)
-    default_mode_file = de->chmod;
-  else
-    default_mode_file = 0666;
-  stbuf->st_size = de->size;//cloudfs_file_size(of->fd);
-  stbuf->st_mode = S_IFREG | default_mode_file;
-  stbuf->st_nlink = 1;
-  debugf(DBG_NORM, KBLU "exit 0: cfs_fgetattr(%s)", path);
-  return 0;
-  //}
+  debugf(DBG_NORM, KBLU "cfs_fgetattr(%s): calling getattr", path);
+  int result = cfs_getattr(path, stbuf);
+  debugf(DBG_NORM, KBLU "cfs_fgetattr(%s): exit getattr", path);
+  return result;
 }
 
 static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
@@ -885,7 +863,11 @@ static int cfs_rmdir(const char* path)
 static int cfs_ftruncate(const char* path, off_t size,
                          struct fuse_file_info* info)
 {
-  debugf(DBG_NORM, KBLU "cfs_ftruncate(%s): size=%lu", path, size);
+  debugf(DBG_NORM, KBLU "cfs_ftruncate(%s): size=%lu, ignored", path, size);
+  dir_entry* de = check_path_info();
+  if (de && de->size != size)
+    debugf(DBG_ERR, KRED "cfs_ftruncate(%s): file size (%lu) != truncate (%lu)",
+           de->size, size);
   /*openfile* of = (openfile*)(uintptr_t)info->fh;
     if (ftruncate(of->fd, size))
     return -errno;
@@ -1204,6 +1186,10 @@ static int cfs_fsync(const char* path, int idunno,
 static int cfs_truncate(const char* path, off_t size)
 {
   debugf(DBG_NORM, KBLU "cfs_truncate(%s): size=%lu", path, size);
+  dir_entry* de = check_path_info();
+  if (de && de->size != size)
+    debugf(DBG_ERR, KRED "cfs_truncate(%s): file size (%lu) != truncate (%lu)",
+           de->size, size);
   //dir_entry* de = check_path_info(path);
   //dir_entry* de = check_path_info_upload(path);
   //assert(de);

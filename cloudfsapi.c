@@ -813,7 +813,7 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
     upload_buf->readptr += max_size_to_upload;
     upload_buf->work_buf_size -= max_size_to_upload;
     upload_buf->size_processed += max_size_to_upload;
-    debugf(DBG_EXT,
+    debugf(DBG_EXTALL,
            "prog_upld_callb(%s): sent http data size=%lu workb=%lu",
            de->name, max_size_to_upload, de->upload_buf.work_buf_size);
     sem_post(de->upload_buf.sem_list[SEM_EMPTY]);

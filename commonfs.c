@@ -712,6 +712,7 @@ void path_to_de(const char* path, dir_entry* de)
   snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
   char meta_mtime[TIME_CHARS];
   snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+  //fixme: manifest path might be too long
   snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
            HUBIC_SEGMENT_STORAGE_ROOT, container);
   if (!de->manifest_seg)
@@ -720,6 +721,8 @@ void path_to_de(const char* path, dir_entry* de)
     assert(!strcasecmp(de->manifest_seg, manifest));
   snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
            HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
+  //ensure len is not to big
+  assert(strlen(manifest) + 8 < MAX_URL_SIZE);
   if (de->manifest_time)
     free(de->manifest_time);
   de->manifest_time = strdup(manifest);
