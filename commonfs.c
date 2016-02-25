@@ -1184,12 +1184,14 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
   dst->gid = src->gid;
   if (src->md5sum)
   {
-    assert(!dst->md5sum);
+    if (dst->md5sum)
+      free(dst->md5sum);
     dst->md5sum = strdup(src->md5sum);
   }
   if (src->md5sum_local)
   {
-    assert(!dst->md5sum_local);
+    if (dst->md5sum_local)
+      free(dst->md5sum_local);
     dst->md5sum_local = strdup(src->md5sum_local);
   }
 
@@ -2005,11 +2007,14 @@ bool can_add_lock(const char* path, char* open_flags)
   open_file* of = openfile_list;
   while (of)
   {
+    debugf(DBG_EXT, KCYN "can_add_lock(%s, flags=%s): iterate [%s, %s]", path,
+           open_flags, of->open_flags, of->path);
     if (!strcasecmp(of->path, path))
     {
       //if try to open for write and hard lock exists, fail
       if ((strstr(open_flags, "w") || strstr(open_flags, "a"))
-          && strstr(of->open_flags, "r!"))
+          && (strstr(of->open_flags, "r!") || strstr(of->open_flags, "w")
+              || strstr(of->open_flags, "a")))
         return false;
       //if try to open for read and write lock exist, fail
       if (strstr(open_flags, "r")
@@ -2018,6 +2023,8 @@ bool can_add_lock(const char* path, char* open_flags)
     }
     of = of->next;
   }
+  debugf(DBG_EXT, KCYN "can_add_lock(%s, flags=%s): can add OK", path,
+         open_flags);
   return true;
 }
 

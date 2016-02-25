@@ -709,38 +709,69 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           //calculate md5sum
           struct thread_job* job = init_thread_job();
           init_job_md5(job);
-          for (seg_index = 0; seg_index < de_upload->segment_count;
-               seg_index++)
+          bool pending;
+          int loops = 0;
+          do
           {
-            de_seg_tmp = get_segment(de_upload, seg_index);
-            assert(de_seg_tmp);
-            while (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
+            pending = false;
+            for (seg_index = 0; seg_index < de_upload->segment_count;
+                 seg_index++)
             {
-              debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
-                     de->name, de_seg_tmp->name);
-              sleep_ms(1000);
-              //sem_wait(de_seg_tmp->upload_buf.sem_list[SEM_DONE]);
-              if (!de_seg_tmp->upload_buf.sem_list[SEM_DONE])
-                debugf(DBG_EXT, KMAG "cfs_flush(%s): pending upload %s done",
+              de_seg_tmp = get_segment(de_upload, seg_index);
+              assert(de_seg_tmp);
+              if (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
+              {
+                debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
                        de->name, de_seg_tmp->name);
+                //if (!de_seg_tmp->upload_buf.sem_list[SEM_DONE])
+                //  debugf(DBG_EXT, KMAG "cfs_flush(%s): pending upload %s done",
+                //         de->name, de_seg_tmp->name);
+                pending = true;
+              }
+              debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
+                     de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
+
             }
-            debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
-                   de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
-            //update md5sum for the whole file
-            update_job_md5(job, de_seg_tmp->md5sum, strlen(de_seg_tmp->md5sum));
+            if (pending)
+              sleep_ms(1000);
+            loops++;
           }
-          //complete md5sum compute for this file using cumulative segment etags
-          complete_job_md5(job);
-          if (de_upload->md5sum_local)
-            free(de_upload->md5sum_local);
-          de_upload->md5sum_local = strdup(job->md5str);
-          free_thread_job(job);
+          while (pending && loops < 120);
+
+          //if operation completed ok calculate file cumulative segment etag
+          if (!pending)
+          {
+            debugf(DBG_EXT, KMAG "cfs_flush(%s): compute md5sum segs", de->name);
+            for (seg_index = 0; seg_index < de_upload->segment_count; seg_index++)
+            {
+              de_seg_tmp = get_segment(de_upload, seg_index);
+              assert(de_seg_tmp);
+              //update md5sum for the whole file using etags
+              update_job_md5(job, de_seg_tmp->md5sum, strlen(de_seg_tmp->md5sum));
+            }
+            //complete md5sum compute for this file using cumulative segment etags
+            complete_job_md5(job);
+            if (de_upload->md5sum_local)
+              free(de_upload->md5sum_local);
+            de_upload->md5sum_local = strdup(job->md5str);
+            free_thread_job(job);
+          }
+
           //complete md5sum using fuse provided content
           complete_job_md5(de_upload->job);
           //complete md5sum using http uploaded content
           complete_job_md5(de_upload->job2);
 
           close_lock_file(de_upload->full_name, info->fh);
+
+          if (pending)
+          {
+            debugf(DBG_EXT, KRED
+                   "cfs_flush(%s): pending segments for too long, aborting",
+                   de_upload->name);
+            result = -EIO;
+            //
+          }
 
           if (strcasecmp(de_upload->job->md5str, de_upload->job2->md5str))
           {
@@ -749,7 +780,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                    "cfs_flush(%s): md5sum not match between fuse(%s) and http(%s)",
                    de_upload->name, de_upload->job->md5str, de_upload->job2->md5str);
             result = -EILSEQ;
-            abort();
+            //abort();
           }
           else
             debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
@@ -778,7 +809,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                    "cfs_flush(%s): segments md5sum not match, corrupted file",
                    de_upload->name);
             result = -EILSEQ;
-            abort();
+            //abort();
           }
           else
             debugf(DBG_EXT, KGRN "cfs_flush(%s): segment md5sum OK (%s)",
@@ -939,7 +970,11 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     init_job_md5(job_http_md5);
     de->job2 = job_http_md5;
   }
-  update_job_md5(de->job, buf, length);
+  if (de->job)
+    update_job_md5(de->job, buf, length);
+  else
+    debugf(DBG_ERR, KRED
+           "cfs_write(%s) unexpected empty job off=%lu", path, offset);
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
   de->segment_remaining = segment_size; //we don't know remaining size

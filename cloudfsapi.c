@@ -2155,9 +2155,9 @@ void internal_upload_segment_progressive(void* arg)
     {
       restore_job_md5(job->de->job2);
       //wait until cache data is read and ready to feed into http
-      //fixme: sometimes it will freeze here
       debugf(DBG_EXT, "int_upload_seg_prog(%s): waiting for http resume",
              job->de->name);
+      //fixme: sometimes it will freeze here
       sem_wait(job->de_seg->upload_buf.sem_list[SEM_FULL]);
     }
     assert(init_job_md5(job));
