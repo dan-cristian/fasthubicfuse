@@ -24,6 +24,7 @@ typedef enum { false, true } bool;
 #define REQUEST_RETRIES 5
 #define BUFFER_READ_SIZE 128 * 1024
 #define INTERNET_TIMEOUT_SEC 100
+#define OPTION_SIZE 1024
 
 #define FILE_OPEN_MODE_READ 32768
 #define FILE_OPEN_MODE_WRITE 32769
@@ -232,6 +233,25 @@ typedef struct open_file
   char* process_origin;
   struct open_file* next;
 } open_file;
+
+typedef struct extra_options
+{
+  char get_extended_metadata[OPTION_SIZE];
+  char curl_verbose[OPTION_SIZE];
+  char cache_statfs_timeout[OPTION_SIZE];
+  char debug_level[OPTION_SIZE];
+  char curl_progress_state[OPTION_SIZE];
+  char enable_chmod[OPTION_SIZE];
+  char enable_chown[OPTION_SIZE];
+  char enable_progressive_upload[OPTION_SIZE];
+  char enable_progressive_download[OPTION_SIZE];
+  char min_speed_limit_progressive[OPTION_SIZE];
+  char min_speed_timeout[OPTION_SIZE];
+  char read_ahead[OPTION_SIZE];
+  char enable_syslog[OPTION_SIZE];
+  char enable_chaos_test_monkey[OPTION_SIZE];
+  char disable_atime_check[OPTION_SIZE];
+} ExtraFuseOptions;
 
 time_t my_timegm(struct tm* tm);
 time_t get_time_from_str_as_gmt(char* time_str);

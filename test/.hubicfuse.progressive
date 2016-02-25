@@ -22,3 +22,4 @@ min_speed_timeout = 3
 read_ahead = 54857600
 enable_syslog = true
 enable_chaos_test_monkey = false
+disable_atime_check=true

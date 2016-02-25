@@ -9,7 +9,7 @@
 #define BUFFER_INITIAL_SIZE 4096
 #define MAX_HEADER_SIZE 8192
 #define USER_AGENT "CloudFuse"
-#define OPTION_SIZE 1024
+
 #define MINIMAL_PROGRESS_FUNCTIONALITY_INTERVAL 5
 
 typedef struct curl_slist curl_slist;
@@ -43,23 +43,7 @@ typedef struct options
   char refresh_token[OPTION_SIZE];
 } FuseOptions;
 
-typedef struct extra_options
-{
-  char get_extended_metadata[OPTION_SIZE];
-  char curl_verbose[OPTION_SIZE];
-  char cache_statfs_timeout[OPTION_SIZE];
-  char debug_level[OPTION_SIZE];
-  char curl_progress_state[OPTION_SIZE];
-  char enable_chmod[OPTION_SIZE];
-  char enable_chown[OPTION_SIZE];
-  char enable_progressive_upload[OPTION_SIZE];
-  char enable_progressive_download[OPTION_SIZE];
-  char min_speed_limit_progressive[OPTION_SIZE];
-  char min_speed_timeout[OPTION_SIZE];
-  char read_ahead[OPTION_SIZE];
-  char enable_syslog[OPTION_SIZE];
-  char enable_chaos_test_monkey[OPTION_SIZE];
-} ExtraFuseOptions;
+
 
 void cloudfs_init(void);
 void cloudfs_free(void);

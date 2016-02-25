@@ -56,7 +56,7 @@ long option_min_speed_limit_progressive = 0;//use long not double
 long option_min_speed_timeout;
 long option_read_ahead = 0;
 bool option_enable_chaos_test_monkey = false;//create random errors for testing
-
+bool option_disable_atime_check = false;
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -2198,6 +2198,7 @@ void print_options()
   fprintf(stderr, "enable_syslog = %d\n", option_enable_syslog);
   fprintf(stderr, "enable_chaos_test_monkey = %d\n",
           option_enable_chaos_test_monkey);
+  fprintf(stderr, "disable_atime_check = %d\n", option_disable_atime_check);
 }
 
 

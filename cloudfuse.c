@@ -43,6 +43,8 @@ extern long option_min_speed_timeout;
 extern long option_read_ahead;
 extern bool option_enable_syslog;
 extern bool option_enable_chaos_test_monkey;
+extern bool option_disable_atime_check;
+
 FuseOptions options =
 {
   .cache_timeout = "600",
@@ -73,7 +75,8 @@ ExtraFuseOptions extra_options =
   .min_speed_timeout = "3",
   .read_ahead = "0",
   .enable_syslog = "0",
-  .enable_chaos_test_monkey = "false"
+  .enable_chaos_test_monkey = "false",
+  .disable_atime_check = "false"
 };
 
 bool initialise_options(struct fuse_args args)
@@ -137,6 +140,9 @@ bool initialise_options(struct fuse_args args)
   if (*extra_options.enable_chaos_test_monkey)
     option_enable_chaos_test_monkey = !strcasecmp(
                                         extra_options.enable_chaos_test_monkey, "true");
+  if (*extra_options.disable_atime_check)
+    option_disable_atime_check = !strcasecmp(extra_options.disable_atime_check,
+                                 "true");
   if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
   {
     fprintf(stderr,
@@ -185,6 +191,8 @@ bool initialise_options(struct fuse_args args)
             "  enable_syslog=[Write error output to syslog]\n");
     fprintf(stderr,
             "  enable_chaos_test_monkey=[Enable creation of random errors to test program stability]\n");
+    fprintf(stderr,
+            "  disable_atime_check=[Disable atime file check even if is enabled at mount]\n");
     return false;
   }
   return true;
@@ -723,9 +731,16 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
               {
                 debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
                        de->name, de_seg_tmp->name);
-                //if (!de_seg_tmp->upload_buf.sem_list[SEM_DONE])
-                //  debugf(DBG_EXT, KMAG "cfs_flush(%s): pending upload %s done",
-                //         de->name, de_seg_tmp->name);
+                //fixme: upload might be blocked in sem_wait @ upload_prog
+                //after cfs_write completed, so cancel the upload
+                if (de_seg_tmp->upload_buf.feed_from_cache)
+                {
+                  debugf(DBG_EXT, KRED "cfs_flush(%s): wait blocked in cache %s",
+                         de->name, de_seg_tmp->name);
+                  //todo: how to resume?
+                  abort();
+                }
+
                 pending = true;
               }
               debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
@@ -1396,9 +1411,9 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     debugf(DBG_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);
     return -ENOENT;
   }
-  if (de->atime.tv_sec != times[0].tv_sec
-      || de->atime.tv_nsec != times[0].tv_nsec ||
-      de->mtime.tv_sec != times[1].tv_sec
+  if (!option_disable_atime_check &&
+      (de->atime.tv_sec != times[0].tv_sec || de->atime.tv_nsec != times[0].tv_nsec)
+      || de->mtime.tv_sec != times[1].tv_sec
       || de->mtime.tv_nsec != times[1].tv_nsec)
   {
     debugf(DBG_EXT, KCYN
@@ -1486,7 +1501,9 @@ int parse_option(void* data, const char* arg, int key,
       sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead) ||
       sscanf(arg, " enable_syslog = %[^\r\n ]", extra_options.enable_syslog) ||
       sscanf(arg, " enable_chaos_test_monkey = %[^\r\n ]",
-             extra_options.enable_chaos_test_monkey)
+             extra_options.enable_chaos_test_monkey) ||
+      sscanf(arg, " disable_atime_check = %[^\r\n ]",
+             extra_options.disable_atime_check)
      )
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
