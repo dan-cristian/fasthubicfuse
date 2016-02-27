@@ -2955,6 +2955,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   int retval = 0;
   int entry_count = 0;
   dir_entry* last_dir = NULL;
+  dir_entry* de_tmp;
+  bool duplicate_entry;
   *dir_list = NULL;
   xmlNode* onode = NULL, *anode = NULL, *text_node = NULL;
   xmlParserCtxtPtr xmlctx = xmlCreatePushParserCtxt(NULL, NULL, "", 0, NULL);
@@ -3106,23 +3108,39 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
           }
           strncpy(last_subdir, de->name, sizeof(last_subdir));
         }
-        //fixed, saves elements in default read order
-        if (!*dir_list)
-          *dir_list = de;
-        else
-          last_dir->next = de;
-        last_dir = de;
-        //saves elements in the list in reversed order, not good!
-        /*
-          de->next = *dir_list;
-          dir_list = de;
-        */
-        char time_str[TIME_CHARS] = "";
-        get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-        debugf(DBG_NORM,
-               KCYN"new dir_entry %s size=%d %s dir=%d lnk=%d mod=[%s] md5=%s",
-               de->full_name, de->size, de->content_type, de->isdir, de->islink, time_str,
-               de->md5sum);
+
+        //check for duplicates to find a bug
+        de_tmp = *dir_list;
+        duplicate_entry = false;
+        while (de_tmp)
+        {
+          if (!strcasecmp(de_tmp->full_name, de->full_name))
+          {
+            debugf(DBG_ERR, KRED "cloudfs_list_dir(%s): ignoring duplicate (%s)",
+                   path, de->name);
+            duplicate_entry = true;
+          }
+          de_tmp = de_tmp->next;
+        }
+        if (!duplicate_entry)
+        {
+          //fixed, saves elements in default read order
+          if (!*dir_list)
+            *dir_list = de;
+          else
+            last_dir->next = de;
+          last_dir = de;
+          //saves elements in the list in reversed order, not good!
+          /*
+            de->next = *dir_list;
+            dir_list = de;
+          */
+          //char time_str[TIME_CHARS] = "";
+          //get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
+          debugf(DBG_NORM, KCYN "new dir_entry %s size=%d %s dir=%d lnk=%d md5=%s",
+                 de->full_name, de->size, de->content_type, de->isdir, de->islink,
+                 de->md5sum);
+        }
       }
       else
         debugf(DBG_EXT, "unknown element: %s", onode->name);
