@@ -51,6 +51,9 @@ typedef enum { false, true } bool;
 #define HEADER_TEXT_FILE_SIZE "X-Object-Meta-File-Size"
 #define HEADER_TEXT_CONTENT_LEN "Content-Length"
 #define HEADER_TEXT_CONTENT_TYPE "Content-Type"
+#define HEADER_TEXT_CONTAINER_OBJ_COUNT "X-Container-Object-Count"
+#define HEADER_COPY_FROM "X-Copy-From"
+
 
 //used for storing locally cloud cached files in temp folder
 #define TEMP_FILE_NAME_FORMAT "%s/cloudfuse%s"
@@ -148,7 +151,6 @@ typedef struct dir_entry
   off_t size;//size of the file, might not match the size in cloud if is segmented
   off_t size_on_cloud;//size of the file in cloud, should be 0 for segmented files
   time_t last_modified;
-  // additional attributes
   struct timespec mtime;
   struct timespec ctime;
   struct timespec ctime_local;//cached time used for content change check
@@ -178,11 +180,14 @@ typedef struct dir_entry
   //if true segments were not loaded from cloud, size was taken from meta headers
   //used to increase speed, avoid one http call
   bool lazy_segment_load;
-  // end change
+  //delay meta load for file in folders with many files, as is very slow
+  bool lazy_meta;
   int isdir;
   int islink;
   struct dir_entry* next;
   struct dir_entry* parent;
+  //int object_count_recursive;//container object count from swift header
+  int object_count;//number of objects in this folder
 } dir_entry;
 
 typedef struct thread_job
@@ -207,7 +212,8 @@ typedef struct thread_copy_job
   char* dest;
   char* manifest;
   int result;
-  void* self_reference;
+  bool thread_exit;
+  //void* self_reference;
 } thread_copy_job;
 
 // linked list with cached folder names
@@ -287,9 +293,12 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
 long random_at_most(long max);
+void init_entry_lazy(dir_entry* de);
 dir_entry* init_dir_entry();
 void free_de_before_get(dir_entry* de);
 void free_de_before_head(dir_entry* de);
+thread_copy_job* init_thread_copy_job();
+void free_thread_copy_job(thread_copy_job* job);
 thread_job* init_thread_job();
 void free_thread_job(thread_job* job);
 void create_dir_entry(dir_entry* de, const char* path, mode_t mode);

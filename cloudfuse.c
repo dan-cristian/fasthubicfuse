@@ -21,6 +21,9 @@
 #include "cloudfsapi.h"
 #include "config.h"
 
+/*
+  http://docs.openstack.org/developer/swift/api/object_api_v1_overview.html
+*/
 extern char* temp_dir;
 extern pthread_mutex_t dcachemut;
 extern pthread_mutex_t dcacheuploadmut;
@@ -223,7 +226,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   {
     stbuf->st_uid = geteuid();
     stbuf->st_gid = getegid();
-    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_mode = S_IFDIR | 0777;//0755;
     stbuf->st_nlink = 2;
     debug_list_cache_content();
     debugf(DBG_NORM, KBLU "exit 0: cfs_getattr(%s)", path);
@@ -242,8 +245,8 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   //lazzy download of file metadata, only when really needed
   if (option_get_extended_metadata && !de->metadata_downloaded)
   {
-    get_file_metadata(de, false);
-    //file might be corrupted after getting metadata
+    get_file_metadata(de, false, false);
+    //file might be corrupted after getting metadata - ???
     de = check_path_info(path);
     if (!de)
     {
@@ -251,9 +254,10 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
              KYEL " file corrupted", path);
       return -ENOENT;
     }
-    if (!de->lazy_segment_load && !de->isdir)
+    //file is marked with lazy_seg_load=true if file_size meta exist
+    if (!de->lazy_segment_load && !de->isdir && !de->lazy_meta)
     {
-      //this means file does not have FILE_SIZE meta, not uploaded via me
+      //this means file does not have FILE_SIZE meta, not uploaded via this app
       //so add this meta for future speed improvements
       debugf(DBG_NORM, "cfs_getattr(%s):" KYEL
              " update meta to latest fields (add size)", de->name);
@@ -293,7 +297,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
   else
   {
     default_mode_dir = 0755;
-    default_mode_file = 0666;
+    default_mode_file = 0777;// 0666;
   }
   if (de->isdir)
   {
@@ -336,7 +340,7 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
                        off_t offset, struct fuse_file_info* info)
 {
   debugf(DBG_NORM, KBLU "cfs_readdir(%s)", path);
-  dir_entry* de;
+  dir_entry* de, *de_root;
   //fixme: if this called while an upload is in progress and cache expires,
   //will remove the cache entries and crash as previous segments are deleted
   if (!caching_list_directory(path, &de))
@@ -350,7 +354,10 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
   for (; de; de = de->next)
     filldir(buf, de->name, NULL, 0);
   debug_list_cache_content();
-  debugf(DBG_NORM, KBLU "exit 1: cfs_readdir(%s)", path);
+  de_root = check_path_info(path);
+  //assert(de_root);
+  debugf(DBG_NORM, KBLU "exit 1: cfs_readdir(%s): obj_count=%d",
+         path, de_root ? de_root->object_count : -1);
   return 0;
 }
 
@@ -427,9 +434,9 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
     return -EBUSY;
   }
   //download metadata if needed.sometimes getattr is not called.
-  if (option_get_extended_metadata &&
-      (!de->metadata_downloaded || de->lazy_segment_load))
-    get_file_metadata(de, true);
+  //if (option_get_extended_metadata &&
+  //    (!de->metadata_downloaded || de->lazy_segment_load))
+  get_file_metadata(de, true, true);
 
   info->fh = (uintptr_t)fd;
   info->direct_io = 1;
@@ -474,7 +481,13 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     while (result <= 0)
     {
       de_seg = get_segment(de, segment_index);
-      assert(de_seg);
+      //could not find expected segment
+      if (!de_seg)
+      {
+        debugf(DBG_ERR, KRED
+               "cfs_read(%s): segment %d not in cloud", path, segment_index);
+        return -ENODATA;
+      }
       //offset in segment is different than full file offset
       offset_seg = offset - (segment_index * de->segment_size);
       debugf(DBG_EXTALL, KMAG
@@ -816,7 +829,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           //mark file meta as obsolete to force a reload (for md5sums mostly)
           //if has unvisible segments update_segments in get_file_meta will skip
           de->metadata_downloaded = false;
-          bool meta_ok = get_file_metadata(de, true);
+          bool meta_ok = get_file_metadata(de, true, true);
           if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
           {
             //md5sums are different, upload is corrupt
@@ -1330,30 +1343,35 @@ static int cfs_rename(const char* src, const char* dst)
     close_lock_file(src, fd_src);
     return -EBUSY;
   }
-
+  int result = 0;
   dir_entry* src_de = path_info(src);
   if (!src_de)
   {
     debugf(DBG_NORM, KRED "exit 0: cfs_rename(%s,%s) not-found", src, dst);
-    return -ENOENT;
+    result = -ENOENT;
   }
-  if (src_de->isdir)
+  else if (src_de->isdir)
   {
     debugf(DBG_NORM, KRED "exit 1: cfs_rename(%s,%s) cannot rename dirs!",
            src, dst);
-    return -EISDIR;
+    result = -EISDIR;
   }
-
-  if (cloudfs_copy_object(src_de, dst))
+  else
   {
-    cloudfs_delete_object(src_de);
-    close_lock_file(src, fd_src);
-    close_lock_file(dst, fd_dst);
-    debugf(DBG_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
-    return 0;
+    //ensure segments are loaded
+    get_file_metadata(src_de, true, true);
+    if (cloudfs_copy_object(src_de, dst))
+    {
+      cloudfs_delete_object(src_de);
+      debugf(DBG_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
+    }
+    else result = -ENODATA;
   }
-  debugf(DBG_NORM, KRED"exit 3: cfs_rename(%s,%s) io error", src, dst);
-  return -EIO;
+  close_lock_file(src, fd_src);
+  close_lock_file(dst, fd_dst);
+  if (result != 0)
+    debugf(DBG_NORM, KRED"exit 3: cfs_rename(%s,%s) io error", src, dst);
+  return result;
 }
 
 static int cfs_symlink(const char* src, const char* dst)

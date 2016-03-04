@@ -88,7 +88,8 @@ int cloudfs_statfs(const char* path, struct statvfs* stat);
 void cloudfs_verify_ssl(int dbg);
 void cloudfs_option_get_extended_metadata(int option);
 void cloudfs_option_curl_verbose(int option);
-bool get_file_metadata(dir_entry* de, bool force_segment_update);
+bool get_file_metadata(dir_entry* de, bool force_segment_update,
+                       bool force_meta);
 int cloudfs_update_meta(dir_entry* de);
 //int cloudfs_object_upload_progressive(dir_entry* de, dir_entry* de_seg);
 void* cloudfs_object_downld_progressive(void* path);

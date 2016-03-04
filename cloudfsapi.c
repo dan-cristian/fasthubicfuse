@@ -291,6 +291,54 @@ static size_t header_get_segment_meta(void* ptr, size_t size, size_t nmemb,
 }
 
 /*
+  get segment metadata from HTTP response headers (usually after put to check md5)
+*/
+static size_t header_get_container_meta(void* ptr, size_t size, size_t nmemb,
+                                        void* userdata)
+{
+  size_t memsize = size * nmemb;
+  char* header = (char*)alloca(memsize + 1);
+  char* head = (char*)alloca(memsize + 1);
+  char* value = (char*)alloca(memsize + 1);
+  memcpy(header, (char*)ptr, memsize);
+  header[memsize] = '\0';
+  char storage[MAX_HEADER_SIZE];
+  if (sscanf(header, "%[^:]: %[^\r\n]", head, value) == 2)
+  {
+    strncpy(storage, head, sizeof(storage));
+    debugf(DBG_EXTALL, "header_get_container_meta: " KCYN
+           "head=[%s] val=[%s]", head, value);
+    if (userdata)
+    {
+      dir_entry* de = (dir_entry*)userdata;
+      assert(de->name);
+      assert(de->isdir);
+      if (de != NULL)
+      {
+        if (!strncasecmp(head, HEADER_TEXT_CONTAINER_OBJ_COUNT, memsize))
+        {
+          //debugf(DBG_EXT, "header_get_container_meta: got objcount=%s",
+          //       value);
+          //de->object_count_recursive = atoi(value);
+        }
+      }
+      else abort();
+    }
+    /*else
+      debugf(DBG_EXT, KYEL
+             "header_get_container_meta: NO USERDATA SPECIFIED (%s=%s)",
+             head, value);
+    */
+  }
+  else
+  {
+    //debugf(DBG_NORM, "Received unexpected header line");
+  }
+  return memsize;
+}
+
+
+/*
    get file metadata from HTTP response headers
 */
 static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
@@ -1097,7 +1145,19 @@ static int send_request_size(const char* method, const char* encoded_path,
       else if (de)
         free_de_before_get(de);
 
-      if (fp)//is_segment)
+      if (xmlctx)
+      {
+        debugf(DBG_EXT, "send_request_size: GET XML (%s)", print_path);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_container_meta);
+        if (de_seg)
+          curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)info->de_seg);
+        else if (de)
+          curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void*)info->de);
+        else curl_easy_setopt(curl, CURLOPT_HEADERDATA, NULL);
+      }
+      else if (fp)//is_segment)
       {
         is_download = true;
         info = (struct segment_info*)fp;
@@ -1139,12 +1199,6 @@ static int send_request_size(const char* method, const char* encoded_path,
           curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_segment_meta);
         else if (de)
           curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_get_meta_dispatch);
-      }
-      else if (xmlctx)
-      {
-        debugf(DBG_EXT, "send_request_size: GET XML (%s)", print_path);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, xmlctx);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &xml_dispatch);
       }
       else
       {
@@ -1851,15 +1905,15 @@ bool update_segments(dir_entry* de)
       }
       if (check_ok)
       {
-        if (de->lazy_segment_load && (de->size != total_size))
+        if (de->lazy_segment_load && (de->size != 0) && (de->size != total_size))
         {
-          debugf(DBG_ERR, KRED
+          debugf(DBG_ERR, KYEL
                  "update_segments(%s): inconsistent size, meta=%lu, segs=%lu",
                  de->name, de->size, total_size);
           //abort();
         }
         de->size = total_size;
-        de->lazy_segment_load = false;
+        de->lazy_segment_load = false;//size was read so mark it
 
         //if we only have one segment mark general file segment size as per conf
         //file because it must be larger than actual segment size in the cloud
@@ -2468,7 +2522,7 @@ int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
     response = send_request_size(HTTP_PUT, encoded, &info, NULL, NULL,
                                  info.size_copy, 0, de, de_seg);
     update_direntry_md5sum(de->md5sum_local, fp);
-    get_file_metadata(de, true);
+    get_file_metadata(de, true, true);
     curl_free(encoded);
     debugf(DBG_EXT, "exit 1: cloudfs_upload_segment(%s)", de->name);
   }
@@ -2560,7 +2614,7 @@ int cloudfs_object_read_fp(dir_entry* de, FILE* fp)
   rewind(fp);
   char* encoded = curl_escape(de->full_name, 0);
   int response = send_request(HTTP_PUT, encoded, fp, NULL, NULL, de, NULL);
-  get_file_metadata(de, true);
+  get_file_metadata(de, true, true);
   curl_free(encoded);
   debugf(DBG_EXT, "exit 1: cloudfs_object_read_fp(%s)", de->name);
   return (response >= 200 && response < 300);
@@ -2884,31 +2938,52 @@ int cloudfs_object_truncate(dir_entry* de, off_t size)
 
 //get metadata from cloud, like time attribs. create new entry if not cached yet.
 //todo: not thread-safe?
-bool get_file_metadata(dir_entry* de, bool force_segment_update)
+//if force_segment is true then segments list/meta will be dowloaded
+//if foce_meta is true then meta is downloaded
+bool get_file_metadata(dir_entry* de, bool force_segment_update,
+                       bool force_meta)
 {
-  if (option_get_extended_metadata)
+  debugf(DBG_EXT, "get_file_meta(%s) isdir=%d isseg=%d file_count=%d",
+         de->full_name, de->isdir, de->is_segmented,
+         de->parent ? de->parent->object_count : -1);
+
+  //fast dir list mode
+  if (!force_meta && de->parent && de->parent->object_count > 20)
   {
-    debugf(DBG_EXT, KCYN "get_file_metadata(%s) size_cloud=%lu",
-           de->full_name, de->size_on_cloud);
+    debugf(DBG_EXT, KYEL "get_file_meta(%s): many files(%d), enable lazy/fast",
+           de->name, de->parent->object_count);
+    de->lazy_segment_load = true;
+    de->metadata_downloaded = true;
+    //if (!de->isdir)
+    //  path_to_de(de->full_name, de);
+    init_entry_lazy(de);
+    return true;
+  }
+
+  //meta on isdir sometimes returns HTTP404 (segment folders)
+  if (option_get_extended_metadata
+      &&  (!de->metadata_downloaded || force_meta))// && !de->isdir)
+  {
     //clear existing segments cache
     dir_decache_segments(de);
     //retrieve additional file metadata with a quick HEAD query
     int response = send_request("GET", NULL, NULL, NULL, NULL, de, NULL);
     if (valid_http_response(response))
     {
-      debugf(DBG_EXT, KCYN"status: get_file_metadata(%s) hash=%s",
+      debugf(DBG_EXT, KCYN"status: get_file_meta(%s) hash=%s",
              de->full_name, de->md5sum);
-      //generate hash if was not generated on directory list (on copy_object)
-      //if (!de->full_name_hash)
-      //  de->full_name_hash = strdup(str2md5(de->full_name, strlen(de->full_name)));
     }
     else
     {
-      debugf(DBG_EXT, KRED"status: get_file_metadata(%s) failed resp=%d",
+      debugf(DBG_EXT, KYEL "status: get_file_meta(%s) failed resp=%d",
              de->full_name, response);
       return false;
     }
+    de->lazy_meta = false;
   }
+  else debugf(DBG_EXT, KCYN
+                "get_file_meta(%s) skip head, isdir=%d meta_down=%d",
+                de->full_name, de->isdir, de->metadata_downloaded);
 
   if (!de->isdir)
     path_to_de(de->full_name, de);
@@ -2918,7 +2993,7 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update)
       && /*!de->metadata_downloaded &&*/ !de->has_unvisible_segments)
   {
     //this can be a potential segmented file, try to read segments size
-    debugf(DBG_EXT, KMAG"get_file_metadata: get segments file=%s",
+    debugf(DBG_EXT, KMAG"get_file_meta: get segments file=%s",
            de->full_name);
     if (!de->lazy_segment_load || force_segment_update)
     {
@@ -2936,7 +3011,7 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update)
     }
   }
   else debugf(DBG_EXT, KCYN
-                "get_file_metadata(%s) skip seg_downld, size_cloud=%lu meta_down=%d",
+                "get_file_meta(%s) skip seg_downld, size_cloud=%lu meta_down=%d",
                 de->full_name, de->size_on_cloud, de->metadata_downloaded);
   de->metadata_downloaded = true;
   return true;
@@ -2956,12 +3031,14 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   int entry_count = 0;
   dir_entry* last_dir = NULL;
   dir_entry* de_tmp;
+  dir_entry* de_root;
   bool duplicate_entry;
+
   *dir_list = NULL;
+  //http://www.xmlsoft.org/html/libxml-tree.html#xmlNode
   xmlNode* onode = NULL, *anode = NULL, *text_node = NULL;
   xmlParserCtxtPtr xmlctx = xmlCreatePushParserCtxt(NULL, NULL, "", 0, NULL);
-
-
+  de_root = check_path_info(path);
   if (!strcmp(path, "") || !strcmp(path, "/"))
   {
     path = "";
@@ -2969,6 +3046,7 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   }
   else
   {
+    //assert(de_root);//should exist as is not root "/" folder
     sscanf(path, "/%[^/]/%[^\n]", container, object);
     char* encoded_container = curl_escape(container, 0);
     char* encoded_object = curl_escape(object, 0);
@@ -3002,6 +3080,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
     xmlNode* root_element = xmlDocGetRootElement(xmlctx->myDoc);
     for (onode = root_element->children; onode; onode = onode->next)
     {
+      debugf(DBG_EXTALL, KYEL "cfs_list: type=%d name=%s",
+             onode->type, (const char*)onode->name);
       if (onode->type != XML_ELEMENT_NODE) continue;
       char is_object = !strcasecmp((const char*)onode->name, "object");
       char is_container = !strcasecmp((const char*)onode->name, "container");
@@ -3024,14 +3104,14 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
             if (text_node->type == XML_TEXT_NODE)
             {
               content = (char*)text_node->content;
-              //debugf(DBG_EXT, KYEL
-              //       "List dir anode=[%s] content=[%s]",
-              //       (const char*)anode->name, content);
+              debugf(DBG_EXTALL, KYEL
+                     "cfs_list: anode=[%s] content=[%s]",
+                     (const char*)anode->name, content);
             }
             else
             {
-              //debugf(DBG_EXT, KYEL
-              //       "List dir anode=[%s]", (const char*)anode->name);
+              debugf(DBG_EXTALL, KYEL
+                     "cfs_list: anode=[%s]", (const char*)anode->name);
             }
           }
           //debugf(DBG_EXT, KCYN
@@ -3073,6 +3153,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
           }
           if (!strcasecmp((const char*)anode->name, "hash"))
             de->md5sum = strdup(content);
+          //if (!strcasecmp((const char*)anode->name, "count"))
+          //  de->object_count_recursive = atoi(content);
           if (!strcasecmp((const char*)anode->name, "last_modified"))
           {
             time_t last_modified_t = get_time_from_str_as_gmt(content);
@@ -3082,7 +3164,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
             de->last_modified = local_time_t;
             de->ctime.tv_sec = local_time_t;
             de->ctime.tv_nsec = 0;
-            //initialise all fields with hubic last modified date in case the file does not have extended attributes set
+            //initialise all fields with hubic last modified date
+            //in case the file does not have extended attributes set
             de->mtime.tv_sec = local_time_t;
             de->mtime.tv_nsec = 0;
             de->atime.tv_sec = local_time_t;
@@ -3108,6 +3191,8 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
           }
           strncpy(last_subdir, de->name, sizeof(last_subdir));
         }
+        //set parent entry. can be null
+        de->parent = de_root;
 
         //check for duplicates to find a bug
         de_tmp = *dir_list;
@@ -3144,7 +3229,10 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
       }
       else
         debugf(DBG_EXT, "unknown element: %s", onode->name);
-    }
+    }//end for
+    //de_root is null for cloud root and manifest files
+    if (de_root)
+      de_root->object_count = entry_count;
     retval = 1;
   }
   else if ((!strcmp(path, "") || !strcmp(path, "/")) && *override_storage_url)
@@ -3153,8 +3241,11 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
     debugf(DBG_NORM, KRED "Init cache entry container=[%s] !!!???",
            public_container);
     sleep_ms(3000);
+    abort();//to find out when this happens
     dir_entry* de = init_dir_entry();
     de->name = strdup(public_container);
+    de->parent = de_root;
+    de_root->object_count = 1;//todo: check this scenario
     struct tm last_modified;
     // TODO check what this default time means?
     strptime("1388434648.01238", "%FT%T", &last_modified);
@@ -3195,7 +3286,7 @@ int cloudfs_delete_object(dir_entry* de)
   //get meta for files to obtain manifest data. avoid segments and dirs.
   bool potential_segmented = de->is_segmented || de->size_on_cloud == 0;
   if (potential_segmented && !de->metadata_downloaded && !de->isdir)
-    get_file_metadata(de, false);
+    get_file_metadata(de, false, true);
 
   if (potential_segmented || de->isdir)
   {
@@ -3351,24 +3442,23 @@ void thread_cloudfs_copy_object(void* arg)
     //this is the manifest file so add the manifest field
     add_header(&headers, HEADER_TEXT_MANIFEST, job->manifest);
   }
-  add_header(&headers, "X-Copy-From", src_encoded);
-  add_header(&headers, "Content-Length", "0");
+
+  add_header(&headers, HEADER_COPY_FROM, src_encoded);
+  add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
   //add_header(&headers, "X-Object-Meta-Filepath", job->dest);
 
   int response = send_request(HTTP_PUT, dst_encoded, NULL, NULL, headers, NULL,
                               NULL);
-  int op_ok = (response >= 200 && response < 300);
+  int op_ok = valid_http_response(response);
 
   curl_free(dst_encoded);
   curl_free(src_encoded);
   curl_slist_free_all(headers);
-  //free(job->dest);
-  //free(job->manifest);
-  //free(job->self_reference);
   debugf(DBG_EXT, "exit: th_cloudfs_copy_object(%s) response=%d",
          de->name, response);
   job->result = op_ok;
-  pthread_exit(NULL);
+  if (job->thread_exit)
+    pthread_exit(NULL);
   //free is done in parent
 }
 
@@ -3399,21 +3489,21 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
   debugf(DBG_EXT, "cloudfs_copy_object(%s, %s)", de->name, dst);
   dir_entry* de_versions, *de_tmp;
   dir_entry* new_de = NULL;
-
   int result = true;
-  int active_threads = 0;
-  pthread_t* threads = (pthread_t*)malloc(MAX_COPY_THREADS * sizeof(pthread_t));
-  thread_copy_job* thread_jobs[MAX_COPY_THREADS];
+
   if (de->is_segmented)
   {
+    int active_threads = 0;
+    pthread_t* threads = (pthread_t*)malloc(MAX_COPY_THREADS * sizeof(pthread_t));
+    thread_copy_job* thread_jobs[MAX_COPY_THREADS];
     //copy segments with destination prefix
     assert(de->manifest_cloud);
     int src_seg_count;
-    int iterations;
+    int iterations = 0;
+    //todo: optimise this with update_segments
     //get segments from cloud and ensure count matches before copy
     do
     {
-      iterations = 0;
       src_seg_count = 0;
       if (cloudfs_list_directory(de->manifest_cloud, &de_versions))
       {
@@ -3424,7 +3514,11 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
           de_tmp = de_tmp->next;
         }
       }
-      else abort();
+      else
+      {
+        //manifest not found
+        abort();
+      }
 
       iterations++;
       if (src_seg_count != de->segment_count)
@@ -3454,13 +3548,14 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
 
       if (active_threads < MAX_COPY_THREADS)
       {
-        thread_copy_job* job = malloc(sizeof(struct thread_copy_job));
+        thread_copy_job* job = init_thread_copy_job();
+        job->thread_exit = true;
         assert(!thread_jobs[active_threads]);
         thread_jobs[active_threads] = job;
         job->dest = strdup(seg_path);
         job->de_src = de_tmp;
         job->manifest = strdup(new_de->manifest_time);
-        job->self_reference = job;
+        //job->self_reference = job;
         pthread_create(&threads[active_threads], NULL,
                        (void*)thread_cloudfs_copy_object, job);
         active_threads++;
@@ -3492,9 +3587,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
               //retry
               abort();
             }
-            free(thread_jobs[i]->dest);
-            free(thread_jobs[i]->manifest);
-            free(thread_jobs[i]);
+            free_thread_copy_job(thread_jobs[i]);
             thread_jobs[i] = NULL;
           }
         }
@@ -3503,16 +3596,10 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
       de_tmp = de_tmp->next;
     }
 
-
     assert(src_seg_count > 0 && src_seg_count == de->segment_count);
 
     if (result)
     {
-      struct thread_copy_job* job = malloc(sizeof(struct thread_copy_job));
-      job->dest = strdup(dst);
-      job->de_src = de;
-      job->manifest = strdup(new_de->manifest_time);
-      job->self_reference = job;
       //create new dest manifest file
       //note: manifest cannot be set on X-Copy operations?
       curl_slist* headers = NULL;
@@ -3530,7 +3617,6 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
         abort();
       else
       {
-        //delete all segments from source
         char manifest_root[MAX_URL_SIZE];
         snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
                  new_de->manifest_seg, new_de->name);
@@ -3538,7 +3624,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
         cleanup_older_segments(manifest_root, new_de->manifest_cloud);
 
         //check if all segments are visible in cloud after copy
-        dir_entry* new_dir_entry;
+        //dir_entry* new_dir_entry;
         update_segments(new_de);
         if (new_de->segment_count != de->segment_count)
         {
@@ -3551,7 +3637,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
         //insert new object in dir_entry list
         append_dir_entry(new_de);
         new_de->metadata_downloaded = false;
-        get_file_metadata(new_de, true);
+        get_file_metadata(new_de, true, true);
       }
     }
     else
@@ -3559,13 +3645,33 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst)
       //todo: recover from failed copy, delete garbage?
       dir_decache(new_de->full_name);
     }
+    free(threads);
   }
-  else
-    abort();
+  else//not segmented
+  {
+    //todo: handle not segmented
+    debugf(DBG_EXT, "cloudfs_copy_object: copy non segmented from %s->%s",
+           de->full_name, dst);
+    thread_copy_job* job = init_thread_copy_job();
+    job->thread_exit = false;
+    job->dest = strdup(dst);
+    job->de_src = de;
 
-  free(threads);
-  debugf(DBG_EXT, "cloudfs_copy_object(%s): exit res=%d",
-         dst, result);
+    thread_cloudfs_copy_object((void*)job);
+    if (job->result)
+    {
+      new_de = init_dir_entry();
+      new_de->is_segmented = false;
+      path_to_de(dst, new_de);//populate name etc.
+      append_dir_entry(new_de);
+      new_de->metadata_downloaded = false;
+      get_file_metadata(new_de, true, true);
+    }
+    free_thread_copy_job(job);
+    result = job->result;
+  }
+
+  debugf(DBG_EXT, "cloudfs_copy_object(%s): exit res=%d", dst, result);
   return result;
 }
 

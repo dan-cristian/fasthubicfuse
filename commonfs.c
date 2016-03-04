@@ -313,6 +313,23 @@ bool complete_job_md5(thread_job* job)
   return result;
 }
 
+thread_copy_job* init_thread_copy_job()
+{
+  thread_copy_job* job = malloc(sizeof(struct thread_copy_job));
+  job->dest = NULL;
+  job->de_src = NULL;
+  job->manifest = NULL;
+  return job;
+}
+
+void free_thread_copy_job(thread_copy_job* job)
+{
+  debugf(DBG_EXT, "thread_copy_job: freeing copy job");
+  free(job->dest);
+  free(job->manifest);
+  free(job);
+}
+
 thread_job* init_thread_job()
 {
   thread_job* job = malloc(sizeof(struct thread_job));
@@ -705,31 +722,37 @@ void path_to_de(const char* path, dir_entry* de)
   char object[MAX_URL_SIZE] = "";
   char manifest[MAX_URL_SIZE];
   split_path(path, seg_base, container, object);
-
-  struct timespec now;
-  clock_gettime(CLOCK_REALTIME, &now);
-  char string_float[TIME_CHARS];
-  snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-  char meta_mtime[TIME_CHARS];
-  snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-  //fixme: manifest path might be too long
-  snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
-           HUBIC_SEGMENT_STORAGE_ROOT, container);
-  if (!de->manifest_seg)
-    de->manifest_seg = strdup(manifest);
-  else
-    assert(!strcasecmp(de->manifest_seg, manifest));
-  snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
-           HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
-  //ensure len is not to big
-  assert(strlen(manifest) + 8 < MAX_URL_SIZE);
-  if (de->manifest_time)
-    free(de->manifest_time);
-  de->manifest_time = strdup(manifest);
-  if (!de->manifest_cloud)
+  if (de->is_segmented)
   {
-    snprintf(manifest, MAX_URL_SIZE, "/%s", de->manifest_time);
-    de->manifest_cloud = strdup(manifest);
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    char string_float[TIME_CHARS];
+    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+    char meta_mtime[TIME_CHARS];
+    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+    //fixme: manifest path might be too long
+    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
+             HUBIC_SEGMENT_STORAGE_ROOT, container);
+    if (de->manifest_seg)
+      free(de->manifest_seg);
+    //if (!de->manifest_seg)
+    de->manifest_seg = strdup(manifest);
+    //else
+    //  assert(!strcasecmp(de->manifest_seg, manifest));
+    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
+             HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
+    //ensure len is not to big
+    assert(strlen(manifest) + 8 < MAX_URL_SIZE);
+    //if already initialised then keep it as this is
+    if (!de->manifest_time)
+      free(de->manifest_time);
+    de->manifest_time = strdup(manifest);
+    //this is initialised in get_meta_dispatch
+    if (!de->manifest_cloud)
+    {
+      snprintf(manifest, MAX_URL_SIZE, "/%s", de->manifest_time);
+      de->manifest_cloud = strdup(manifest);
+    }
   }
   if (!de->name)
     de->name = strdup(object);
@@ -787,7 +810,6 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   }
   assert(de_seg);
   de_seg->segment_part = segment_index;
-
 
   if (!de->manifest_seg)
   {
@@ -1038,7 +1060,19 @@ long random_at_most(long max)
   return x / bin_size;
 }
 
+/*
+  init with cloud values without knowing extended metadata
+  this is not safe for operations relaying on extended attribs
+*/
+void init_entry_lazy(dir_entry* de)
+{
+  de->lazy_meta = true;
 
+}
+
+/*
+  default values for entry
+*/
 dir_entry* init_dir_entry()
 {
   dir_entry* de = (dir_entry*)malloc(sizeof(dir_entry));
@@ -1102,9 +1136,12 @@ dir_entry* init_dir_entry()
   de->size_on_cloud = 0;
   de->has_unvisible_segments = false;
   de->lazy_segment_load = false;
+  de->lazy_meta = false;
   de->job = NULL;
   de->job2 = NULL;
   de->parent = NULL;
+  //de->object_count_recursive = 0;
+  de->object_count = 0;
   return de;
 }
 
@@ -1152,10 +1189,9 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
   de->uid = geteuid();
   de->gid = getegid();
   de->size = 0;
+  de->is_segmented = option_enable_progressive_upload;
   //fill in manifest data etc
   path_to_de(path, de);
-  if (option_enable_progressive_upload)
-    de->is_segmented = true;
 }
 
 /*
@@ -1330,11 +1366,24 @@ void update_dir_cache_upload(const char* path, off_t size, int isdir,
                             isdir, islink);
 }
 
+/*
+  return cache entry
+*/
+dir_cache* get_cache_entry(const char* path)
+{
+  dir_cache* cw;
+  for (cw = dcache; cw; cw = cw->next)
+  {
+    if (!strcmp(cw->path, path))
+      break;
+  }
+  return cw;
+}
+
 //returns first file entry in linked list. if not in cache will be downloaded.
 int caching_list_directory(const char* path, dir_entry** list)
 {
   debugf(DBG_EXT, "caching_list_directory(%s)", path);
-  //pthread_mutex_lock(&dcachemut);
   lock_mutex(dcachemut);
   bool new_entry = false;
   if (!strcmp(path, "/"))path = "";
@@ -1372,7 +1421,6 @@ int caching_list_directory(const char* path, dir_entry** list)
     if (!cloudfs_list_directory(path, list))
     {
       //download was not ok
-      //pthread_mutex_unlock(&dcachemut);
       unlock_mutex(dcachemut);
       debugf(DBG_EXTALL,
              "exit 0: caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
@@ -1390,7 +1438,6 @@ int caching_list_directory(const char* path, dir_entry** list)
     if (!cloudfs_list_directory(path, list))
     {
       //mutex unlock was forgotten
-      //pthread_mutex_unlock(&dcachemut);
       unlock_mutex(dcachemut);
       debugf(DBG_EXTALL, "exit 1: caching_list_directory(%s)", path);
       return  0;
@@ -1409,7 +1456,6 @@ int caching_list_directory(const char* path, dir_entry** list)
     {
       debugf(DBG_EXTALL,
              "got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED w NULL]", path);
-      //pthread_mutex_unlock(&dcachemut);
       unlock_mutex(dcachemut);
       return 0;
     }
@@ -1426,7 +1472,6 @@ int caching_list_directory(const char* path, dir_entry** list)
          path, (*list) ? (*list)->full_name : "nil!");
   cw->entries = *list;
   unlock_mutex(dcachemut);
-  //pthread_mutex_unlock(&dcachemut);
   debugf(DBG_EXTALL, "exit 2: caching_list_directory(%s)", path);
   return 1;
 }
@@ -1473,12 +1518,23 @@ bool append_dir_entry(dir_entry* de)
     result = false;
   else
   {
-    while (tmp->next)
-      tmp = tmp->next;
-    tmp->next = de;
+    if (!tmp)
+    {
+      //append file to this empty directory
+      dir_cache* cache = get_cache_entry(new_dir);
+      cache->entries = de;
+    }
+    else
+    {
+      //append (at the entries end)
+      while (tmp->next)
+        tmp = tmp->next;
+      tmp->next = de;
+    }
   }
   result = true;
-  debugf(DBG_EXT, KMAG "append_dir_entry(%s): res=%d", de->full_name, result);
+  debugf(DBG_EXT, KMAG "exit: append_dir_entry(%s) res=%d", de->full_name,
+         result);
   return result;
 }
 //retrieve folder from local cache if exists, return null if does not exist (rather than download)
