@@ -47,6 +47,7 @@ extern long option_read_ahead;
 extern bool option_enable_syslog;
 extern bool option_enable_chaos_test_monkey;
 extern bool option_disable_atime_check;
+extern pthread_t control_thread;
 
 FuseOptions options =
 {
@@ -718,13 +719,14 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
           //wait until upload and cleanup of previous versions fully completes
           //otherwise errors will be thrown by rsync (due to early rename)
+
+          //fixme: sometimes we get freeze
           sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
           //signal free of semaphores is safe now
           free_semaphores(&de_seg->upload_buf, SEM_DONE);
 
           //check if all previous segment uploads are done (except last)
           //sometimes prev uploads are still in progress
-
           int seg_index;
           dir_entry* de_seg_tmp;
           //calculate md5sum
@@ -748,10 +750,13 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                 //after cfs_write completed, so cancel the upload
                 if (de_seg_tmp->upload_buf.feed_from_cache)
                 {
-                  debugf(DBG_EXT, KRED "cfs_flush(%s): wait blocked in cache %s",
+                  debugf(DBG_EXT, KRED
+                         "cfs_flush(%s): wait blocked in cache %s, retrying upload",
                          de->name, de_seg_tmp->name);
-                  //todo: how to resume?
-                  abort();
+                  //feed data to http thread
+                  int_cfs_write_cache_data_feed(de_seg_tmp);
+                  de_seg_tmp->upload_buf.feed_from_cache = false;
+                  //abort();
                 }
 
                 pending = true;
@@ -963,7 +968,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   }
   else
-    debugf(DBG_EXT, KBLU
+    debugf(DBG_EXTALL, KBLU
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   int result, errsv;
   char debugstr[256];
@@ -1484,6 +1489,18 @@ int cfs_listxattr(const char* path, char* list, size_t size)
   return 0;
 }
 
+void control_thread_run()
+{
+  debugf(DBG_NORM, "control_thread_run initialised");
+  while (true)
+  {
+    debugf(DBG_EXT, KGRN "control_thread_run: locks=%d", get_open_locks());
+    sleep_ms(5000);
+  }
+  debugf(DBG_NORM, "control_thread_run exit");
+  pthread_exit(NULL);
+}
+
 
 int parse_option(void* data, const char* arg, int key,
                  struct fuse_args* outargs)
@@ -1602,5 +1619,7 @@ int main(int argc, char** argv)
   pthread_mutex_init(&dcacheuploadmut, &mutex_attr);
   pthread_mutexattr_init(&segment_mutex_attr);
   pthread_mutexattr_settype(&segment_mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
+  //init control thread
+  pthread_create(&control_thread, NULL, (void*)control_thread_run, NULL);
   return fuse_main(args.argc, args.argv, &cfs_oper, &options);
 }

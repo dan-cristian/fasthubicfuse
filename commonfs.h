@@ -317,6 +317,7 @@ dir_entry* check_path_info(const char* path);
 dir_entry* check_path_info_upload(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
 void flags_to_openmode(unsigned int flags, char* openmode);
+int get_open_locks();
 dir_entry* get_segment(dir_entry* de, int segment_index);
 void path_to_de(const char* path, dir_entry* de);
 dir_entry* get_create_segment(dir_entry* de, int segment_index);

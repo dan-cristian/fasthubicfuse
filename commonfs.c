@@ -57,6 +57,7 @@ long option_min_speed_timeout;
 long option_read_ahead = 0;
 bool option_enable_chaos_test_monkey = false;//create random errors for testing
 bool option_disable_atime_check = false;
+pthread_t control_thread = NULL;
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -2011,6 +2012,17 @@ void add_lock_file(const char* path, const char* open_flags,
   openfile_list = of;
 }
 
+int get_open_locks()
+{
+  open_file* of = openfile_list;
+  int count = 0;
+  while (of)
+  {
+    count++;
+    of = of->next;
+  }
+  return count;
+}
 
 bool close_lock_file(const char* path, int fd)
 {
@@ -2217,6 +2229,7 @@ void interrupt_handler(int sig)
   //TODO: clear dir cache
   dir_decache("");
   pthread_mutex_destroy(&dcachemut);
+
   exit(0);
 }
 

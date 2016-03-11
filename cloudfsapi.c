@@ -2111,7 +2111,7 @@ bool get_file_mimetype_from_path(dir_entry* de, char* mime)
 }
 
 /*
-  thread that feeds data into http buffer, similar with cfs_write
+  feeds data into http buffer from cache file, similar with cfs_write
 */
 bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
 {
@@ -2124,11 +2124,6 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
   char* cache_buf = malloc(BUFFER_READ_SIZE);
   off_t read_len;
   off_t ptr_offset = 0;
-  //reset sem_full semaphore to 0
-  //int sem_val, i;
-  //sem_getvalue(de_seg->upload_buf.sem_list[SEM_FULL], &sem_val);
-  //for (i = 0; i < sem_val; i++)
-  //  sem_wait(de_seg->upload_buf.sem_list[SEM_FULL]);
 
   do
   {
@@ -2171,6 +2166,8 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
   free(cache_buf);
 }
 
+
+
 /*
   uploads segment data from cache file then resumes with fuse data from cfs_write
 */
@@ -2211,7 +2208,9 @@ void internal_upload_segment_progressive(void* arg)
       //wait until cache data is read and ready to feed into http
       debugf(DBG_EXT, "int_upload_seg_prog(%s): waiting for http resume",
              job->de->name);
-      //fixme: sometimes it will freeze here
+      //unblock potential wait for seg completion in cfs_flush
+      sem_post(job->de_seg->upload_buf.sem_list[SEM_DONE]);
+      //fixme: sometimes it will freeze here, see cfs_flush note
       sem_wait(job->de_seg->upload_buf.sem_list[SEM_FULL]);
     }
     assert(init_job_md5(job));
@@ -2242,9 +2241,6 @@ void internal_upload_segment_progressive(void* arg)
                "int_upload_seg_prog(%s): md5sum ERROR de_seg=%s try=%d sizeproc=%lu",
                job->de->name, job->de_seg->name, i, job->de_seg->upload_buf.size_processed);
         job->de_seg->upload_buf.feed_from_cache = true;
-        //if file is not deleted quick upload over same file can determine
-        //wrong file size (data appended?)
-        //cloudfs_delete_object(job->de_seg);
         md5err = true;
         debugf(DBG_EXT,
                "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
