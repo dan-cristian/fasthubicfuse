@@ -2364,10 +2364,8 @@ void internal_upload_segment_progressive(void* arg)
     //delete older versions from current manifest (neeed on overwrites)
     cleanup_older_segments(manifest_root, new_manifest_root);
 
-    //todo: check if all segments are visible in cloud
+    //check if all segments are visible in cloud
     //as there are cases when last segment appears late
-    //update: issue might not be here, is due to x-copy
-
     dir_entry* de_tmp2 = init_dir_entry();
     snprintf(manifest_root, MAX_URL_SIZE, "/%s", de->manifest_time);
     de_tmp2->manifest_cloud = strdup(manifest_root);
@@ -2381,8 +2379,8 @@ void internal_upload_segment_progressive(void* arg)
     if (de_tmp2->segment_count != de->segment_count)
     {
       debugf(DBG_EXT, KRED
-             "internal_upload_segment_prog(%s): not all segs visible!",
-             job->de->name);
+             "int_upload_seg_prog(%s): some segs unvisible (%d:%d)!",
+             job->de->name, de_tmp2->segment_count, de->segment_count);
       de->has_unvisible_segments = true;
     }
     else
@@ -2974,10 +2972,10 @@ int cloudfs_object_truncate(dir_entry* de, off_t size)
   return (response >= 200 && response < 300);
 }
 
-//get metadata from cloud, like time attribs. create new entry if not cached yet.
-//todo: not thread-safe?
-//if force_segment is true then segments list/meta will be dowloaded
-//if foce_meta is true then meta is downloaded
+/*get metadata from cloud, like time attribs. create new entry if not cached yet.
+  if force_segment is true then segments list/meta will be dowloaded
+  if foce_meta is true then meta is downloaded (meta is false on lazy load)
+*/
 bool get_file_metadata(dir_entry* de, bool force_segment_update,
                        bool force_meta)
 {
@@ -2992,8 +2990,6 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
            de->name, de->parent->object_count);
     de->lazy_segment_load = true;
     de->metadata_downloaded = true;
-    //if (!de->isdir)
-    //  path_to_de(de->full_name, de);
     init_entry_lazy(de);
     return true;
   }
@@ -3023,8 +3019,9 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
                 "get_file_meta(%s) skip head, isdir=%d meta_down=%d",
                 de->full_name, de->isdir, de->metadata_downloaded);
 
-  if (!de->isdir)
-    path_to_de(de->full_name, de);
+  //todo: is this needed?
+  //if (!de->isdir)
+  //  path_to_stdmeta(de->full_name, de);
 
   //skip get segments if some segments are not yet visible
   if ((de->size_on_cloud == 0 || de->is_segmented) && !de->isdir
@@ -3167,11 +3164,17 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
             if (slash && (0 == *(slash + 1)))
             {
               if (asprintf(&(de->full_name), "%s%s", path, de->name) < 0)
+              {
+                assert(!de->full_name);
                 de->full_name = NULL;
+              }
               //keep this line for else if otherwise auto format will break it
             }
             else if (asprintf(&(de->full_name), "%s/%s", path, de->name) < 0)
+            {
+              assert(!de->full_name);
               de->full_name = NULL;
+            }
             //need a unique file id for semaphores
             de->full_name_hash = strdup(str2md5(de->full_name, strlen(de->full_name)));
           }
@@ -3591,16 +3594,18 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
     int th_ret, i;
     new_de = init_dir_entry();
     new_de->is_segmented = true;
-    path_to_de(dst, new_de);//get manifest root & new_de name
+    create_entry_meta(dst, new_de);
+    create_manifest_meta(new_de);
     char seg_path[MAX_URL_SIZE] = "";
     de_tmp = de_versions;
     for (i = 0; i < MAX_COPY_THREADS; i++)
       thread_jobs[i] = NULL;
     while (de_tmp)
     {
+      get_segment_manifest(seg_path, new_de, de_tmp->segment_part);
       //format segment full path
-      snprintf(seg_path, MAX_URL_SIZE, "/%s/%08i", new_de->manifest_time,
-               de_tmp->segment_part);
+      //snprintf(seg_path, MAX_URL_SIZE, "/%s/%08i", new_de->manifest_time,
+      //         de_tmp->segment_part);
 
       if (active_threads < MAX_COPY_THREADS)
       {
@@ -3611,7 +3616,6 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
         job->dest = strdup(seg_path);
         job->de_src = de_tmp;
         job->manifest = strdup(new_de->manifest_time);
-        //job->self_reference = job;
         pthread_create(&threads[active_threads], NULL,
                        (void*)thread_cloudfs_copy_object, job);
         active_threads++;
@@ -3718,7 +3722,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
     {
       new_de = init_dir_entry();
       new_de->is_segmented = false;
-      path_to_de(dst, new_de);//populate name etc.
+      create_entry_meta(dst, new_de);
       append_dir_entry(new_de);
       new_de->metadata_downloaded = false;
       get_file_metadata(new_de, true, true);

@@ -397,7 +397,8 @@ static int cfs_create(const char* path, mode_t mode,
   dir_entry* de = check_path_info_upload(path);
   assert(de);
 
-  create_dir_entry(de, path, mode);
+  //create_dir_entry(de, path, mode);
+  de->chmod = mode;
 
   //create empty file
   int result = cloudfs_create_object(de);
@@ -717,12 +718,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
         //wait until upload and cleanup of previous versions fully completes
         //otherwise errors will be thrown by rsync (due to early rename)
-
         //fixme: sometimes we get freeze
         sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
         //signal free of semaphores is safe now
         free_semaphores(&de_seg->upload_buf, SEM_DONE);
-
         //check if all previous segment uploads are done (except last)
         //sometimes prev uploads are still in progress
         int seg_index;
@@ -732,7 +731,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         struct thread_job* job = init_thread_job(strdup(strcat(job_name,
                                  de_upload->name)));
         init_job_md5(job);
-        bool pending;
+        bool pending;//segments still pending upload
         int loops = 0;
         do
         {
@@ -747,8 +746,8 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
               if (loops % 20 == 0)
                 debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
                        de->name, de_seg_tmp->name);
-              //fixme: upload might be blocked in sem_wait @ upload_prog
-              //after cfs_write completed, so cancel the upload
+              //upload might be blocked in sem_wait @ upload_prog
+              //after cfs_write completed, so feed data from here
               if (de_seg_tmp->upload_buf.feed_from_cache)
               {
                 debugf(DBG_EXT, KRED
@@ -787,11 +786,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           de_upload->md5sum_local = strdup(job->md5str);
           free_thread_job(job);
         }
-        else
-        {
-          debugf(DBG_EXT, KRED "cfs_flush(%s): waited too long", de_upload->name);
-          abort();
-        }
 
         //complete md5sum using fuse provided content
         complete_job_md5(de_upload->job);
@@ -804,6 +798,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         {
           debugf(DBG_EXT, KRED
                  "cfs_flush(%s): pending segments for too long, aborting", de_upload->name);
+          abort();
           result = -EIO;
         }
 
@@ -819,9 +814,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         else
           debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
                  de_upload->name, de_upload->job->md5str);
-
-        debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
-               de_upload->name);
 
         //fixme: sometimes last segment is not yet visible on cloud
         //copy dir_entry for to have segment list complete
@@ -900,7 +892,8 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       copy_dir_entry(de_upload, de);
       free(fuse_md5);
       //free md5sum holders
-      free_thread_job(de_upload->job);
+      if (de_upload->job)
+        free_thread_job(de_upload->job);
       dir_decache_upload(de_upload->full_name);
     }
     else
@@ -1009,7 +1002,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     //should be updated on cfs_create
     update_dir_cache_upload(path, offset, 0, 0);
     de = check_path_info_upload(path);
-    create_dir_entry(de, path, 0666);
+    create_dir_entry(de, path);
+    de->chmod = 0666;
   }
   assert(de);
   if (offset == 0)
@@ -1071,14 +1065,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       if (seg_index > 0)
       {
         prev_seg = get_segment(de, seg_index - 1);
-        //we know this is segmented so if 2nd segment,
-        //check if first seg exists, if not create
+        //we know this is segmented so if 2nd segment, set prev to main de
+
         if (!prev_seg && seg_index == 1)
-        {
-          //add first segment as we now know file is segmented
-          assert(get_create_segment(de, 0));
           prev_seg = de;
-        }
         assert(prev_seg);
         if (prev_seg->upload_buf.sem_list[SEM_FULL]
             && !prev_seg->upload_buf.signaled_completion)
@@ -1092,6 +1082,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
           if (seg_index == 1 && de->is_segmented == false)
           {
             de->is_segmented = true;//change to segmented, before convert
+            //add first segment as we now know file is segmented
+            create_manifest_meta(de);
+            //check if first seg exists, if not create
+            assert(get_create_segment(de, 0));
             //rename first segment, as thread to avoid block
             pthread_t thread;
             pthread_create(&thread, NULL, (void*)int_convert_first_segment_th, de);

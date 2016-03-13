@@ -87,6 +87,11 @@ typedef enum { false, true } bool;
 #define KBCYN "\x1B[46m"
 #define KBWHT "\x1B[47m"
 
+#define META_NAME 0
+#define META_MANIF_ALL 1
+#define META_MANIF_SEG 2
+#define META_MANIF_TIME 3
+#define META_MANIF_CLOUD 4
 
 #define min(x, y) ({                \
   typeof(x) _min1 = (x);          \
@@ -283,6 +288,7 @@ bool valid_http_response(int response);
 void decode_path(char* path);
 void split_path(const char* path, char* seg_base, char* container,
                 char* object);
+void get_segment_manifest(char* manifest_seg, dir_entry* de, int seg_index);
 void get_manifest_path(dir_entry* de, char* manifest_path);
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
@@ -300,7 +306,7 @@ thread_copy_job* init_thread_copy_job();
 void free_thread_copy_job(thread_copy_job* job);
 thread_job* init_thread_job(char* job_name);
 void free_thread_job(thread_job* job);
-void create_dir_entry(dir_entry* de, const char* path, mode_t mode);
+void create_dir_entry(dir_entry* de, const char* path);// , mode_t mode);
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);
@@ -318,7 +324,9 @@ dir_entry* check_parent_folder_for_file(const char* path);
 void flags_to_openmode(unsigned int flags, char* openmode);
 int get_open_locks();
 dir_entry* get_segment(dir_entry* de, int segment_index);
-void path_to_de(const char* path, dir_entry* de);
+void create_segment_meta(dir_entry* de_seg, int seg_index, dir_entry* de);
+void create_manifest_meta(dir_entry* de);
+void create_entry_meta(const char* path, dir_entry* de);
 dir_entry* get_create_segment(dir_entry* de, int segment_index);
 void dir_decache_segments(dir_entry* de);
 void dir_decache(const char* path);

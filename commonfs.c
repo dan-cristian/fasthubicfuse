@@ -708,52 +708,61 @@ void get_manifest_path(dir_entry* de, char* manifest_path)
   snprintf(manifest_path, MAX_URL_SIZE, "%s_segments", container);
 }
 
-/*
-  set dir_entry name, full_name
-  and manifest related fields using now date
-*/
-void path_to_de(const char* path, dir_entry* de)
+void get_segment_manifest(char* manifest_seg, dir_entry* de, int seg_index)
 {
-  assert(de);
+  //format segment full path
+  snprintf(manifest_seg, MAX_URL_SIZE, "/%s/%08i", de->manifest_time, seg_index);
+}
+
+
+/*
+  set manifest fields, usually for a new file
+*/
+void set_manifest_meta(char* path, dir_entry* de, int man_type)
+{
+  assert(de->is_segmented);
+  char manifest[MAX_URL_SIZE];
   char seg_base[MAX_URL_SIZE] = "";
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
-  char manifest[MAX_URL_SIZE];
   split_path(path, seg_base, container, object);
-  if (de->is_segmented)
+
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  char string_float[TIME_CHARS];
+  snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
+  char meta_mtime[TIME_CHARS];
+  snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
+  //fixme: manifest path might be too long
+  snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
+           HUBIC_SEGMENT_STORAGE_ROOT, container);
+
+  if (man_type == META_MANIF_SEG || man_type == META_MANIF_ALL)
   {
-    struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
-    char string_float[TIME_CHARS];
-    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-    char meta_mtime[TIME_CHARS];
-    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-    //fixme: manifest path might be too long
-    snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
-             HUBIC_SEGMENT_STORAGE_ROOT, container);
     if (de->manifest_seg)
-    {
-      if (strcasecmp(de->manifest_seg, manifest))
-      {
-        abort();
-        ;
-      }
       free(de->manifest_seg);
-    }
-    //if (!de->manifest_seg)
     de->manifest_seg = strdup(manifest);
-    //else
-    //  assert(!strcasecmp(de->manifest_seg, manifest));
+  }
+
+  if (man_type == META_MANIF_TIME || man_type == META_MANIF_ALL)
+  {
     snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
              HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
     //ensure len is not to big
     assert(strlen(manifest) + 8 < MAX_URL_SIZE);
-
-    //if already initialised then keep it as this is
     if (!de->manifest_time)
+    {
       free(de->manifest_time);
+      debugf(DBG_EXT, KCYN "set_manifest_meta(%s): OVERRIDE manifest_time=%s",
+             de->name,
+             manifest);
+    }
     de->manifest_time = strdup(manifest);
-    debugf(DBG_EXT, KCYN "path_to_de(%s): manifest_time=%s", de->name, manifest);
+    debugf(DBG_EXT, KCYN "set_manifest_meta(%s): manifest_time=%s", de->name,
+           manifest);
+  }
+  if (man_type == META_MANIF_CLOUD || man_type == META_MANIF_ALL)
+  {
     //this is initialised in get_meta_dispatch
     if (!de->manifest_cloud)
     {
@@ -761,10 +770,63 @@ void path_to_de(const char* path, dir_entry* de)
       de->manifest_cloud = strdup(manifest);
     }
   }
+}
+
+/*
+  set all manifest fields
+*/
+void create_manifest_meta(dir_entry* de)
+{
+  assert(de->is_segmented);
+  assert(!de->manifest_cloud);
+  assert(!de->manifest_seg);
+  assert(!de->manifest_time);
+
+  set_manifest_meta(de->full_name, de, META_MANIF_ALL);
+}
+
+
+/*
+  populates segment standard fields
+*/
+void create_segment_meta(dir_entry* de_seg, int seg_index, dir_entry* de)
+{
+  assert(de->manifest_time);
+  assert(!de_seg->name);
+  assert(!de_seg->full_name);
+  assert(!de_seg->full_name_hash);
+
+  de_seg->segment_part = seg_index;
+  char seg_name[8 + 1] = { 0 };
+  snprintf(seg_name, 8 + 1, "%08i", seg_index);
+  de_seg->name = strdup(seg_name);
+  char seg_path[MAX_URL_SIZE] = { 0 };
+  get_segment_manifest(seg_path, de, seg_index);
+  de_seg->full_name = strdup(seg_path);
+  de_seg->full_name_hash = strdup(str2md5(de_seg->full_name,
+                                          strlen(de_seg->full_name)));
+  de_seg->parent = de;
+  //need to set seg_size so upload knows how much data to upload in a segment
+  if (de_seg->segment_part < de->segment_full_count)
+    de_seg->segment_size = de->segment_size;
+  else de_seg->segment_size = de->segment_remaining;
+}
+/*
+  set dir_entry standard meta using path (like name, full_name, hash)
+*/
+void create_entry_meta(const char* path, dir_entry* de)
+{
+  assert(de);
+  //assert(!de->full_name);
+  //assert(!de->name);
+  //assert(!de->full_name_hash);
+
+  char seg_base[MAX_URL_SIZE] = "";
+  char container[MAX_URL_SIZE] = "";
+  char object[MAX_URL_SIZE] = "";
+  split_path(path, seg_base, container, object);
   if (!de->name)
     de->name = strdup(object);
-  if (strlen(object) > 0)
-    assert(!strcasecmp(object, de->name));
   if (!de->full_name)
     de->full_name = strdup(path);
   //generate hash if was not generated on directory list (on copy_object)
@@ -774,12 +836,13 @@ void path_to_de(const char* path, dir_entry* de)
 /*
   returns the segment.
   if does not exist then a new empty segment is created, used when writing new files.
-  NOTE!: sets de->manifest field
+  removed -> NOTE!: sets de->manifest field
 */
 dir_entry* get_create_segment(dir_entry* de, int segment_index)
 {
   int de_segment;
   dir_entry* de_seg;
+  bool reused = false;
 
   if (!de->segments)
   {
@@ -801,6 +864,7 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
           de_seg->segment_part = segment_index;
         debugf(DBG_EXTALL, "get_create_segment(%s:%d): reusing segment",
                de->name, segment_index);
+        reused = true;
         break;
       }
       if (!de_seg->next)
@@ -816,31 +880,8 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
     }
   }
   assert(de_seg);
-  de_seg->segment_part = segment_index;
-
-  if (!de->manifest_seg || !de->manifest_time)
-  {
-    //populate manifest fields if empty
-    path_to_de(de->full_name, de);
-  }
-  if (de->is_segmented)
-    assert(de->manifest_time);
-  char seg_name[8 + 1] = { 0 };
-  snprintf(seg_name, 8 + 1, "%08i", segment_index);
-  de_seg->name = strdup(seg_name);
-
-  char seg_path[MAX_URL_SIZE] = { 0 };
-  snprintf(seg_path, MAX_URL_SIZE, "%s/%08i", de->manifest_time, segment_index);
-  de_seg->full_name = strdup(seg_path);
-  de_seg->full_name_hash = strdup(str2md5(de_seg->full_name,
-                                          strlen(de_seg->full_name)));;
-
-  //need to set seg_size so upload knows how much data to upload in a segment
-  if (de_seg->segment_part < de->segment_full_count)
-    de_seg->segment_size = de->segment_size;
-  else de_seg->segment_size = de->segment_remaining;
-  //set parent
-  de_seg->parent = de;
+  if (!reused)
+    create_segment_meta(de_seg, segment_index, de);
   return de_seg;
 }
 
@@ -1172,7 +1213,7 @@ void free_de_before_head(dir_entry* de)
 /*
   create and initialise a dir_entry with now values
 */
-void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
+void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
 {
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
@@ -1193,13 +1234,13 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
   debugf(DBG_EXT, KCYN"create_dir_entry: ctime=[%s]", time_str);
   //set chmod & chown
-  de->chmod = mode;
+  //de->chmod = mode;
   de->uid = geteuid();
   de->gid = getegid();
   de->size = 0;
-  de->is_segmented = false; //option_enable_progressive_upload;
-  //fill in manifest data etc
-  path_to_de(path, de);
+  de->is_segmented = false;
+  //fill in standard file meta (names, hash)
+  create_entry_meta(path, de);
 }
 
 /*
@@ -1318,12 +1359,15 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
           return;
         }
       }
+
       de = init_dir_entry();
+      create_dir_entry(de, path);
+
       de->size = size;
       de->isdir = isdir;
       de->islink = islink;
-      de->name = strdup(&path[strlen(cw->path) + 1]);
-      de->full_name = strdup(path);
+      //de->name = strdup(&path[strlen(cw->path) + 1]);
+      //de->full_name = strdup(path);
 
       if (islink)
         de->content_type = strdup("application/link");
