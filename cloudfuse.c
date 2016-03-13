@@ -1339,6 +1339,11 @@ static int cfs_chmod(const char* path, mode_t mode)
         debugf(DBG_NORM, "cfs_chmod(%s): change mode from %d to %d", path,
                de->chmod, mode);
         de->chmod = mode;
+        //lock here, will be unlocked after meta update thread completes
+        int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY);
+        if (fd == -1)
+          return -EBUSY;
+        de->lock_fd = fd;
         int response = cloudfs_update_meta(de);
       }
     }
@@ -1411,11 +1416,12 @@ static int cfs_readlink(const char* path, char* buf, size_t size)
   //fixme: use temp file specified in config
   FILE* temp_file = tmpfile();
   int ret = 0;
-  if (!cloudfs_object_write_fp(de, temp_file))
-  {
+  /*if (!cloudfs_object_write_fp(de, temp_file))
+    {
     debugf(DBG_NORM, KRED"exit 1: cfs_readlink(%s) not found", path);
     ret = -ENOENT;
-  }
+    }
+  */
   if (!pread(fileno(temp_file), buf, size, 0))
   {
     debugf(DBG_NORM, KRED"exit 2: cfs_readlink(%s) not found", path);
@@ -1457,6 +1463,12 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
            "cfs_utimens: change %s prev: atime=%li.%li mtime=%li.%li new: atime=%li.%li mtime=%li.%li",
            path, de->atime.tv_sec, de->atime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
            times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
+    //lock here, will be unlocked after meta update thread completes
+    int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY);
+    if (fd == -1)
+      return -EBUSY;
+    de->lock_fd = fd;
+
     char time_str[TIME_CHARS] = "";
     get_timespec_as_str(&times[1], time_str, sizeof(time_str));
     debugf(DBG_EXT, KCYN"cfs_utimens: set mtime=[%s]", time_str);

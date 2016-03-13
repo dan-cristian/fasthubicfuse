@@ -439,16 +439,18 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
       //  de->segment_size = atol(value);
       else if (!strncasecmp(head, HEADER_TEXT_FILE_SIZE, memsize))
       {
-        size_t file_size = atol(value);
-        if (de->size != 0 && (file_size != de->size))
-          debugf(DBG_EXT,
-                 "header_get_meta: file size needs update, curr=%lu meta=%lu",
-                 de->size, file_size);
-
-        debugf(DBG_EXT, "header_get_meta: set file size from meta=%lu",
-               file_size);
-        de->lazy_segment_load = true;
-        de->size = atol(value);
+        if (de->is_segmented)
+        {
+          size_t file_size = atol(value);
+          if (de->size != 0 && (file_size != de->size))
+            debugf(DBG_EXT, KRED
+                   "header_get_meta: file size needs update, curr=%lu meta=%lu",
+                   de->size, file_size);
+          debugf(DBG_EXT, "header_get_meta: set file size from meta=%lu",
+                 file_size);
+          de->lazy_segment_load = true;
+          de->size = atol(value);
+        }
       }
     }
     else abort();
@@ -1388,435 +1390,6 @@ int send_request(char* method, const char* path, FILE* fp,
                            de_seg);
 }
 
-//thread that downloads or uploads large file segments
-void* upload_segment(void* seginfo)
-{
-  struct segment_info* info = (struct segment_info*)seginfo;
-  debugf(DBG_EXT,
-         "upload_segment: started segment part=%d seginfo=%p",
-         info->part, seginfo);
-  //debugf(DBG_NORM,
-  //       KMAG"upload_segment: started segment part=%d seginfo=%p fp=%p prog=%d",
-  //       info->part, seginfo, info->fp, info->is_progressive);
-  char seg_path[MAX_URL_SIZE] = { 0 };
-  //set pointer to the segment start index in the complete
-  //large file (several threads will write/read to/from same large file)
-  fseek(info->fp, info->part * info->segment_size, SEEK_SET);
-  //debugf(DBG_NORM,
-  //      KMAG"upload_segment: step 1 part=%d seginfo=%p fp=%p prog=%d",
-  //       info->part, seginfo, info->fp, info->is_progressive);
-  setvbuf(info->fp, NULL, _IOFBF, DISK_BUFF_SIZE);
-  //debugf(DBG_NORM,
-  //       KMAG"upload_segment: step 2 part=%d seginfo=%p fp=%p prog=%d",
-  //       info->part, seginfo, info->fp, info->is_progressive);
-  snprintf(seg_path, MAX_URL_SIZE, "%s%08i", info->seg_base, info->part);
-  /*debugf(DBG_NORM,
-         KMAG"upload_segment: step 3 part=%d seginfo=%p fp=%p prog=%d",
-         info->part, seginfo, info->fp, info->is_progressive);
-  */
-  char* encoded = curl_escape(seg_path, 0);
-  debugf(DBG_EXT, KCYN "upload_segment(%s) part=%d size=%d seg_size=%d %s",
-         info->method, info->part, info->size_copy, info->segment_size, seg_path);
-  int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size_copy, 1, info->de, NULL);
-  if (!(response >= 200 && response < 300))
-    fprintf(stderr, "Segment %s failed with response %d", seg_path,
-            response);
-  curl_free(encoded);
-  debugf(DBG_NORM,
-         KMAG"upload_segment: completed, part=%d, http response=%d, progressive=%d",
-         info->part, response, info->de->is_progressive);
-  fclose(info->fp);
-  // exit only when this is a child thread started on a segmented file
-  if (!info->de->is_single_thread)
-  {
-    debugf(DBG_NORM,
-           KMAG"upload_segment: closing thread part=%d, http response=%d, progressive=%d",
-           info->part, response, info->de->is_progressive);
-    pthread_exit(NULL);
-  }
-}
-
-//thread that downloads or uploads large file segments
-void* upload_segment_progressive(void* seginfo)
-{
-  struct segment_info* info = (struct segment_info*)seginfo;
-  debugf(DBG_EXT,
-         "upload_segment_progressive: started segment part=%d size=%lu",
-         info->part, info->size_copy);
-  fseek(info->fp, 0, SEEK_SET);
-  setvbuf(info->fp, NULL, _IOFBF, DISK_BUFF_SIZE);
-  char* encoded = curl_escape(info->seg_base, 0);
-  debugf(DBG_EXT, KCYN
-         "upload_segment_progressive(%s) part=%d size=%d seg_size=%d %s",
-         info->method, info->part, info->size_copy, info->segment_size, info->seg_base);
-  int response = send_request_size(info->method, encoded, info, NULL, NULL,
-                                   info->size_copy, 1, info->de, info->de_seg);//, info->seg_base);
-  if (!(response >= 200 && response < 300))
-    debugf(DBG_NORM, KRED
-           "upload_segment_progressive: Segment %s failed with response %d",
-           info->seg_base,
-           response);
-  curl_free(encoded);
-  debugf(DBG_NORM,
-         KMAG"upload_segment_progressive: done, part=%d, http response=%d",
-         info->part, response);
-  fflush(info->fp);
-  // exit only when this is a child thread started on a segmented file
-  if (!info->de->is_single_thread)//fixme: not thread safe
-  {
-    debugf(DBG_NORM,
-           KMAG"upload_segment_progressive: closing thread part=%d, http response=%d",
-           info->part, response);
-    pthread_exit(NULL);
-  }
-}
-
-/*
-  segment_size is the globabl config variable and size_of_segment is local
-  TODO: return whether the upload/download failed or not
-  Changed function to support progressive operations, where multiple threads are not
-  desired as on download you want to get first segment faster than the rest
-*/
-void run_segment_threads_progressive(const char* method, char* seg_base,
-                                     thread_job* job)
-{
-  debugf(DBG_NORM,
-         "run_segment_threads_progressive(%s) part=%d size=%d",
-         method, job->segment_part, job->de->segment_size);
-  int ret;
-  bool multi_thread = false;
-  FILE* seg_file;
-  struct segment_info info;
-  info.method = method;
-  info.part = job->segment_part;
-  info.segment_size = job->de->segment_size;
-  info.size_left = job->segment_part < job->de->segment_full_count ?
-                   job->de->segment_size :
-                   job->de->segment_remaining;
-  //need a copy for resume as info.size will be changed during download
-  info.size_copy = info.size_left;
-  info.size_processed = 0;
-  info.seg_base = seg_base;
-  //info.de = job->de_seg;
-  info.de = job->de;
-  info.de_seg = job->de_seg;
-  if (job->de->is_segmented)
-  {
-    info.fp = job->de_seg->downld_buf.local_cache_file;
-    if (info.fp == NULL)
-    {
-      debugf(DBG_NORM, KRED
-             "run_segment_threads_progressive: can't open segment cache file");
-    }
-  }
-  info.de->is_progressive = false;
-  info.de->is_single_thread = true;
-  debugf(DBG_NORM,
-         "run_segment_threads_progressive: progressive, single thread part=%d/%d, info=%p",
-         job->segment_part, job->de->segment_count, info);
-  upload_segment_progressive((void*) & (info));
-
-  debugf(DBG_EXT, "exit: run_segment_threads_progressive(%s)", method);
-}
-
-/*
-  segment_size is the globabl config variable and size_of_segment is local
-  TODO: return whether the upload/download failed or not
-  Changed function to support progressive operations, where multiple threads are not
-  desired as on download you want to get first segment faster than the rest
-*/
-void run_segment_threads(const char* method, int segments, int full_segments,
-                         int remaining,
-                         FILE* fp, char* seg_base, int size_of_segments, dir_entry* de)
-{
-  debugf(DBG_NORM, "run_segment_threads(%s) segments=%d fp=%p", method,
-         segments, fp);
-  char file_path[PATH_MAX] = { 0 };
-  struct segment_info* info = (struct segment_info*)
-                              malloc(segments * sizeof(struct segment_info));
-  pthread_t* threads = (pthread_t*)malloc(segments * sizeof(pthread_t));
-
-  //debug_print_file_name(fp);
-#ifdef __linux__
-  snprintf(file_path, PATH_MAX, "/proc/self/fd/%d", fileno(fp));
-  debugf(DBG_NORM, KMAG"run_segment_threads: filepath=%s", file_path);
-#else
-  //TODO: I haven't actually tested this
-  if (fcntl(fileno(fp), F_GETPATH, file_path) == -1)
-    fprintf(stderr, "couldn't get the path name\n");
-  debugf(DBG_NORM, KMAG"run_segment_threads: ALT filepath=%s", file_path);
-#endif
-  //sleep_ms(2000);
-  int i, ret;
-  bool multi_thread = false;
-
-  for (i = 0; i < segments; i++)
-  {
-    info[i].method = method;
-    info[i].fp = fopen(file_path, method[0] == 'G' ? "r+" : "r");
-    debugf(DBG_NORM, KMAG"run_segment_threads() part=%d fp=%p", i,
-           info[i].fp);
-    info[i].part = i;
-    info[i].segment_size = size_of_segments;
-    info[i].size_left = i < full_segments ? size_of_segments : remaining;
-    info[i].seg_base = seg_base;
-    info[i].de = de;
-    if (full_segments > MAX_SEGMENT_THREADS)
-    {
-      info[i].de->is_single_thread = true;
-      info[i].de->is_progressive = false;
-      debugf(DBG_NORM, KMAG
-             "run_segment_threads: single thread part=%d/%d, info=%p",
-             i, segments, info);
-      upload_segment((void*) & (info[i]));
-    }
-    else
-    {
-      debugf(DBG_NORM, KMAG
-             "run_segment_threads: going multi-threaded part=%d",
-             i);
-      info[i].de->is_progressive = false;
-      info[i].de->is_single_thread = false;
-      pthread_create(&threads[i], NULL, upload_segment, (void*) & (info[i]));
-      multi_thread = true;
-    }
-  }
-  if (multi_thread)
-    for (i = 0; i < segments; i++)
-    {
-      if ((ret = pthread_join(threads[i], NULL)) != 0)
-        fprintf(stderr, "error waiting for thread %d, status = %d\n", i, ret);
-    }
-  free(info);
-  free(threads);
-  debugf(DBG_EXT, "exit: run_segment_threads(%s)", method);
-}
-
-
-
-//checks on the cloud if this file (seg_path) have an associated segment folder
-int internal_is_segmented(const char* seg_path, const char* object,
-                          const char* parent_path)
-{
-  debugf(DBG_EXT, "internal_is_segmented seg_path(%s) object(%s)",
-         seg_path, object);
-  //try to avoid one additional http request for small files
-  bool potentially_segmented;
-  dir_entry* de = check_path_info(parent_path);
-  if (!de)
-  {
-    //when files in folders are first loaded the path will not be yet in cache, so need
-    //to force segment meta download for segmented files
-    debugf(DBG_EXTALL,
-           "internal_is_segmented: potentially YES as (%s) not in cache", parent_path);
-    potentially_segmented = true;
-  }
-  else
-  {
-    //potentially segmented, assumption is that 0 size files are potentially segmented
-    //while size>0 is for sure not segmented, so no point in making an expensive HTTP GET call
-    //UPDATE: above assumption is invalid for segmented files composed of small segments (e.g. 10 MB)
-    if (de->is_segmented)
-      potentially_segmented = true;//force for files we know we're uploaded segmented
-    else
-      potentially_segmented = (de->size_on_cloud == 0 && !de->isdir) ? true : false;
-    debugf(DBG_EXTALL,
-           "internal_is_segmented: size_cloud=%lu isdir=%d for (%s)", de->size_on_cloud,
-           de->isdir, parent_path);
-  }
-  debugf(DBG_EXT, "internal_is_segmented: potentially segmented=%d",
-         potentially_segmented);
-  dir_entry* seg_dir;
-  if (potentially_segmented && cloudfs_list_directory(seg_path, &seg_dir))
-  {
-    if (seg_dir && seg_dir->isdir)
-    {
-      do
-      {
-        if (!strncmp(seg_dir->name, object, MAX_URL_SIZE))
-        {
-          debugf(DBG_EXT, "exit 0: internal_is_segmented(%s) "KGRN"TRUE",
-                 seg_path);
-          return 1;
-        }
-      }
-      while ((seg_dir = seg_dir->next));
-    }
-  }
-  debugf(DBG_EXT, "exit 1: internal_is_segmented(%s) "KYEL"FALSE",
-         seg_path);
-  return 0;
-}
-
-int is_segmented(const char* path)
-{
-  debugf(DBG_EXT, "is_segmented(%s)", path);
-  char container[MAX_URL_SIZE] = "";
-  char object[MAX_URL_SIZE] = "";
-  char seg_base[MAX_URL_SIZE] = "";
-  split_path(path, seg_base, container, object);
-  char seg_path[MAX_URL_SIZE];
-  snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
-  return internal_is_segmented(seg_path, object, path);
-}
-
-/*returns segmented file properties by parsing and retrieving the folder structure on the cloud
-  added totalsize as parameter to return the file size on list directory for segmented files
-  old implementation returns file size=0 (issue #91)
-  populates parent file with link to segment list
-*/
-int format_segments(const char* path, char* seg_base,  long* segments,
-                    long* full_segments, long* remaining, long* size_of_segments,
-                    long* total_size)
-{
-  debugf(DBG_EXT, "format_segments(%s) seg_base(%s)", path, seg_base);
-  char container[MAX_URL_SIZE] = "";
-  char object[MAX_URL_SIZE] = "";
-  split_path(path, seg_base, container, object);
-  char seg_path[MAX_URL_SIZE];
-  snprintf(seg_path, MAX_URL_SIZE, "%s/%s_segments", seg_base, container);
-  if (internal_is_segmented(seg_path, object, path))
-  {
-    //operations with segments
-    //http://docs.openstack.org/developer/swift/overview_large_objects.html
-    char manifest[MAX_URL_SIZE];
-    //fixme: memory is not freed for seg_dir after cloudfs_list_directory()
-    dir_entry* seg_dir;
-    snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, object);
-    debugf(DBG_EXTALL, "format_segments manifest(%s)", manifest);
-    if (!cloudfs_list_directory(manifest, &seg_dir))
-    {
-      debugf(DBG_EXTALL, "exit 0: format_segments(%s)", path);
-      return 0;
-    }
-    // snprintf seesaw between manifest and seg_path to get
-    // the total_size and the segment size as well as the actual objects
-    char* timestamp = seg_dir->name;
-    snprintf(seg_path, MAX_URL_SIZE, "%s/%s", manifest, timestamp);
-    debugf(DBG_EXTALL, "format_segments seg_path(%s)", seg_path);
-
-    //fix as sometimes seg_dir is null
-    if (!cloudfs_list_directory(seg_path, &seg_dir) || !seg_dir)
-    {
-      debugf(DBG_EXT, "exit 1: format_segments(%s)", path);
-      return 0;
-    }
-    char* str_size = seg_dir->name;
-    snprintf(manifest, MAX_URL_SIZE, "%s/%s", seg_path, str_size);
-    debugf(DBG_EXTALL, KMAG"format_segments manifest2(%s) size=%s", manifest,
-           str_size);
-    if (!cloudfs_list_directory(manifest, &seg_dir))
-    {
-      debugf(DBG_EXTALL, "exit 2: format_segments(%s)", path);
-      return 0;
-    }
-    char* str_segment = seg_dir->name;
-    snprintf(seg_path, MAX_URL_SIZE, "%s/%s", manifest, str_segment);
-    debugf(DBG_EXTALL, KMAG"format_segments seg_path2(%s)", seg_path);
-    int seg_count = 0;
-    //here is where we get a list with all segment files of the parent
-    if (!cloudfs_list_directory(seg_path, &seg_dir))
-    {
-      debugf(DBG_EXTALL, "exit 3: format_segments(%s)", path);
-      return 0;
-    }
-    else
-    {
-      //most reliable way to get true size is to add all segments
-      //as size from folder name is 0 on progressive uploads
-      *total_size = 0;
-      dir_entry* tmp_de;
-      tmp_de = seg_dir;
-      int seg_index = 0, seg_name;
-
-      while (tmp_de)
-      {
-        *total_size += tmp_de->size;
-        seg_name = atoi(tmp_de->name);
-        //check if segments are contiguous
-        if (seg_name != seg_index)
-        {
-          debugf(DBG_EXT, KRED
-                 "format_segments(%s): gaps in cloud segments, cloud=%s expect=%d",
-                 path, tmp_de->name, seg_index);
-          abort();
-        }
-        tmp_de = tmp_de->next;
-        seg_index++;
-        seg_count++;
-      }
-    }
-
-    *size_of_segments = strtoll(str_segment, NULL, 10);
-    *remaining = *total_size % *size_of_segments;
-    *full_segments = *total_size / *size_of_segments;
-    *segments = *full_segments + (*remaining > 0);
-    assert(*segments == seg_count);
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%s/%s/",
-             container, object, timestamp, str_size, str_segment);
-
-    //save segments dir list into parent file entry
-    //fixme: potentially unsafe as it get's overwritten and data is lost
-    dir_entry* de = check_path_info(path);
-    if (de)
-    {
-      if (!de->segments)
-      {
-        debugf(DBG_EXT, KMAG
-               "format_segments: adding segment list to (%s)", de->full_name);
-        de->segments = seg_dir;
-        de->segment_count = *segments;
-      }
-      else
-      {
-        //todo: free if is old and no op is active for this segment
-        dir_entry* new_seg = seg_dir;
-        dir_entry* old_seg;
-        int seg_index = 0;
-        debugf(DBG_EXT, KMAG
-               "format_segments: checking seglist changes (%s)", de->full_name);
-        while (new_seg)
-        {
-          old_seg = get_segment(de, seg_index);
-          //check if segments are identical
-          //if not replace de with new segment list
-          if (!old_seg || !old_seg->md5sum
-              || strcasecmp(old_seg->md5sum, new_seg->md5sum))
-          {
-            debugf(DBG_EXT, KMAG
-                   "format_segments: modifing segment list for (%s)",
-                   de->full_name);
-            //todo: what if there are download segmented ops in progress?
-            cloudfs_free_dir_list(de->segments);
-            de->segments = seg_dir;
-            de->segment_count = *segments;
-            break;
-          }
-          new_seg = new_seg->next;
-          seg_index++;
-        }
-      }
-    }
-    else
-      debugf(DBG_EXT, KYEL "format_segments: de(%s) not found!", path);
-
-    char tmp[MAX_URL_SIZE];
-    strncpy(tmp, seg_base, MAX_URL_SIZE);
-    snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
-    debugf(DBG_EXT, KMAG"format_segments: seg_base=(%s)", seg_base);
-    debugf(DBG_EXT,
-           "exit 4: format_segments(%s) total=%d size_of_segments=%d remaining=%d, full_segments=%d segments=%d",
-           path, *total_size, *size_of_segments, *remaining, *full_segments, *segments);
-    return 1;
-  }
-  else
-  {
-    debugf(DBG_EXT, "exit 5: format_segments(%s) not segmented?", path);
-    return 0;
-  }
-}
-
 
 /*
   updates file entry with segment list & details
@@ -2043,16 +1616,6 @@ void cloudfs_free()
 }
 
 
-int file_is_readable(const char* fname)
-{
-  FILE* file;
-  if ( file = fopen( fname, "r" ) )
-  {
-    fclose( file );
-    return 1;
-  }
-  return 0;
-}
 
 const char* get_file_mimetype ( const char* path )
 {
@@ -2187,22 +1750,6 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
   free(cache_buf);
 }
 
-
-
-/*
-  uploads segment data from cache file then resumes with fuse data from cfs_write
-*/
-/*
-  void int_upload_cache_data(thread_job* job)
-  {
-  debugf(DBG_EXT, "int_upload_cache_data(%s): resuming seg=%s from cache",
-         job->de->name, job->de_seg->full_name);
-  assert(job->de_seg->upload_buf.local_cache_file);
-  pthread_t data_thread;
-  pthread_create(&data_thread, NULL,
-                 (void*)int_upload_cache_data_thread, job);
-  }
-*/
 /*
   progressive segment upload to cloud
   job->de_seg is null for first file
@@ -2463,306 +2010,6 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
          "exit 0: cloudfs_create_segment(%s:%s) upload started ok file %s",
          de_tmp->full_name, de_tmp->name, de->name);
   return true;
-}
-
-/*
-  upload segment to cloud
-*/
-int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de)
-{
-  assert(de_seg);
-  assert(de);
-  debugf(DBG_EXT, "cloudfs_upload_segment(%s:%s)", de_seg->name, de->name);
-  const char* filemimetype = get_file_mimetype(de->full_name);
-  // delete the previously uploaded segments
-  if (is_segmented(de->full_name))
-  {
-    if (!cloudfs_delete_object(de))
-      debugf(DBG_NORM, KRED
-             "cloudfs_upload_segment: couldn't delete existing file");
-    else
-      debugf(DBG_EXT, KYEL"cloudfs_upload_segment: deleted existing file");
-  }
-  FILE* fp = NULL;
-  open_file_in_cache(de, &fp, HTTP_PUT);
-  struct timespec now;
-  int response;
-  //check if file is qualified to be segmented
-  if (de->size >= segment_above)
-  {
-    //segmenting file for upload, mark as segmented
-    de->is_segmented = true;
-    int i;
-    long remaining = de->size % segment_size;
-    int full_segments = de->size / segment_size;
-    int segments = full_segments + (remaining > 0);
-    // The best we can do here is to get the current time that way tools that
-    // use the mtime can at least check if the file was changing after now
-    clock_gettime(CLOCK_REALTIME, &now);
-    char string_float[TIME_CHARS];
-    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-    char meta_mtime[TIME_CHARS];
-    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-    char seg_base[MAX_URL_SIZE] = "";
-    char container[MAX_URL_SIZE] = "";
-    char object[MAX_URL_SIZE] = "";
-    split_path(de->full_name, seg_base, container, object);
-    char manifest[MAX_URL_SIZE];
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
-    // create the segments container
-    cloudfs_create_directory(manifest);
-    // reusing manifest
-    // TODO: check how addition of meta_mtime in manifest impacts utimens implementation
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
-             container, object, meta_mtime, de->size, segment_size);
-    char tmp[MAX_URL_SIZE];
-    strncpy(tmp, seg_base, MAX_URL_SIZE);
-    snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
-    //uploading all segments in separate threads
-    run_segment_threads(HTTP_PUT, segments, full_segments, remaining, fp,
-                        seg_base, segment_size, de);
-    curl_slist* headers = NULL;
-    add_header(&headers, "x-object-manifest", manifest);
-    //due to utimens changes, not needed anymore
-    add_header(&headers, "Content-Length", "0");
-    add_header(&headers, "Content-Type", filemimetype);
-    //if path is encoded cache entry will not be found
-    //complete upload (write parent file, 0 size?)
-    response = send_request_size("PUT", NULL, NULL, NULL, headers, 0, 0,
-                                 de, de_seg);
-    curl_slist_free_all(headers);
-    debugf(DBG_EXT,
-           "exit 0: cloudfs_upload_segment(%s) uploaded ok, response=%d",
-           de->name, response);
-  }
-  else
-  {
-    // file is not segmented, upload just one file
-    debugf(DBG_EXT, "cloudfs_upload_segment(%s) non-segmented up", de->name);
-
-    struct segment_info info;
-    info.method = HTTP_PUT;
-    info.part = -1;
-    info.segment_size = -1;
-    info.size_left = de->size;
-    info.size_copy = de->size;
-    info.fp = fp;
-    info.de = de;
-    info.de_seg = de_seg;
-    info.size_processed = 0;
-    info.de->is_progressive = false;
-    info.de->is_single_thread = true;
-    assert(fseek(info.fp, 0, SEEK_SET) == 0);
-    char* encoded = curl_escape(de->full_name, 0);
-    response = send_request_size(HTTP_PUT, encoded, &info, NULL, NULL,
-                                 info.size_copy, 0, de, de_seg);
-    update_direntry_md5sum(de->md5sum_local, fp);
-    get_file_metadata(de, true, true);
-    curl_free(encoded);
-    debugf(DBG_EXT, "exit 1: cloudfs_upload_segment(%s)", de->name);
-  }
-  fclose(fp);
-  return (response >= 200 && response < 300);
-}
-
-
-/*
-  uploads file to cloud
-*/
-int cloudfs_object_read_fp(dir_entry* de, FILE* fp)
-{
-  debugf(DBG_EXT, "cloudfs_object_read_fp(%s)", de->name);
-  long flen;
-  fflush(fp);
-  const char* filemimetype = get_file_mimetype(de->full_name);
-  // determine the size of the file and segment if it is above the threshhold
-  fseek(fp, 0, SEEK_END);
-  flen = ftell(fp);
-  // delete the previously uploaded segments
-  if (is_segmented(de->full_name))
-  {
-    if (!cloudfs_delete_object(de))
-      debugf(DBG_NORM,
-             KRED"cloudfs_object_read_fp: couldn't delete existing file");
-    else
-      debugf(DBG_EXT, KYEL"cloudfs_object_read_fp: deleted existing file");
-  }
-  struct timespec now;
-  //check if file is qualified to be segmented
-  if (flen >= segment_above)
-  {
-    //segmenting file for upload, mark as segmented
-    if (de)
-      de->is_segmented = true;
-    int i;
-    long remaining = flen % segment_size;
-    int full_segments = flen / segment_size;
-    int segments = full_segments + (remaining > 0);
-    // The best we can do here is to get the current time that way tools that
-    // use the mtime can at least check if the file was changing after now
-    clock_gettime(CLOCK_REALTIME, &now);
-    char string_float[TIME_CHARS];
-    snprintf(string_float, TIME_CHARS, "%lu.%lu", now.tv_sec, now.tv_nsec);
-    char meta_mtime[TIME_CHARS];
-    snprintf(meta_mtime, TIME_CHARS, "%f", atof(string_float));
-    char seg_base[MAX_URL_SIZE] = "";
-    char container[MAX_URL_SIZE] = "";
-    char object[MAX_URL_SIZE] = "";
-    split_path(de->full_name, seg_base, container, object);
-    char manifest[MAX_URL_SIZE];
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments", container);
-    // create the segments container
-    cloudfs_create_directory(manifest);
-    // reusing manifest
-    // TODO: check how addition of meta_mtime in manifest impacts utimens implementation
-    snprintf(manifest, MAX_URL_SIZE, "%s_segments/%s/%s/%ld/%ld/",
-             container, object, meta_mtime, flen, segment_size);
-    char tmp[MAX_URL_SIZE];
-    strncpy(tmp, seg_base, MAX_URL_SIZE);
-    snprintf(seg_base, MAX_URL_SIZE, "%s/%s", tmp, manifest);
-    //uploading all segments in separate threads
-    run_segment_threads("PUT", segments, full_segments, remaining, fp,
-                        seg_base, segment_size, de);
-    char* encoded = curl_escape(de->full_name, 0);
-    curl_slist* headers = NULL;
-    add_header(&headers, "x-object-manifest", manifest);
-    //due to utimens changes, not needed anymore
-    //add_header(&headers, "x-object-meta-mtime", meta_mtime);
-    add_header(&headers, "Content-Length", "0");
-    add_header(&headers, "Content-Type", filemimetype);
-    //if path is encoded cache entry will not be found
-    //complete upload (write parent file, 0 size?)
-    int response = send_request_size(HTTP_PUT, encoded, NULL, NULL, headers, 0, 0,
-                                     de, NULL);
-    curl_slist_free_all(headers);
-    curl_free(encoded);
-    debugf(DBG_EXT,
-           "exit 0: cloudfs_object_read_fp(%s) uploaded ok, response=%d",
-           de->name, response);
-    return (response >= 200 && response < 300);
-  }
-  else
-  {
-    // assume enters here when file is composed of only one segment (small files)
-    debugf(DBG_EXT, "cloudfs_object_read_fp(%s) non-segmented up", de->name);
-  }
-  rewind(fp);
-  char* encoded = curl_escape(de->full_name, 0);
-  int response = send_request(HTTP_PUT, encoded, fp, NULL, NULL, de, NULL);
-  get_file_metadata(de, true, true);
-  curl_free(encoded);
-  debugf(DBG_EXT, "exit 1: cloudfs_object_read_fp(%s)", de->name);
-  return (response >= 200 && response < 300);
-}
-
-/*
-   download file from cloud and write to local file
-*/
-int cloudfs_object_write_fp(dir_entry* de, FILE* fp)
-{
-  debugf(DBG_EXT, "cloudfs_object_write_fp(%s) fp=%p", de->name, fp);
-  char* encoded = curl_escape(de->full_name, 0);
-  char seg_base[MAX_URL_SIZE] = "";
-  long segments;
-  long full_segments;
-  long remaining;
-  long size_of_segments;
-  long total_size;
-
-  //checks if this file is a segmented one
-  if (format_segments(de->full_name, seg_base, &segments, &full_segments,
-                      &remaining, &size_of_segments, &total_size))
-  {
-    rewind(fp);
-    fflush(fp);
-    if (ftruncate(fileno(fp), 0) < 0)
-    {
-      debugf(DBG_NORM, KMAG
-             "cloudfs_object_write_fp: ftruncate failed, aborting!");
-      abort();
-    }
-
-    //download all segments from cloud to local file, wait until completed
-    run_segment_threads("GET", segments, full_segments, remaining, fp,
-                        seg_base, size_of_segments, de);
-    debugf(DBG_EXT, "exit 0: cloudfs_object_write_fp(%s)", de->name);
-    return 1;
-  }
-
-  //get not segmented file
-  int response = send_request("GET", encoded, fp, NULL, NULL, de, NULL);
-  curl_free(encoded);
-  fflush(fp);
-  if ((response >= 200 && response < 300) || ftruncate(fileno(fp), 0))
-  {
-    debugf(DBG_EXT, "exit 1: cloudfs_object_write_fp(%s)", de->name);
-    return 1;
-  }
-  rewind(fp);
-  debugf(DBG_EXT, "exit 2: cloudfs_object_write_fp(%s) " KRED" error",
-         de->name);
-  return 0;
-}
-
-/*
-  progressive download from cloud
-*/
-void* cloudfs_object_downld_progressive(void* arg)// //const char* path)
-{
-  struct thread_job* job = arg;
-  debugf(DBG_NORM, "cloudfs_object_downld_progressive(%s)",
-         job->de->full_name);
-  char* encoded = curl_escape(job->de->full_name, 0);
-  if (job->de->is_segmented)
-  {
-    //job->de_seg->downld_buf.download_started = true;
-    debugf(DBG_EXT,
-           "cloudfs_object_downld_progressive(%s:%s): started seg download part=%d",
-           job->de->name, job->de_seg->name, job->segment_part);
-    //download all segments from cloud to local file, single or multi threaded
-    run_segment_threads_progressive(HTTP_GET, job->de_seg->full_name, job);
-    //job->de_seg->downld_buf.download_started = false;
-    //debugf(DBG_EXT, KMAG
-    //       "cloudfs_object_downld_progressive: 1-post buffer signal full");
-    //sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
-    //debugf(DBG_EXT, KMAG
-    //       "cloudfs_object_downld_progressive: 2-post buffer signal full");
-    //sem_post(job->de_seg->downld_buf.sem_list[SEM_FULL]);
-    //todo: check what close/clean ops with download_buf needs done
-    debugf(DBG_EXT,
-           "cloudfs_object_downld_progressive(%s:%s): done download",
-           job->de->name, job->de_seg->name);
-  }
-  else
-  {
-    debugf(DBG_NORM,
-           "cloudfs_object_downld_progressive(%s): started non-segmented download",
-           job->de->name);
-    //get an un-segmented file
-    int response = send_request(HTTP_GET, encoded,
-                                job->de->downld_buf.local_cache_file,
-                                NULL, NULL, job->de, job->de_seg);
-    curl_free(encoded);
-    fflush(job->de->downld_buf.local_cache_file);
-    if ((response >= 200 && response < 300) ||
-        ftruncate(fileno(job->de->downld_buf.local_cache_file), 0))
-    {
-      debugf(DBG_EXT, "exit 1: cloudfs_object_downld_progressive(%s)",
-             job->de->name);
-      //return 1;
-    }
-    else
-    {
-      rewind(job->de->downld_buf.local_cache_file);
-      debugf(DBG_NORM, "exit 2: cloudfs_object_downld_progressive(%s) "
-             KRED"error", job->de->name);
-      //return 0;
-    }
-  }
-  if (!job->is_single_thread)
-    pthread_exit(NULL);
-  debugf(DBG_EXT, "exit 3: cloudfs_object_downld_progressive(%s)",
-         job->de->name);
 }
 
 //todo: must be syncronised as racing occurs
@@ -3418,69 +2665,6 @@ bool cloudfs_delete_path(char* path, bool is_dir, bool is_segmented,
   return ret;
 }
 
-
-
-/*
-  remove folder and it's subfolders & files recursively
-  todo: implement bulk delete:
-    https://docs.hpcloud.com/publiccloud/api/swift-api.html
-*/
-/*
-  int cloudfs_delete_folder(dir_entry* de)
-  {
-  debugf(DBG_EXT, "cloudfs_delete_folder(%s)", de->full_name);
-  int response = -1;
-  dir_entry* de_content, *de_tmp;
-  char manifest_root[MAX_URL_SIZE] = "";
-  int active_threads = 0;
-  if (cloudfs_list_directory(de->full_name, &de_content))
-  {
-    pthread_t* threads = (pthread_t*)malloc(MAX_DELETE_THREADS * sizeof(
-        pthread_t));
-    int active_threads = 0;
-    de_tmp = de_content;
-    int i = 0, th_ret;
-    while (de_tmp)
-    {
-      if (active_threads < MAX_DELETE_THREADS)
-      {
-        pthread_create(&threads[i], NULL,
-                       (void*)thread_cloudfs_delete_object, de_tmp);
-        active_threads++;
-      }
-      //start threads if pool is full or this is the last object
-      if (active_threads == MAX_DELETE_THREADS || !de_tmp->next)
-        for (i = 0; i < active_threads; i++)
-        {
-          if ((th_ret = pthread_join(threads[i], NULL)) != 0)
-            debugf(DBG_NORM, KRED
-                   "cloudfs_delete_folder(%s): Error waiting thread %d, stat=%d",
-                   de->full_name, i, th_ret);
-          else
-            active_threads = 0;
-        }
-      //cloudfs_delete_object(de_tmp);
-      //if (de_tmp->isdir)
-      //  cloudfs_delete_folder(de_tmp);
-      //  else
-      //  response = send_request(HTTP_DELETE, NULL, NULL, NULL, NULL, de_tmp, NULL);
-
-      de_tmp = de_tmp->next;
-      i++;
-    }
-    free(threads);
-  }
-  //delete this folder. it might throw 404 errors, not sure why
-  int ok = cloudfs_delete_object(de);
-  if (de_content)
-    cloudfs_free_dir_list(de_content);
-  debugf(DBG_EXT, "cloudfs_delete_folder(%s): exit ok=%d",
-         de->full_name, ok);
-  }
-
-*/
-
-
 void thread_cloudfs_copy_object(void* arg)
 {
   struct thread_copy_job* job = arg;
@@ -3497,6 +2681,9 @@ void thread_cloudfs_copy_object(void* arg)
     //this is the manifest file so add the manifest field
     add_header(&headers, HEADER_TEXT_MANIFEST, job->manifest);
   }
+
+  //add optional header for file size?
+
 
   add_header(&headers, HEADER_COPY_FROM, src_encoded);
   add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
@@ -3527,7 +2714,6 @@ bool cloudfs_create_object(dir_entry* de)
   curl_slist* headers = NULL;
   char filemimetype[MAX_PATH_SIZE] = "";
   get_file_mimetype_from_path(de, filemimetype);
-  //add_header(&headers, HEADER_TEXT_MANIFEST, de->manifest_time);
   add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
   add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
   int response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
@@ -3736,12 +2922,12 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
 }
 
 
-int cloudfs_post_object(dir_entry* de)
+bool cloudfs_post_object(dir_entry* de)
 {
   debugf(DBG_EXT, "cloudfs_post_object(%s) ", de->name);
   char* encoded = curl_escape(de->full_name, 0);
   curl_slist* headers = NULL;
-  add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
+  //add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
   if (de->is_segmented)
   {
     char manifest_str[MAX_PATH_SIZE];
@@ -3755,7 +2941,15 @@ int cloudfs_post_object(dir_entry* de)
   curl_slist_free_all(headers);
   debugf(DBG_EXT, "exit: cloudfs_post_object(%s) response=%d", de->name,
          response);
-  return (response >= 200 && response < 300);
+  return valid_http_response(response);
+}
+
+bool cloudfs_post_object_th(dir_entry* de)
+{
+  bool res = cloudfs_post_object(de);
+  close_lock_file(de->full_name, de->lock_fd);
+  assert(res);
+  pthread_exit(NULL);
 }
 
 
@@ -3765,7 +2959,7 @@ int cloudfs_post_object(dir_entry* de)
   http://developer.openstack.org/api-ref-objectstorage-v1.html#updateObjectMeta
   http://www.17od.com/2012/12/19/ten-useful-openstack-swift-features/
 */
-int cloudfs_update_meta(dir_entry* de)
+bool cloudfs_update_meta(dir_entry* de)
 {
   //copy version
   /*
@@ -3774,9 +2968,11 @@ int cloudfs_update_meta(dir_entry* de)
   */
 
   //POST version
-  //fixme: this is loosing the segmented meta data. add all fields before post!!!
-  int response = cloudfs_post_object(de);
-  return response;
+  //NOTE: this is loosing the segmented meta data. add all fields before post!!!
+  pthread_t thread;
+  pthread_create(&thread, NULL, (void*)cloudfs_post_object_th, de);
+  //bool response = cloudfs_post_object(de);
+  return true;
 }
 
 //optimised with cache
@@ -3793,7 +2989,7 @@ int cloudfs_statfs(const char* path, struct statvfs* stat)
            "exit: cloudfs_statfs (new recent values, was cached since %d seconds)",
            lapsed);
     last_stat_read_time = now;
-    return (response >= 200 && response < 300);
+    return valid_http_response(response);
   }
   else
   {
@@ -3820,12 +3016,8 @@ bool cloudfs_create_directory(const char* path)
 {
   debugf(DBG_EXT, "cloudfs_create_directory(%s)", path);
   assert(path);
-  //dir_entry* de_tmp = init_dir_entry();
-  //de_tmp->full_name = strdup(path);
-  //de_tmp->isdir = 1;
   char* encoded = curl_escape(path, 0);
   int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL, NULL);
-  //cloudfs_free_dir_list(de_tmp);
   curl_free(encoded);
   debugf(DBG_EXT, "cloudfs_create_directory(%s) response=%d",
          path, response);
@@ -3839,21 +3031,6 @@ off_t cloudfs_file_size(int fd)
   return buf.st_size;
 }
 
-/*void cloudfs_verify_ssl(int vrfy)
-  {
-  verify_ssl = vrfy ? 2 : 0;
-  }
-
-  void cloudfs_option_get_extended_metadata(int option)
-  {
-  option_get_extended_metadata  = option ? true : false;
-  }
-
-  void cloudfs_option_curl_verbose(int option)
-  {
-  option_curl_verbose = option ? true : false;
-  }
-*/
 static struct reconnect_args
 {
   char client_id    [MAX_HEADER_SIZE];

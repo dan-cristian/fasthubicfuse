@@ -193,6 +193,7 @@ typedef struct dir_entry
   struct dir_entry* parent;
   //int object_count_recursive;//container object count from swift header
   int object_count;//number of objects in this folder
+  int lock_fd;//file descriptor when locking file, used when fuse info is n/a
 } dir_entry;
 
 typedef struct thread_job
@@ -346,6 +347,7 @@ bool cleanup_older_segments(char* dir_path, char* exclude_path);
 void unlink_cache_segments(dir_entry* de);
 void sleep_ms(int milliseconds);
 off_t get_file_size(FILE* fp);
+int file_is_readable(const char* fname);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);

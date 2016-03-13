@@ -2263,6 +2263,18 @@ char* get_home_dir()
   return "~";
 }
 
+
+int file_is_readable(const char* fname)
+{
+  FILE* file;
+  if (file = fopen(fname, "r"))
+  {
+    fclose(file);
+    return 1;
+  }
+  return 0;
+}
+
 off_t get_file_size(FILE* fp)
 {
   struct stat st;
