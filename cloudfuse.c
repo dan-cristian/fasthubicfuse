@@ -437,7 +437,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   //download metadata if needed.sometimes getattr is not called.
   //if (option_get_extended_metadata &&
   //    (!de->metadata_downloaded || de->lazy_segment_load))
-  get_file_metadata(de, true, true);
+  bool res = get_file_metadata(de, true, true);
 
   info->fh = (uintptr_t)fd;
   info->direct_io = 1;
@@ -693,201 +693,226 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   if (!de_upload)
     assert(de);
 
-  if (option_enable_progressive_upload)
+  if (de_upload)
   {
-    if (de_upload)
+    debugf(DBG_EXT, KMAG
+           "cfs_flush(%s): signal upload done, size=%lu", path, de_upload->size);
+
+    //on cfs_create empty file segment count is 0, no need to enter here
+    if (de_upload->is_segmented && de_upload->segment_count > 0)
     {
-      debugf(DBG_EXT, KMAG
-             "cfs_flush(%s): signal upload done, size=%lu", path, de_upload->size);
-
-      //on cfs_create empty file segment count is 0, no need to enter here
-      if (de_upload->is_segmented && de_upload->segment_count > 0)
+      dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
+      assert(de_seg);
+      //close-flushes last cache file. pevious are closed in cfs_write
+      assert(de_seg->upload_buf.local_cache_file);
+      fclose(de_seg->upload_buf.local_cache_file);
+      //will be blocked until http upload trully terminates
+      debugf(DBG_EXT, KMAG "cfs_flush(%s): seg_count=%d",
+             de_upload->name, de_upload->segment_count);
+      //unblock the last segment wait in http callback
+      if (de_seg->upload_buf.sem_list[SEM_FULL])
       {
-        dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
-        assert(de_seg);
-        //close-flushes cache file
-        assert(de_seg->upload_buf.local_cache_file);
-        fclose(de_seg->upload_buf.local_cache_file);
-        //will be blocked until http upload trully terminates
-        debugf(DBG_EXT, KMAG "cfs_flush(%s): seg_count=%d",
-               de_upload->name, de_upload->segment_count);
-        //unblock the last segment wait in http callback
-        if (de_seg->upload_buf.sem_list[SEM_FULL])
+        debugf(DBG_EXT, KMAG "cfs_flush(%s): wait upload completion",
+               de_upload->name);
+        sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+        //wait until upload and cleanup of previous versions fully completes
+        //otherwise errors will be thrown by rsync (due to early rename)
+
+        //fixme: sometimes we get freeze
+        sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
+        //signal free of semaphores is safe now
+        free_semaphores(&de_seg->upload_buf, SEM_DONE);
+
+        //check if all previous segment uploads are done (except last)
+        //sometimes prev uploads are still in progress
+        int seg_index;
+        dir_entry* de_seg_tmp;
+        //calculate md5sum
+        char job_name[MAX_PATH_SIZE] = "flush_md5_etags:";
+        struct thread_job* job = init_thread_job(strdup(strcat(job_name,
+                                 de_upload->name)));
+        init_job_md5(job);
+        bool pending;
+        int loops = 0;
+        do
         {
-          debugf(DBG_EXT, KMAG "cfs_flush(%s): wait upload completion",
-                 de_upload->name);
-          sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
-          //wait until upload and cleanup of previous versions fully completes
-          //otherwise errors will be thrown by rsync (due to early rename)
-
-          //fixme: sometimes we get freeze
-          sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
-          //signal free of semaphores is safe now
-          free_semaphores(&de_seg->upload_buf, SEM_DONE);
-
-          //check if all previous segment uploads are done (except last)
-          //sometimes prev uploads are still in progress
-          int seg_index;
-          dir_entry* de_seg_tmp;
-          //calculate md5sum
-          struct thread_job* job = init_thread_job();
-          init_job_md5(job);
-          bool pending;
-          int loops = 0;
-          do
+          pending = false;
+          for (seg_index = 0; seg_index < de_upload->segment_count;
+               seg_index++)
           {
-            pending = false;
-            for (seg_index = 0; seg_index < de_upload->segment_count;
-                 seg_index++)
+            de_seg_tmp = get_segment(de_upload, seg_index);
+            assert(de_seg_tmp);
+            if (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
             {
-              de_seg_tmp = get_segment(de_upload, seg_index);
-              assert(de_seg_tmp);
-              if (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
-              {
+              if (loops % 20 == 0)
                 debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
                        de->name, de_seg_tmp->name);
-                //fixme: upload might be blocked in sem_wait @ upload_prog
-                //after cfs_write completed, so cancel the upload
-                if (de_seg_tmp->upload_buf.feed_from_cache)
-                {
-                  debugf(DBG_EXT, KRED
-                         "cfs_flush(%s): wait blocked in cache %s, retrying upload",
-                         de->name, de_seg_tmp->name);
-                  //feed data to http thread
-                  int_cfs_write_cache_data_feed(de_seg_tmp);
-                  de_seg_tmp->upload_buf.feed_from_cache = false;
-                  //abort();
-                }
-
-                pending = true;
+              //fixme: upload might be blocked in sem_wait @ upload_prog
+              //after cfs_write completed, so cancel the upload
+              if (de_seg_tmp->upload_buf.feed_from_cache)
+              {
+                debugf(DBG_EXT, KRED
+                       "cfs_flush(%s): wait blocked in cache %s, retrying upload",
+                       de->name, de_seg_tmp->name);
+                //feed data to http thread
+                int_cfs_write_cache_data_feed(de_seg_tmp);
+                de_seg_tmp->upload_buf.feed_from_cache = false;
               }
-              debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
-                     de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
-
+              pending = true;
             }
-            if (pending)
-              sleep_ms(1000);
-            loops++;
+            debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
+                   de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
           }
-          while (pending && loops < 120);
-
-          //if operation completed ok calculate file cumulative segment etag
-          if (!pending)
-          {
-            debugf(DBG_EXT, KMAG "cfs_flush(%s): compute md5sum segs", de->name);
-            for (seg_index = 0; seg_index < de_upload->segment_count; seg_index++)
-            {
-              de_seg_tmp = get_segment(de_upload, seg_index);
-              assert(de_seg_tmp);
-              //update md5sum for the whole file using etags
-              update_job_md5(job, de_seg_tmp->md5sum, strlen(de_seg_tmp->md5sum));
-            }
-            //complete md5sum compute for this file using cumulative segment etags
-            complete_job_md5(job);
-            if (de_upload->md5sum_local)
-              free(de_upload->md5sum_local);
-            de_upload->md5sum_local = strdup(job->md5str);
-            free_thread_job(job);
-          }
-
-          //complete md5sum using fuse provided content
-          complete_job_md5(de_upload->job);
-          //complete md5sum using http uploaded content
-          complete_job_md5(de_upload->job2);
-
-          close_lock_file(de_upload->full_name, info->fh);
-
           if (pending)
-          {
-            debugf(DBG_EXT, KRED
-                   "cfs_flush(%s): pending segments for too long, aborting",
-                   de_upload->name);
-            result = -EIO;
-            //
-          }
-
-          if (strcasecmp(de_upload->job->md5str, de_upload->job2->md5str))
-          {
-            //md5sums are different, upload is corrupt
-            debugf(DBG_EXT, KRED
-                   "cfs_flush(%s): md5sum not match between fuse(%s) and http(%s)",
-                   de_upload->name, de_upload->job->md5str, de_upload->job2->md5str);
-            result = -EILSEQ;
-            //abort();
-          }
-          else
-            debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
-                   de_upload->name, de_upload->job->md5str);
-
-          debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
-                 de_upload->name);
-
-          //fixme: sometimes last segment is not yet visible on cloud
-          //copy dir_entry for to have segment list complete
-          if (de_upload->has_unvisible_segments)
-            copy_dir_entry(de_upload, de);
-          else
-          {
-            //
-          }
-
-          //mark file meta as obsolete to force a reload (for md5sums mostly)
-          //if has unvisible segments update_segments in get_file_meta will skip
-          de->metadata_downloaded = false;
-          bool meta_ok = get_file_metadata(de, true, true);
-          if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
-          {
-            //md5sums are different, upload is corrupt
-            debugf(DBG_EXT, KRED
-                   "cfs_flush(%s): segments md5sum not match, corrupted file",
-                   de_upload->name);
-            result = -EILSEQ;
-            //abort();
-          }
-          else
-            debugf(DBG_EXT, KGRN "cfs_flush(%s): segment md5sum OK (%s)",
-                   de_upload->name, de_upload->md5sum_local);
-          //free md5sum holders
-          free_thread_job(de_upload->job);
-          free_thread_job(de_upload->job2);
-          dir_decache_upload(de_upload->full_name);
+            sleep_ms(200);
+          loops++;
         }
-      }
-      else
-      {
-        debugf(DBG_EXT, "cfs_flush(%s): no need to wait (empty file created?)",
-               de->name);
-        //signal completion of read/write operation
-        //signal last data available in buffer for upload
-        if (de->upload_buf.sem_list[SEM_FULL])
-          sem_post(de->upload_buf.sem_list[SEM_FULL]);
-        //if (de->upload_buf.sem_list[SEM_EMPTY])
-        //  sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
+        while (pending && loops < 120);
+
+        //if operation completed ok calculate file cumulative segment etag
+        if (!pending)
+        {
+          debugf(DBG_EXT, KMAG "cfs_flush(%s): compute md5sum etags", de_upload->name);
+          for (seg_index = 0; seg_index < de_upload->segment_count; seg_index++)
+          {
+            de_seg_tmp = get_segment(de_upload, seg_index);
+            assert(de_seg_tmp);
+            //update md5sum for the whole file using etags
+            update_job_md5(job, de_seg_tmp->md5sum, strlen(de_seg_tmp->md5sum));
+          }
+          //complete md5sum compute for this file using cumulative segment etags
+          complete_job_md5(job);
+          if (de_upload->md5sum_local)
+            free(de_upload->md5sum_local);
+          de_upload->md5sum_local = strdup(job->md5str);
+          free_thread_job(job);
+        }
+        else
+        {
+          debugf(DBG_EXT, KRED "cfs_flush(%s): waited too long", de_upload->name);
+          abort();
+        }
+
+        //complete md5sum using fuse provided content
+        complete_job_md5(de_upload->job);
+        //complete md5sum using http uploaded content
+        complete_job_md5(de_upload->job2);
+
         close_lock_file(de_upload->full_name, info->fh);
+
+        if (pending)
+        {
+          debugf(DBG_EXT, KRED
+                 "cfs_flush(%s): pending segments for too long, aborting", de_upload->name);
+          result = -EIO;
+        }
+
+        if (strcasecmp(de_upload->job->md5str, de_upload->job2->md5str))
+        {
+          //md5sums are different, upload is corrupt
+          debugf(DBG_EXT, KRED
+                 "cfs_flush(%s): md5sum not match between fuse(%s) and http(%s)",
+                 de_upload->name, de_upload->job->md5str, de_upload->job2->md5str);
+          result = -EILSEQ;
+          abort();
+        }
+        else
+          debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
+                 de_upload->name, de_upload->job->md5str);
+
+        debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done, cleaning",
+               de_upload->name);
+
+        //fixme: sometimes last segment is not yet visible on cloud
+        //copy dir_entry for to have segment list complete
+        if (de_upload->has_unvisible_segments)
+          copy_dir_entry(de_upload, de);
+        else
+        {
+          //
+        }
+
+        //mark file meta as obsolete to force a reload (for md5sums mostly)
+        //if has unvisible segments update_segments in get_file_meta will skip
+        de->metadata_downloaded = false;
+        bool meta_ok = get_file_metadata(de, true, true);
+        if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
+        {
+          //md5sums are different, upload is corrupt
+          debugf(DBG_EXT, KRED
+                 "cfs_flush(%s): etags md5sum not match, cloud(%s) local(%s)",
+                 de_upload->name, de->md5sum, de_upload->md5sum_local);
+          result = -EILSEQ;
+          abort();
+        }
+        else
+          debugf(DBG_EXT, KGRN "cfs_flush(%s): segment md5sum OK (%s)",
+                 de_upload->name, de_upload->md5sum_local);
+        //free md5sum holders
+        free_thread_job(de_upload->job);
+        free_thread_job(de_upload->job2);
+        dir_decache_upload(de_upload->full_name);
+      }
+    }
+    else if (!de_upload->is_segmented)
+    {
+      char* fuse_md5 = NULL;
+      if (de_upload->job)
+      {
+        //complete md5sum using fuse provided content
+        complete_job_md5(de_upload->job);
+        fuse_md5 = strdup(de_upload->job->md5str);
+      }
+      //signal completion of read/write operation
+      //signal last data available in buffer for upload
+      if (de_upload->upload_buf.sem_list[SEM_FULL])
+        sem_post(de_upload->upload_buf.sem_list[SEM_FULL]);
+      int loops = 0;
+      while (de_upload->upload_buf.sem_list[SEM_DONE])
+      {
+        if (loops % 20 == 0)
+          debugf(DBG_EXT, KMAG "cfs_flush(%s): wait non-segmented pending upload",
+                 de_upload->name);
+        sleep_ms(200);
+        loops++;
+      }
+      close_lock_file(de_upload->full_name, info->fh);
+      //might be already closed via first segment in cfs_write
+      if (de_upload->upload_buf.local_cache_file)
+      {
+        fclose(de_upload->upload_buf.local_cache_file);
+        de_upload->upload_buf.local_cache_file = NULL;
       }
 
-    }
-    else//not upload
-    {
-      debugf(DBG_EXT, KMAG
-             "cfs_flush(%s): non-upload done, size=%lu", path, de->size);
-    }
-    errsv = 0;
-  }
-  else //not option_progressive
-  {
-    //if segmented or progressive upload is already done by now, skip it
-    if (!de->is_segmented && !option_enable_progressive_upload)
-    {
-      if (/*file_changed_time(de) || */file_changed_md5(de))
+      if (fuse_md5 && strcasecmp(fuse_md5, de_upload->md5sum))
       {
-        debugf(DBG_EXT, "cfs_flush(%s): time/content changed", de->name);
-        cloudfs_upload_segment(de, de);
+        //md5sums are different, upload is corrupt
+        debugf(DBG_EXT, KRED
+               "cfs_flush(%s): bad md5sum between fuse(%s), cloud(%s)",
+               de_upload->name, fuse_md5, de_upload->md5sum);
+        result = -EILSEQ;
+        abort();
       }
       else
-        debugf(DBG_EXT, "cfs_flush(%s): time/content not changed", de->name);
+        debugf(DBG_EXT, KGRN "cfs_flush(%s): non_seg content md5sum OK (%s)",
+               de_upload->name, fuse_md5);
+      //update meta de
+      copy_dir_entry(de_upload, de);
+      free(fuse_md5);
+      //free md5sum holders
+      free_thread_job(de_upload->job);
+      dir_decache_upload(de_upload->full_name);
     }
+    else
+      debugf(DBG_EXT, "cfs_flush(%s): no need to wait!?", de->name);
+
   }
+  else//not upload
+  {
+    debugf(DBG_EXT, KMAG
+           "cfs_flush(%s): non-upload done, size=%lu", path, de->size);
+  }
+  errsv = 0;
 
   close_lock_file(de->full_name, info->fh);
   unlink_cache_segments(de);
@@ -904,6 +929,9 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
          info->fh);
   dir_entry* de = check_path_info(path);
   update_cache_access(de);
+  //duplicate as cfs_flush not always called
+  close_lock_file(de->full_name, info->fh);
+  unlink_cache_segments(de);
   debugf(DBG_NORM, KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
@@ -972,8 +1000,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   int result, errsv;
   char debugstr[256];
+  dir_entry* de_orig = check_path_info(path);
   dir_entry* de = check_path_info_upload(path);
-  //assert(de);
   struct thread_job* job_fuse_md5 = NULL;
   if (!de)
   {
@@ -987,243 +1015,228 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   if (offset == 0)
   {
     assert(de->size == 0);
-    //clear manifest meta to avoid overwrite of same segments
-    //and force creation of a new version (in the same session)
-    //free(de->manifest_seg);
-    //de->manifest_seg = NULL;
-    //free(de->manifest_time);
-    //de->manifest_time = NULL;
-
     //job for fuse content check
-    job_fuse_md5 = init_thread_job();
+    char job_name[MAX_PATH_SIZE] = "fuse_md5:";
+    job_fuse_md5 = init_thread_job(strdup(strcat(job_name, de->name)));
     de->job = job_fuse_md5;
     init_job_md5(job_fuse_md5);
     //job for uploaded data content check
-    struct thread_job* job_http_md5 = init_thread_job();
+    char job_name_http[MAX_PATH_SIZE] = "http_md5:";
+    struct thread_job* job_http_md5 = init_thread_job(strdup(strcat(job_name_http,
+                                      de->name)));
     init_job_md5(job_http_md5);
     de->job2 = job_http_md5;
+
+    //if overwriting existing file check if is segmented and
+    //remove older segment files
+    if (de_orig && de_orig->is_segmented)
+    {
+      debugf(DBG_EXT, KMAG "cfs_write(%s): deleting old segments", de->name);
+      cloudfs_delete_path(de_orig->manifest_cloud, true, false, NULL);
+    }
   }
   if (de->job)
     update_job_md5(de->job, buf, length);
   else
+  {
     debugf(DBG_ERR, KRED
            "cfs_write(%s) unexpected empty job off=%lu", path, offset);
+    abort();
+  }
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
   de->segment_remaining = segment_size; //we don't know remaining size
 
-  if (!option_enable_progressive_upload)
-  {
-    //regular upload, copy first in cache, upload at flush, no progress
-    FILE* fp = NULL;
-    bool in_cache = open_file_in_cache(de, &fp, HTTP_PUT);
-    int fno = fileno(fp);
-    assert(fno != -1);
-    result = pwrite(fno, buf, length, offset);
-    de->size = offset + result;
-    errsv = errno;
-    fclose(fp);
-    clock_gettime(CLOCK_REALTIME, &de->ctime_local);
-    if (de->md5sum_local)
-    {
-      free(de->md5sum_local);
-      de->md5sum_local = NULL;
-    }
-    debugf(DBG_EXT, KBLU "exit 0: cfs_write(%s) result=%s", path,
-           strerror(errsv));
-    return result;
-  }
-  else
-  {
-    assert(de->is_segmented);
-    dir_entry* de_seg;
-    int seg_index = 0;
-    int sem_val_full, sem_val_empty;
-    off_t ptr_offset = 0;
-    off_t seg_size_processed = offset;
-    off_t seg_size_to_upload;
-    off_t seg_size_uploaded;
-    off_t fuse_size_uploaded = 0;
+  //assert(de->is_segmented);
+  dir_entry* de_seg, *de_tmp;
+  int seg_index = 0;
+  int sem_val_full, sem_val_empty;
+  off_t ptr_offset = 0;
+  off_t seg_size_processed = offset;
+  off_t seg_size_to_upload;
+  off_t seg_size_uploaded;
+  off_t fuse_size_uploaded = 0;
 
-    int last_seg_index = -1;
-    int loops = 0;
-    dir_entry* prev_seg = NULL;
-    while (seg_size_processed < offset + length)
+  int last_seg_index = -1;
+  int loops = 0;
+  dir_entry* prev_seg = NULL;
+  while (seg_size_processed < offset + length)
+  {
+    //creates the segment to be uploaded as dir_entry
+    //and sets minimum required fields
+    seg_index = seg_size_processed / segment_size;
+    if (seg_index != last_seg_index)
     {
-      //creates the segment to be uploaded as dir_entry
-      //and sets minimum required fields
-      seg_index = seg_size_processed / segment_size;
-      if (seg_index != last_seg_index)
+      //just switched to a new segment, or got new fuse data (cfs_write called)
+      if (seg_index > 0)
       {
-        //just switched to a new segment, or got new fuse data (cfs_write called)
-        if (seg_index > 0)
+        prev_seg = get_segment(de, seg_index - 1);
+        //we know this is segmented so if 2nd segment,
+        //check if first seg exists, if not create
+        if (!prev_seg && seg_index == 1)
         {
-          prev_seg = get_segment(de, seg_index - 1);
-          assert(prev_seg);
-          if (prev_seg->upload_buf.sem_list[SEM_FULL]
-              && !prev_seg->upload_buf.signaled_completion)
+          //add first segment as we now know file is segmented
+          assert(get_create_segment(de, 0));
+          prev_seg = de;
+        }
+        assert(prev_seg);
+        if (prev_seg->upload_buf.sem_list[SEM_FULL]
+            && !prev_seg->upload_buf.signaled_completion)
+        {
+          //unblock previous segment from data wait
+          sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
+          prev_seg->upload_buf.signaled_completion = true;
+          debugf(DBG_EXT, KMAG"cfs_write(%s): signal prev segment %s complete",
+                 de->name, prev_seg->name);
+          //entry only once
+          if (seg_index == 1 && de->is_segmented == false)
           {
-            //unblock previous segment from data wait
-            sem_post(prev_seg->upload_buf.sem_list[SEM_FULL]);
-            prev_seg->upload_buf.signaled_completion = true;
-            debugf(DBG_EXT, KMAG "cfs_write(%s): signal prev segment %s complete",
-                   path, prev_seg->name);
-          }
-          if (last_seg_index != -1)
-          {
-            //close prev cache file as segment changed
-            assert(prev_seg->upload_buf.local_cache_file);
-            fclose(prev_seg->upload_buf.local_cache_file);
+            de->is_segmented = true;//change to segmented, before convert
+            //rename first segment, as thread to avoid block
+            pthread_t thread;
+            pthread_create(&thread, NULL, (void*)int_convert_first_segment_th, de);
           }
         }
+        if (last_seg_index != -1)
+        {
+          //close prev cache file as segment changed. last is closed in cfs_flush
+          assert(prev_seg->upload_buf.local_cache_file);
+          fclose(prev_seg->upload_buf.local_cache_file);
+          prev_seg->upload_buf.local_cache_file = NULL;
+        }
+      }
+      //for first segment upload to parent file, until we know if is segmented
+      if (seg_index == 0)
+      {
+        de_tmp = de;
+        de_seg = NULL;
+      }
+      else
+      {
         //get existing segment or create a new one if not exists
         de_seg = get_create_segment(de, seg_index);
         assert(get_segment(de, seg_index));
         assert(de->manifest_seg);
-
-        de_seg->upload_buf.fuse_buf_size = length;
-        //this is called once per segment
-        if (!de_seg->upload_buf.mutex_initialised)
-        {
-          pthread_mutex_init(&de_seg->upload_buf.mutex, &segment_mutex_attr);
-          de_seg->upload_buf.mutex_initialised = true;
-          //prepare to save segment data in cache if we need to retry upload
-          FILE* fp_segment = NULL;
-          //remove segment cache file to ensure clean data is written in cache
-          delete_segment_cache(de, de_seg);
-          //create local cache segment file
-          open_segment_in_cache(de, de_seg, &fp_segment, HTTP_PUT);
-          assert(fp_segment);
-          de_seg->upload_buf.local_cache_file = fp_segment;
-        }
-        //set data len to be processed in this segment
-        //carefull not to go over total segment size
-        de_seg->upload_buf.work_buf_size =
-          min(de_seg->segment_size - de_seg->upload_buf.size_processed,
-              length - fuse_size_uploaded);
+        de_tmp = de_seg;
       }
-      seg_size_to_upload = de_seg->upload_buf.work_buf_size;
-      //loop until entire buffer was uploaded
-      debugf(DBG_EXTALL, KMAG "cfs_write(%s:%s): looping worksize=%lu proc=%lu",
-             de->name, de_seg->name, seg_size_to_upload,
-             de_seg->upload_buf.size_processed);
-      //index in buffer to resume upload in a new segment
-      //(when buffer did not fit in the current segment)
-      ptr_offset = de->size - offset;
-      de_seg->upload_buf.readptr = buf + ptr_offset;
 
-      if (option_enable_chaos_test_monkey
-          && false && de_seg->upload_buf.size_processed == 393216)
+      de_tmp->upload_buf.fuse_buf_size = length;
+      //this is called once per segment
+      if (!de_tmp->upload_buf.mutex_initialised)
       {
-        snprintf(debugstr, 256, "%s", buf + ptr_offset);
-        debugf(DBG_EXT, KGRN "1[%s]len=%lu,ptr=%lu",
-               debugstr, strlen(debugstr), ptr_offset);
-        sleep_ms(5000);
+        pthread_mutex_init(&de_tmp->upload_buf.mutex, &segment_mutex_attr);
+        de_tmp->upload_buf.mutex_initialised = true;
+        //prepare to save segment data in cache if we need to retry upload
+        FILE* fp_segment = NULL;
+        //remove segment cache file to ensure clean data is written in cache
+        delete_segment_cache(de, de_seg);
+        //create local cache segment file
+        open_segment_in_cache(de, de_seg, &fp_segment, HTTP_PUT);
+        assert(fp_segment);
+        de_tmp->upload_buf.local_cache_file = fp_segment;
       }
-
-      //start a new segment upload thread when segment upload is at start
-      //or at last segment byte (why?)
-      if ((de_seg->upload_buf.size_processed == 0)
-          || (de_seg->upload_buf.size_processed == de_seg->segment_size))
-      {
-        assert(de->manifest_seg);
-        //if previous upload failed before uploading any data (401 httperr)
-        //need to wait until thread does cleanup to retry upload
-
-        //debug
-        if (false && de_seg->segment_part == 2)
-          sleep_ms(600000);
-        //debug
-
-        pthread_mutex_lock(&de_seg->upload_buf.mutex);
-        //increment to sinal there is more data and avoid sudden completion
-        de->segment_count++;
-        while (prev_seg && prev_seg->size != prev_seg->segment_size)
-        {
-          debugf(DBG_EXT, KYEL
-                 "cfs_write(%s): prev seg(%s) still uploading, %lu/%lu",
-                 de_seg->name, prev_seg->name, prev_seg->size,
-                 prev_seg->segment_size);
-          sleep_ms(1000);
-        }
-        bool op_ok = cloudfs_create_segment(de_seg, de);
-        assert(op_ok);
-      }
-
-      //signal there is data available in buffer for upload
-      if (de_seg->upload_buf.sem_list[SEM_FULL])
-        sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
-      //wait until previous buffer data is uploaded via curl callback
-      sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
-      seg_size_uploaded = seg_size_to_upload - de_seg->upload_buf.work_buf_size;
-      //write data to segment cache file in case upload retry is needed
-      //but no more than segment size
-      size_t write_len = fwrite(buf + ptr_offset, 1, seg_size_uploaded,
-                                de_seg->upload_buf.local_cache_file);
-      errsv = errno;
-      if (write_len != seg_size_uploaded)
-      {
-        //probably disk is full
-        debugf(DBG_EXT, KRED "cfs_write(%s): cache write error=%s",
-               path, strerror(errsv));
-        dir_decache(de->full_name);
-        return -ENOSPC;
-      }
-      //add what was uploaded
-      seg_size_processed += seg_size_uploaded;
-      fuse_size_uploaded += seg_size_uploaded;
-      //keep increase the file & segment size as we upload more data
-      de->size += seg_size_uploaded;
-      de_seg->size += seg_size_uploaded;
-
-      debugf(DBG_EXTALL, KMAG
-             "cfs_write(%s:%s): wait done de_seg=%lu de=%lu szproc=%lu",
-             de->name, de_seg->name, de_seg->size, de->size,
-             de_seg->upload_buf.size_processed);
-      //check if data must be feed from cache in case of upload error (retry)
-      if (de_seg->upload_buf.feed_from_cache)
-      {
-        debugf(DBG_EXT, KMAG
-               "cfs_write(%s:%s): switch to cache data feed",
-               de->name, de_seg->name);
-        //sleep_ms(3000);
-        size_t save_size_processed = de_seg->upload_buf.size_processed;
-        size_t save_work_buf_size = de_seg->upload_buf.work_buf_size;
-        //reset de_seg upload statistics
-        de_seg->upload_buf.size_processed = 0;
-        int_cfs_write_cache_data_feed(de_seg);
-        //sleep_ms(3000);
-        assert(save_size_processed == de_seg->upload_buf.size_processed);
-        de_seg->upload_buf.work_buf_size = save_work_buf_size;
-        de_seg->upload_buf.feed_from_cache = false;
-        debugf(DBG_EXT, KMAG
-               "cfs_write(%s:%s): resume fuse data feed workbuf=%lu",
-               de->name, de_seg->name, de_seg->upload_buf.work_buf_size);
-      }
-      //for debug only
-      if (option_enable_chaos_test_monkey
-          && false && de_seg->upload_buf.size_processed == 393216)
-      {
-        snprintf(debugstr, 256, "%s", buf + ptr_offset);
-        debugf(DBG_EXT, KGRN "2[%s]len=%lu,ptr=%lu",
-               debugstr, strlen(debugstr), ptr_offset);
-        sleep_ms(5000);
-      }
-
-      debugf(DBG_EXTALL, KMAG
-             "cfs_write(%s:%s): buffer empty work=%lu upld=%lu left=%lu fusz=%lu",
-             de->name, de_seg->name, de_seg->upload_buf.work_buf_size,
-             seg_size_uploaded, de_seg->size - de_seg->upload_buf.size_processed,
-             length - fuse_size_uploaded);
-      loops++;
-      last_seg_index = seg_index;
+      //set data len to be processed in this segment
+      //carefull not to go over total segment size
+      de_tmp->upload_buf.work_buf_size =
+        min(de_tmp->segment_size - de_tmp->upload_buf.size_processed,
+            length - fuse_size_uploaded);
     }
-    if (offset == 0)
-      debugf(DBG_EXTALL,
-             KMAG "cfs_write(%s): exit, work_size=%lu, seg_count=%d",
-             path, de_seg->upload_buf.work_buf_size, de->segment_count);
-    return length;
+    seg_size_to_upload = de_tmp->upload_buf.work_buf_size;
+    //loop until entire buffer was uploaded
+    debugf(DBG_EXTALL, KMAG "cfs_write(%s:%s): looping worksize=%lu proc=%lu",
+           de->name, de_tmp->name, seg_size_to_upload,
+           de_tmp->upload_buf.size_processed);
+    //index in buffer to resume upload in a new segment
+    //(when buffer did not fit in the current segment)
+    ptr_offset = de->size - offset;
+    de_tmp->upload_buf.readptr = buf + ptr_offset;
+
+    //start a new segment upload thread when segment upload is at start
+    //or at last segment byte (why?)
+    if ((de_tmp->upload_buf.size_processed == 0)
+        || (de_tmp->upload_buf.size_processed == de_tmp->segment_size))
+    {
+      //if previous upload failed before uploading any data (401 httperr)
+      //need to wait until thread does cleanup to retry upload
+      pthread_mutex_lock(&de_tmp->upload_buf.mutex);
+      //increment to sinal there is more data and avoid sudden completion
+      de->segment_count++;
+      while (prev_seg && prev_seg->size != prev_seg->segment_size)
+      {
+        debugf(DBG_EXT, KYEL
+               "cfs_write(%s): prev seg(%s) still uploading, %lu/%lu",
+               de_tmp->name, prev_seg->name, prev_seg->size,
+               prev_seg->segment_size);
+      }
+      bool op_ok = cloudfs_create_segment(de_seg, de);
+      assert(op_ok);
+    }
+
+    //signal there is data available in buffer for upload
+    if (de_tmp->upload_buf.sem_list[SEM_FULL])
+      sem_post(de_tmp->upload_buf.sem_list[SEM_FULL]);
+    //wait until previous buffer data is uploaded via curl callback
+    sem_wait(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
+    seg_size_uploaded = seg_size_to_upload - de_tmp->upload_buf.work_buf_size;
+    //write data to segment cache file in case upload retry is needed
+    //but no more than segment size
+    size_t write_len = fwrite(buf + ptr_offset, 1, seg_size_uploaded,
+                              de_tmp->upload_buf.local_cache_file);
+    errsv = errno;
+    if (write_len != seg_size_uploaded)
+    {
+      //probably disk is full
+      debugf(DBG_EXT, KRED "cfs_write(%s): cache write error=%s",
+             path, strerror(errsv));
+      dir_decache(de->full_name);
+      return -ENOSPC;
+    }
+    //add what was uploaded
+    seg_size_processed += seg_size_uploaded;
+    fuse_size_uploaded += seg_size_uploaded;
+    //keep increase the file & segment size as we upload more data
+    de->size += seg_size_uploaded;
+    if (de_seg)
+      de_tmp->size += seg_size_uploaded;
+
+    debugf(DBG_EXTALL,
+           KMAG "cfs_write(%s:%s): wait done de_seg=%lu de=%lu szproc=%lu",
+           de->name, de_tmp->name, de_tmp->size, de->size,
+           de_tmp->upload_buf.size_processed);
+    //check if data must be feed from cache in case of upload error (retry)
+    if (de_tmp->upload_buf.feed_from_cache)
+    {
+      debugf(DBG_EXT, KMAG "cfs_write(%s:%s): switch to cache data feed",
+             de->name, de_tmp->name);
+      size_t save_size_processed = de_tmp->upload_buf.size_processed;
+      size_t save_work_buf_size = de_tmp->upload_buf.work_buf_size;
+      //reset de_seg upload statistics
+      de_tmp->upload_buf.size_processed = 0;
+      int_cfs_write_cache_data_feed(de_tmp);
+      assert(save_size_processed == de_tmp->upload_buf.size_processed);
+      de_tmp->upload_buf.work_buf_size = save_work_buf_size;
+      de_tmp->upload_buf.feed_from_cache = false;
+      debugf(DBG_EXT, KMAG
+             "cfs_write(%s:%s): resume fuse data feed workbuf=%lu",
+             de->name, de_tmp->name, de_tmp->upload_buf.work_buf_size);
+    }
+
+    debugf(DBG_EXTALL, KMAG
+           "cfs_write(%s:%s): buffer empty work=%lu upld=%lu left=%lu fusz=%lu",
+           de->name, de_tmp->name, de_tmp->upload_buf.work_buf_size,
+           seg_size_uploaded, de_tmp->size - de_tmp->upload_buf.size_processed,
+           length - fuse_size_uploaded);
+    loops++;
+    last_seg_index = seg_index;
   }
+  if (offset == 0)
+    debugf(DBG_EXT, KMAG "cfs_write(%s): exit, seg_count=%d",
+           path, de->segment_count);
+  else
+    debugf(DBG_EXTALL, KMAG "cfs_write(%s): exit, seg_count=%d",
+           path, de->segment_count);
+  return length;
+
 }
 
 static int cfs_unlink(const char* path)
@@ -1299,6 +1312,8 @@ static int cfs_chown(const char* path, uid_t uid, gid_t gid)
   {
     debugf(DBG_NORM, KBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
     dir_entry* de = check_path_info(path);
+    //get extended attributes
+    bool res = get_file_metadata(de, true, true);
     if (de)
     {
       if (de->uid != uid || de->gid != gid)
@@ -1321,6 +1336,8 @@ static int cfs_chmod(const char* path, mode_t mode)
   {
     debugf(DBG_NORM, KBLU"cfs_chmod(%s,%d)", path, mode);
     dir_entry* de = check_path_info(path);
+    //get extended attributes
+    bool res = get_file_metadata(de, true, true);
     if (de)
     {
       if (de->chmod != mode)
@@ -1365,7 +1382,7 @@ static int cfs_rename(const char* src, const char* dst)
   {
     //ensure segments are loaded
     get_file_metadata(src_de, true, true);
-    if (cloudfs_copy_object(src_de, dst))
+    if (cloudfs_copy_object(src_de, dst, false))
     {
       cloudfs_delete_object(src_de);
       debugf(DBG_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
@@ -1434,6 +1451,9 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     debugf(DBG_NORM, KRED"exit 0: cfs_utimens(%s) file not in cache", path);
     return -ENOENT;
   }
+  //get extended attributes
+  bool res = get_file_metadata(de, true, true);
+
   if (!option_disable_atime_check &&
       (de->atime.tv_sec != times[0].tv_sec || de->atime.tv_nsec != times[0].tv_nsec)
       || de->mtime.tv_sec != times[1].tv_sec

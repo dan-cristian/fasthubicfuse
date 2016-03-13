@@ -263,6 +263,7 @@ bool init_job_md5(thread_job* job)
 bool update_job_md5(thread_job* job, const unsigned char* data_buf,
                     int buf_len)
 {
+  debugf(DBG_EXTALL, "update_job_md5(%s): len=%lu", job->job_name, buf_len);
   return (MD5_Update(&job->mdContext, data_buf, buf_len) == 1);
 }
 
@@ -272,10 +273,6 @@ bool update_job_md5(thread_job* job, const unsigned char* data_buf,
 void save_job_md5(thread_job* job)
 {
   memcpy(&job->mdContext_saved, &job->mdContext, sizeof(MD5_CTX));
-  /*job->mdContext_saved.A = job->mdContext.A;
-    job->mdContext_saved.B = job->mdContext.B;
-    job->mdContext_saved.C = job->mdContext.C;
-    job->mdContext_saved.D = job->mdContext.D;*/
   job->is_mdcontext_saved = true;
 }
 /*
@@ -285,10 +282,6 @@ void restore_job_md5(thread_job* job)
 {
   assert(job->is_mdcontext_saved);
   memcpy(&job->mdContext, &job->mdContext_saved, sizeof(MD5_CTX));
-  /*job->mdContext.A = job->mdContext_saved.A;
-    job->mdContext.B = job->mdContext_saved.B;
-    job->mdContext.C = job->mdContext_saved.C;
-    job->mdContext.D = job->mdContext_saved.D;*/
 }
 /*
   generates final md5sum for data received so far
@@ -316,6 +309,7 @@ bool complete_job_md5(thread_job* job)
 
 thread_copy_job* init_thread_copy_job()
 {
+  debugf(DBG_EXTALL, "thread_copy_job: freeing copy job");
   thread_copy_job* job = malloc(sizeof(struct thread_copy_job));
   job->dest = NULL;
   job->de_src = NULL;
@@ -325,27 +319,30 @@ thread_copy_job* init_thread_copy_job()
 
 void free_thread_copy_job(thread_copy_job* job)
 {
-  debugf(DBG_EXT, "thread_copy_job: freeing copy job");
+  debugf(DBG_EXTALL, "thread_copy_job: freeing copy job");
   free(job->dest);
   free(job->manifest);
   free(job);
 }
 
-thread_job* init_thread_job()
+thread_job* init_thread_job(char* job_name)
 {
+  debugf(DBG_EXTALL, "init_thread_job(%s): init job", job_name);
   thread_job* job = malloc(sizeof(struct thread_job));
   job->md5str = NULL;
-  job->self_reference = NULL;
+  job->job_name = job_name;
   return job;
 }
 
 void free_thread_job(thread_job* job)
 {
-  debugf(DBG_EXT, "free_thread_job: freeing job");
+  debugf(DBG_EXTALL, "free_thread_job(%s): freeing job", job->job_name);
   if (job->md5str)
     free(job->md5str);
-  if (job->self_reference)
-    free(job->self_reference);
+  if (job->job_name)
+    free(job->job_name);
+  job->md5str = NULL;
+  job->job_name = NULL;
 }
 /*
   determines if local cache content equals cloud content
@@ -735,7 +732,14 @@ void path_to_de(const char* path, dir_entry* de)
     snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
              HUBIC_SEGMENT_STORAGE_ROOT, container);
     if (de->manifest_seg)
+    {
+      if (strcasecmp(de->manifest_seg, manifest))
+      {
+        abort();
+        ;
+      }
       free(de->manifest_seg);
+    }
     //if (!de->manifest_seg)
     de->manifest_seg = strdup(manifest);
     //else
@@ -744,10 +748,12 @@ void path_to_de(const char* path, dir_entry* de)
              HUBIC_SEGMENT_STORAGE_ROOT, container, object, meta_mtime);
     //ensure len is not to big
     assert(strlen(manifest) + 8 < MAX_URL_SIZE);
+
     //if already initialised then keep it as this is
     if (!de->manifest_time)
       free(de->manifest_time);
     de->manifest_time = strdup(manifest);
+    debugf(DBG_EXT, KCYN "path_to_de(%s): manifest_time=%s", de->name, manifest);
     //this is initialised in get_meta_dispatch
     if (!de->manifest_cloud)
     {
@@ -812,12 +818,13 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
   assert(de_seg);
   de_seg->segment_part = segment_index;
 
-  if (!de->manifest_seg)
+  if (!de->manifest_seg || !de->manifest_time)
   {
     //populate manifest fields if empty
     path_to_de(de->full_name, de);
   }
-
+  if (de->is_segmented)
+    assert(de->manifest_time);
   char seg_name[8 + 1] = { 0 };
   snprintf(seg_name, 8 + 1, "%08i", segment_index);
   de_seg->name = strdup(seg_name);
@@ -946,7 +953,7 @@ void unblock_semaphore(sem_t* semaphore, char* name)
   {
     int sem_val1, sem_val2, i;
     sem_getvalue(semaphore, &sem_val1);
-    debugf(DBG_EXT, KMAG "unblock_semaphore(%s) start, val=%d",
+    debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) start, val=%d",
            name, sem_val1);
     sem_post(semaphore);
     for (i = 0; i < 250; i++)
@@ -956,7 +963,7 @@ void unblock_semaphore(sem_t* semaphore, char* name)
         break;
       sleep_ms(1);
     }
-    debugf(DBG_EXT, KMAG "unblock_semaphore(%s) in %d milisec, val %d->%d",
+    debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) in %d milisec, val %d->%d",
            name, i, sem_val1, sem_val2);
   }
   else
@@ -967,7 +974,7 @@ void unblock_semaphore(sem_t* semaphore, char* name)
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix)
 {
-  debugf(DBG_EXT, "init_semaphores(%s): prefix=%s len=%d",
+  debugf(DBG_EXTALL, "init_semaphores(%s): prefix=%s len=%d",
          de->full_name, prefix, strlen(prefix));
   char semaphore_name[MD5_DIGEST_HEXA_STRING_LEN + MAX_PATH_SIZE] = "\0";
   int errsv, sem_val, i;
@@ -998,7 +1005,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
              prefix, sem_name, de->full_name_hash, de->name);
     //don't forget to free this
     data_buf->sem_name_list[i] = strdup(semaphore_name);
-    debugf(DBG_EXT, "init_semaphores(%s): sem_name=%s", de->full_name,
+    debugf(DBG_EXTALL, "init_semaphores(%s): sem_name=%s", de->full_name,
            data_buf->sem_name_list[i]);
     //ensure semaphore does not exist
     //(might be in the system from a previous unclean finished operation)
@@ -1015,7 +1022,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
     else
     {
       sem_getvalue(data_buf->sem_list[i], &sem_val);
-      debugf(DBG_EXT, KCYN
+      debugf(DBG_EXTALL, KCYN
              "init_semaphores(%s): semaphore[%s] created, size_left=%lu, sem_val=%d",
              de->full_name, data_buf->sem_name_list[i], data_buf->work_buf_size, sem_val);
     }
@@ -1026,7 +1033,7 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
 int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
 {
   assert(data_buf->sem_list[sem_index]);
-  debugf(DBG_EXT, KCYN "free_semaphores: %s-%d",
+  debugf(DBG_EXTALL, KCYN "free_semaphores: %s-%d",
          data_buf->sem_name_list[sem_index], sem_index);
   if (data_buf->sem_list[sem_index])
   {
@@ -1190,7 +1197,7 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
   de->uid = geteuid();
   de->gid = getegid();
   de->size = 0;
-  de->is_segmented = option_enable_progressive_upload;
+  de->is_segmented = false; //option_enable_progressive_upload;
   //fill in manifest data etc
   path_to_de(path, de);
 }
@@ -1200,7 +1207,7 @@ void create_dir_entry(dir_entry* de, const char* path, mode_t mode)
 */
 void copy_dir_entry(dir_entry* src, dir_entry* dst)
 {
-  debugf(DBG_EXT, KCYN"copy_dir_entry(%s:%s)",
+  debugf(DBG_EXT, KCYN"copy_dir_entry(%s->%s)",
          src->name ? src->name : "nul", dst->name ? dst->name : "nul");
   if (!dst->name && src->name)
     dst->name = strdup(src->name);
@@ -1701,8 +1708,9 @@ bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
 {
   char segment_file_path[NAME_MAX] = { 0 };
   char segment_file_dir[NAME_MAX] = { 0 };
-  get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
-                           temp_dir, de_seg->segment_part);
+  get_safe_cache_file_path(de->full_name, segment_file_path,
+                           segment_file_dir, temp_dir,
+                           de_seg ? de_seg->segment_part : 0);
   bool file_exist = access(segment_file_path, F_OK) != -1;
   int result = 0;
   if (file_exist)
@@ -1711,8 +1719,9 @@ bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
     int err = errno;
     if (result != 0)
     {
-      debugf(DBG_EXT, KYEL "delete_segment_cache(%s): cannot unlink, err=%s",
-             de_seg->full_name, strerror(err));
+      debugf(DBG_EXT, KYEL
+             "delete_segment_cache(%s): cannot unlink, err=%s",
+             segment_file_path, strerror(err));
     }
   }
   return result == 0;
@@ -1721,6 +1730,8 @@ bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
   look for segment in cache
   if exists, returns file handle to file in cache
   if does not exist, create file and return handle
+
+  de_seg can be null if file is not segmented, work with main file
 */
 bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
                            FILE** fp_segment, const char* method)
@@ -1729,7 +1740,7 @@ bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
   char segment_file_path[NAME_MAX] = { 0 };
   char segment_file_dir[NAME_MAX] = { 0 };
   get_safe_cache_file_path(de->full_name, segment_file_path, segment_file_dir,
-                           temp_dir, de_seg->segment_part);
+                           temp_dir, de_seg ? de_seg->segment_part : 0);
   struct stat dir_status = { 0 };
   if (stat(segment_file_dir, &dir_status) == -1)
     mkdir(segment_file_dir, 0700);
@@ -1741,12 +1752,10 @@ bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
   assert(*fp_segment);
   debugf(DBG_EXT, KMAG
          "open_segment_from_cache(%s): open segment fp=%p segindex=%d",
-         de_seg->name, *fp_segment, de_seg->segment_part);
+         de_seg ? de_seg->name : de->name, *fp_segment,
+         de_seg ? de_seg->segment_part : 0);
   if (file_exist)
   {
-    debugf(DBG_EXTALL, KMAG
-           "open_segment_from_cache: found segment %d md5=%s",
-           de_seg->segment_part, de_seg->md5sum);
     int fno = fileno(*fp_segment);
     assert(fno != -1);
   }

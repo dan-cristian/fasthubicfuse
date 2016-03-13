@@ -192,13 +192,13 @@ typedef struct dir_entry
 
 typedef struct thread_job
 {
+  char* job_name;
   dir_entry* de;
   dir_entry* de_seg;
   int segment_part;
   off_t segment_offset;
   //FILE* fp;
   pthread_t thread;
-  void* self_reference;
   bool is_single_thread;
   MD5_CTX mdContext;
   MD5_CTX mdContext_saved;//save interim md5 snapshot to enable restore point
@@ -213,7 +213,6 @@ typedef struct thread_copy_job
   char* manifest;
   int result;
   bool thread_exit;
-  //void* self_reference;
 } thread_copy_job;
 
 // linked list with cached folder names
@@ -299,7 +298,7 @@ void free_de_before_get(dir_entry* de);
 void free_de_before_head(dir_entry* de);
 thread_copy_job* init_thread_copy_job();
 void free_thread_copy_job(thread_copy_job* job);
-thread_job* init_thread_job();
+thread_job* init_thread_job(char* job_name);
 void free_thread_job(thread_job* job);
 void create_dir_entry(dir_entry* de, const char* path, mode_t mode);
 void copy_dir_entry(dir_entry* src, dir_entry* dst);
