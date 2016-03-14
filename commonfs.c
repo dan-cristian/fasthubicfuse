@@ -2318,17 +2318,17 @@ void print_options()
   fprintf(stderr, "segment_above = %lu\n", segment_above);
   fprintf(stderr, "debug_level = %d\n", option_debug_level);
   fprintf(stderr, "get_extended_metadata = %d\n", option_get_extended_metadata);
-  fprintf(stderr, "curl_progress_state = %li\n", option_curl_progress_state);
+  fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
   fprintf(stderr, "enable_chmod = %d\n", option_enable_chmod);
   fprintf(stderr, "enable_chown = %d\n", option_enable_chown);
   fprintf(stderr, "enable_progressive_download = %d\n",
           option_enable_progressive_download);
   fprintf(stderr, "enable_progressive_upload = %d\n",
           option_enable_progressive_upload);
-  fprintf(stderr, "min_speed_limit_progressive = %d\n",
+  fprintf(stderr, "min_speed_limit_progressive = %li\n",
           option_min_speed_limit_progressive);
-  fprintf(stderr, "min_speed_timeout = %d\n", option_min_speed_timeout);
-  fprintf(stderr, "read_ahead = %d\n", option_read_ahead);
+  fprintf(stderr, "min_speed_timeout = %li\n", option_min_speed_timeout);
+  fprintf(stderr, "read_ahead = %li\n", option_read_ahead);
   fprintf(stderr, "enable_syslog = %d\n", option_enable_syslog);
   fprintf(stderr, "enable_chaos_test_monkey = %d\n",
           option_enable_chaos_test_monkey);
