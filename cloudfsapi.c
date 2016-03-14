@@ -1042,8 +1042,9 @@ static int send_request_size(const char* method, const char* encoded_path,
       debugf(DBG_EXT, "send_request_size: POST (%s)", orig_path);
       assert(curl_easy_setopt(curl, CURLOPT_POST, 1L) == CURLE_OK);
       assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0L) == CURLE_OK);
-      assert(curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS,
-                              10000L) == CURLE_OK);
+      //does not work in ubuntu
+      //assert(curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS,
+      //                        10000L) == CURLE_OK);
 
       //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
       //add_header(&headers, "Transfer-Encoding", "chunked");
