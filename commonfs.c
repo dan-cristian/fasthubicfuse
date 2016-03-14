@@ -2312,13 +2312,13 @@ void clear_full_cache()
 
 void print_options()
 {
-  fprintf(stderr, "verify_ssl = %lu\n", verify_ssl);
-  fprintf(stderr, "curl_progress_state = %lu\n", option_curl_progress_state);
+  fprintf(stderr, "verify_ssl = %d\n", verify_ssl);
+  fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
   fprintf(stderr, "segment_size = %lu\n", segment_size);
   fprintf(stderr, "segment_above = %lu\n", segment_above);
   fprintf(stderr, "debug_level = %d\n", option_debug_level);
   fprintf(stderr, "get_extended_metadata = %d\n", option_get_extended_metadata);
-  fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
+  fprintf(stderr, "curl_progress_state = %li\n", option_curl_progress_state);
   fprintf(stderr, "enable_chmod = %d\n", option_enable_chmod);
   fprintf(stderr, "enable_chown = %d\n", option_enable_chown);
   fprintf(stderr, "enable_progressive_download = %d\n",

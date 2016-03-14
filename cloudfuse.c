@@ -202,7 +202,9 @@ bool initialise_options(struct fuse_args args)
   return true;
 }
 
-
+/*
+  with lazy meta file size (and segmented status) can be incorrect
+*/
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
   debugf(DBG_NORM, KBLU "cfs_getattr(%s)", path);

@@ -420,6 +420,7 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
       }
       else if (!strncasecmp(head, HEADER_TEXT_IS_SEGMENTED, memsize))
       {
+        //FIX: do not rely on this optional field
         de->is_segmented = atoi(value);
         debugf(DBG_EXT, "header_get_meta_dispatch: manual is_segmented=%d",
                de->is_segmented);
@@ -439,6 +440,7 @@ static size_t header_get_meta_dispatch(void* ptr, size_t size, size_t nmemb,
       //  de->segment_size = atol(value);
       else if (!strncasecmp(head, HEADER_TEXT_FILE_SIZE, memsize))
       {
+        //FIX: do not rely on this optional field
         if (de->is_segmented)
         {
           size_t file_size = atol(value);
@@ -2222,6 +2224,9 @@ int cloudfs_object_truncate(dir_entry* de, off_t size)
 /*get metadata from cloud, like time attribs. create new entry if not cached yet.
   if force_segment is true then segments list/meta will be dowloaded
   if foce_meta is true then meta is downloaded (meta is false on lazy load)
+
+  FIXME: with lazy meta file size (and segmented status) can be incorrect
+  as they rely on optional fields. fix is to check if optional fields exists?
 */
 bool get_file_metadata(dir_entry* de, bool force_segment_update,
                        bool force_meta)
