@@ -3079,6 +3079,7 @@ static size_t writefunc_string(void* contents, size_t size, size_t nmemb,
 
 char* htmlStringGet(CURL* curl)
 {
+  debugf(DBG_EXT, "htmlStringGet: starting");
   struct htmlString chunk;
   chunk.text = malloc(sizeof(char));
   chunk.size = 0;
@@ -3090,6 +3091,7 @@ char* htmlStringGet(CURL* curl)
   }
   while (chunk.size == 0);
   chunk.text[chunk.size] = '\0';
+  debugf(DBG_EXT, "htmlStringGet: done, result=[%s]", chunk.text);
   return chunk.text;
 }
 
@@ -3172,6 +3174,7 @@ int cloudfs_connect()
   curl_easy_setopt(curl, CURLOPT_PASSWORD, HUBIC_CLIENT_SECRET);
   curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
   char* json_str = htmlStringGet(curl);
+
   json_obj = json_tokener_parse(json_str);
   debugf(DBG_NORM, "HUBIC TOKEN_URL result: '%s'\n", json_str);
   free(json_str);
