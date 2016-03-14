@@ -1043,9 +1043,12 @@ static int send_request_size(const char* method, const char* encoded_path,
       assert(curl_easy_setopt(curl, CURLOPT_POST, 1L) == CURLE_OK);
       assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0L) == CURLE_OK);
       //does not work in ubuntu
-      //assert(curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS,
-      //                        10000L) == CURLE_OK);
-
+#ifdef CURLOPT_EXPECT_100_TIMEOUT_MS
+      assert(curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS,
+                              10000L) == CURLE_OK);
+#else
+      debugf(DBG_ERR, KRED "curl CURLOPT_EXPECT_100_TIMEOUT_MS not found");
+#endif
       //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
       //add_header(&headers, "Transfer-Encoding", "chunked");
       //add_header(&headers, "Expect", "");
@@ -3085,12 +3088,14 @@ char* htmlStringGet(CURL* curl)
   chunk.size = 0;
   chunk.text[0] = '\0';//added to avoid valgrind unitialised warning
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
+  int loops = 0;
   do
   {
     curl_easy_perform(curl);
     debugf(DBG_EXT, "htmlStringGet: perform done, size=%lu", chunk.size);
+    loops++;
   }
-  while (chunk.size == 0);
+  while (chunk.size == 0 && loops < REQUEST_RETRIES);
   chunk.text[chunk.size] = '\0';
   debugf(DBG_EXT, "htmlStringGet: done, result=[%s]", chunk.text);
   return chunk.text;
@@ -3175,7 +3180,6 @@ int cloudfs_connect()
   curl_easy_setopt(curl, CURLOPT_PASSWORD, HUBIC_CLIENT_SECRET);
   curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
   char* json_str = htmlStringGet(curl);
-
   json_obj = json_tokener_parse(json_str);
   debugf(DBG_NORM, "HUBIC TOKEN_URL result: '%s'\n", json_str);
   free(json_str);
