@@ -3088,6 +3088,7 @@ char* htmlStringGet(CURL* curl)
   do
   {
     curl_easy_perform(curl);
+    debugf(DBG_EXT, "htmlStringGet: perform done, size=%lu", chunk.size);
   }
   while (chunk.size == 0);
   chunk.text[chunk.size] = '\0';
