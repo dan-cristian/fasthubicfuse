@@ -3140,10 +3140,11 @@ int cloudfs_connect()
   char payload[HUBIC_OPTIONS_SIZE];
   struct json_object* json_obj;
   pthread_mutex_lock(&pool_mut);
-  debugf(DBG_NORM, "Authenticating... (client_id = '%s')",
-         HUBIC_CLIENT_ID);
+  debugf(DBG_NORM, "Authenticating... (client_id = '%s')", HUBIC_CLIENT_ID);
   storage_token[0] = storage_url[0] = '\0';
+  debugf(DBG_NORM, "CURL init...");
   CURL* curl = curl_easy_init();
+  debugf(DBG_NORM, "CURL init OK...");
   /* curl default options */
   curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
