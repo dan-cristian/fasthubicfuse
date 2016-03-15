@@ -1705,6 +1705,9 @@ bool int_convert_first_segment_th(dir_entry* de)
 */
 bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
 {
+  debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): starting",
+         de_seg->full_name);
+
   assert(fflush(de_seg->upload_buf.local_cache_file) == 0);
   off_t seg_size_disk = get_file_size(de_seg->upload_buf.local_cache_file);
   debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s) cache_size=%lu",
@@ -1798,47 +1801,36 @@ void internal_upload_segment_progressive(void* arg)
       assert(complete_job_md5(job));
       assert(job->md5str);
     }
-    //if error, might be because there is no parent storage created
-    if (!op_ok && de_tmp->segment_part == 0 && response == 404)
+
+    //check if md5 computed locally matches cloud md5
+    //de_seg->md5sum is null on failed upload
+    if (job->de_seg && (!de_tmp->md5sum
+                        || strcasecmp(de_tmp->md5sum, job->md5str)))
     {
-      debugf(DBG_EXT, KYEL "int_upload_seg_prog(%s): error response=%d",
-             de->name, response);
-      //first: try to create parent segment storage
-      if (i == 0)
-        cloudfs_create_directory(HUBIC_SEGMENT_STORAGE_ROOT);
+      //most likely upload was interrupted by server/network, need to retry
+      debugf(DBG_EXT, KRED
+             "int_upload_seg_prog(%s): md5sum ERR de_seg=%s try=%d sizeproc=%lu",
+             de->name, de_tmp->name, i, de_tmp->upload_buf.size_processed);
+      sleep_ms(5000);
+      de_tmp->upload_buf.feed_from_cache = true;
+      md5err = true;
+      debugf(DBG_EXT,
+             "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
+             de_tmp->name, de_tmp->upload_buf.size_processed);
+      //unblock cfs_write to go into cache data feed
+      sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
+      op_ok = false;
     }
     else
     {
-      //check if md5 computed locally matches cloud md5
-      //de_seg->md5sum is null on failed upload
-      if (job->de_seg && (!de_tmp->md5sum
-                          || strcasecmp(de_tmp->md5sum, job->md5str)))
-      {
-        //most likely upload was interrupted by server/network, need to retry
-        debugf(DBG_EXT, KRED
-               "int_upload_seg_prog(%s): md5sum ERR de_seg=%s try=%d sizeproc=%lu",
-               de->name, de_tmp->name, i, de_tmp->upload_buf.size_processed);
-        sleep_ms(5000);
-        de_tmp->upload_buf.feed_from_cache = true;
-        md5err = true;
-        debugf(DBG_EXT,
-               "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
-               de_tmp->name, de_tmp->upload_buf.size_processed);
-        //unblock cfs_write to go into cache data feed
-        sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
-        op_ok = false;
-      }
-      else
-      {
-        debugf(DBG_EXT, KMAG
-               "int_upload_seg_prog(%s): de_seg=%s try=%d "KGRN"md5sum/size OK",
-               de_tmp->name, de_tmp->full_name, i);
-        //in case segment meta download failed set md5sum for later check in cfs_flush
-        if (!de_tmp->md5sum)
-          de_tmp->md5sum = strdup(job->md5str);
-        md5err = false;
-        break;
-      }
+      debugf(DBG_EXT, KMAG
+             "int_upload_seg_prog(%s): de_seg=%s try=%d "KGRN"md5sum/size OK",
+             de_tmp->name, de_tmp->full_name, i);
+      //in case segment meta download failed set md5sum for later check in cfs_flush
+      if (!de_tmp->md5sum)
+        de_tmp->md5sum = strdup(job->md5str);
+      md5err = false;
+      break;
     }
   }
 

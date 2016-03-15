@@ -1649,5 +1649,7 @@ int main(int argc, char** argv)
   pthread_mutexattr_settype(&segment_mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
   //init control thread
   pthread_create(&control_thread, NULL, (void*)control_thread_run, NULL);
+  //create parent segment storage (might exist already)
+  cloudfs_create_directory(HUBIC_SEGMENT_STORAGE_ROOT);
   return fuse_main(args.argc, args.argv, &cfs_oper, &options);
 }
