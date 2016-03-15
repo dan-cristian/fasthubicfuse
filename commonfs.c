@@ -2229,15 +2229,31 @@ void unlink_cache_segments(dir_entry* de)
   char segment_parent_dir_path[PATH_MAX] = { 0 };
   dir_entry* de_seg = de->segments;
 
-  while (de_seg)
+  do
   {
+    //ensure we remove first segment
     get_safe_cache_file_path(de->full_name, segment_file_path,
                              segment_parent_dir_path,
-                             temp_dir, de_seg->segment_part);
-    unlink(segment_file_path);
-    de_seg = de_seg->next;
+                             temp_dir, de_seg ? de_seg->segment_part : 0);
+    if (unlink(segment_file_path) != 0)
+      debugf(DBG_ERR, "unlink_cache_segments(%s): error del file [%s]",
+             segment_file_path, strerror(errno));
+    else
+      debugf(DBG_EXT, "unlink_cache_segments(%s): removed file ok",
+             segment_file_path);
+    if (!de_seg)
+      break;
+    else
+      de_seg = de_seg->next;
   }
-  rmdir(segment_parent_dir_path);
+  while (de_seg);
+
+  if (rmdir(segment_parent_dir_path) != 0)
+    debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
+           segment_parent_dir_path, strerror(errno));
+  else
+    debugf(DBG_EXT, "unlink_cache_segments(%s): removed dir ok",
+           segment_parent_dir_path);
 }
 
 void sleep_ms(int milliseconds)

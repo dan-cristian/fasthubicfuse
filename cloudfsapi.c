@@ -1043,12 +1043,12 @@ static int send_request_size(const char* method, const char* encoded_path,
       assert(curl_easy_setopt(curl, CURLOPT_POST, 1L) == CURLE_OK);
       assert(curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0L) == CURLE_OK);
       //does not work in ubuntu
-#ifdef CURLOPT_EXPECT_100_TIMEOUT_MS
+//#ifdef CURLOPT_EXPECT_100_TIMEOUT_MS
       assert(curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS,
                               10000L) == CURLE_OK);
-#else
-      debugf(DBG_ERR, KRED "curl CURLOPT_EXPECT_100_TIMEOUT_MS not found");
-#endif
+//#else
+//      debugf(DBG_ERR, KRED "curl CURLOPT_EXPECT_100_TIMEOUT_MS not found");
+//#endif
       //curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &header_dispatch);
       //add_header(&headers, "Transfer-Encoding", "chunked");
       //add_header(&headers, "Expect", "");

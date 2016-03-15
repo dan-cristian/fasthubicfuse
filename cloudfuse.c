@@ -845,7 +845,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         //free md5sum holders
         free_thread_job(de_upload->job);
         free_thread_job(de_upload->job2);
-        dir_decache_upload(de_upload->full_name);
       }
     }
     else if (!de_upload->is_segmented)
@@ -896,21 +895,21 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       //free md5sum holders
       if (de_upload->job)
         free_thread_job(de_upload->job);
-      dir_decache_upload(de_upload->full_name);
     }
     else
       debugf(DBG_EXT, "cfs_flush(%s): no need to wait!?", de->name);
-
+    //delete cached folder
+    unlink_cache_segments(de_upload);
+    dir_decache_upload(de_upload->full_name);
   }
   else//not upload
   {
+    unlink_cache_segments(de);
     debugf(DBG_EXT, KMAG
            "cfs_flush(%s): non-upload done, size=%lu", path, de->size);
   }
   errsv = 0;
-
   close_lock_file(de->full_name, info->fh);
-  unlink_cache_segments(de);
   debugf(DBG_NORM, KBLU "exit 1: cfs_flush(%s) result=%d:%s", path, errsv,
          strerror(errsv));
   return result;
