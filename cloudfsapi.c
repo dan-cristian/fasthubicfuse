@@ -839,6 +839,7 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   size_t max_size_to_upload;
   int sem_val_empty, sem_val_full;
   //wait to get fuse buffer data
+  //fixme: sometimes freezes here
   sem_wait(de->upload_buf.sem_list[SEM_FULL]);
   //ensure we upload no more than fuse buf available
   max_size_to_upload = min(http_buf_size, de->upload_buf.work_buf_size);
@@ -934,6 +935,7 @@ static int send_request_size(const char* method, const char* encoded_path,
   //needed to keep the response data, for debug purposes
   struct MemoryStruct chunk;
   assert(storage_url[0]);
+  dir_entry* de_tmp = de_seg ? de_seg : de;
 
   char* path, *orig_path;
   const char* print_path;
@@ -1013,13 +1015,13 @@ static int send_request_size(const char* method, const char* encoded_path,
     if (!strcasecmp(method, HTTP_PUT) //|| !strcasecmp(method, "MKDIR")
         || !strcasecmp(method, HTTP_POST))
     {
-      debugf(DBG_EXTALL, "send_request_size: Saving utimens for file %s",
+      debugf(DBG_EXTALL, "send_request_size: set utimens for file %s",
              orig_path);
       //on rename de is null
       if (de)
       {
         debugf(DBG_EXTALL,
-               "send_request_size: Cached utime for path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
+               "send_request_size: utime is path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
                orig_path,
                de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
                de->atime.tv_sec, de->atime.tv_nsec);
@@ -1276,7 +1278,12 @@ static int send_request_size(const char* method, const char* encoded_path,
       sleep_ms(1000);
       //retry forever until internet is back
       tries--;
-      //fixme: unblock potential sem_wait deadlocks
+      if (is_upload)
+      {
+        //fixme: unblock potential sem_wait deadlocks
+        //notify cfs_flush that a data feed from cache is needed
+        de_tmp->upload_buf.feed_from_cache = true;
+      }
     }
 
     //something went really wrong
@@ -1703,17 +1710,25 @@ bool int_convert_first_segment_th(dir_entry* de)
 /*
   feeds data into http buffer from cache file, similar with cfs_write
 */
-bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
+bool int_cfs_write_cache_data_feed(dir_entry* de)
 {
   debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): starting",
-         de_seg->full_name);
+         de->name);
+  int res = fflush(de->upload_buf.local_cache_file);
 
-  assert(fflush(de_seg->upload_buf.local_cache_file) == 0);
-  off_t seg_size_disk = get_file_size(de_seg->upload_buf.local_cache_file);
+  //assert(fflush(de->upload_buf.local_cache_file) == 0);
+  if (res == 0)
+    debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): flushed ok",
+           de->name);
+  else
+    debugf(DBG_EXT, KRED "int_cfs_write_cache_data_feed(%s): flushed error=%d",
+           de->name, res);
+
+  off_t seg_size_disk = get_file_size(de->upload_buf.local_cache_file);
   debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s) cache_size=%lu",
-         de_seg->full_name, seg_size_disk);
+         de->full_name, seg_size_disk);
   //rewind to provide data for http upload from local cache
-  assert(fseek(de_seg->upload_buf.local_cache_file, 0, SEEK_SET) == 0);
+  assert(fseek(de->upload_buf.local_cache_file, 0, SEEK_SET) == 0);
   char* cache_buf = malloc(BUFFER_READ_SIZE);
   off_t read_len;
   off_t ptr_offset = 0;
@@ -1721,41 +1736,41 @@ bool int_cfs_write_cache_data_feed(dir_entry* de_seg)
   do
   {
     read_len = fread(cache_buf, 1, BUFFER_READ_SIZE,
-                     de_seg->upload_buf.local_cache_file);
+                     de->upload_buf.local_cache_file);
     debugf(DBG_EXT, KMAG
            "int_cfs_write_cache(%s): read file size=%lu",
-           de_seg->name, read_len);
+           de->name, read_len);
     if (read_len > 0)
     {
-      de_seg->upload_buf.work_buf_size = read_len;
-      while (de_seg->upload_buf.work_buf_size > 0)
+      de->upload_buf.work_buf_size = read_len;
+      while (de->upload_buf.work_buf_size > 0)
       {
         debugf(DBG_EXT, KMAG
                "int_cfs_write_cache(%s): looping workbufsize=%lu",
-               de_seg->name, de_seg->upload_buf.work_buf_size);
+               de->name, de->upload_buf.work_buf_size);
         //index in buffer to resume upload in a new segment
-        ptr_offset = read_len - de_seg->upload_buf.work_buf_size;
-        de_seg->upload_buf.readptr = cache_buf + ptr_offset;
+        ptr_offset = read_len - de->upload_buf.work_buf_size;
+        de->upload_buf.readptr = cache_buf + ptr_offset;
         //signal there is data available in buffer for upload
-        if (de_seg->upload_buf.sem_list[SEM_FULL])
-          sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
+        if (de->upload_buf.sem_list[SEM_FULL])
+          sem_post(de->upload_buf.sem_list[SEM_FULL]);
         //wait until previous buffer data is uploaded
-        if (de_seg->upload_buf.sem_list[SEM_EMPTY])
-          sem_wait(de_seg->upload_buf.sem_list[SEM_EMPTY]);
+        if (de->upload_buf.sem_list[SEM_EMPTY])
+          sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
         debugf(DBG_EXT, KMAG
                "int_cfs_write_cache(%s): wait done, empty proc=%lu worksize=%lu",
-               de_seg->name, de_seg->upload_buf.size_processed,
-               de_seg->upload_buf.work_buf_size);
+               de->name, de->upload_buf.size_processed,
+               de->upload_buf.work_buf_size);
       }
     }
     else
       debugf(DBG_EXT, KMAG
-             "int_cfs_write_cache(%s): cache read done", de_seg->name);
+             "int_cfs_write_cache(%s): cache read done", de->name);
   }
   while (read_len > 0);
   debugf(DBG_EXT, KMAG
          "int_cfs_write_cache(%s): exit cache feed proc=%lu",
-         de_seg->name, de_seg->upload_buf.size_processed);
+         de->name, de->upload_buf.size_processed);
   free(cache_buf);
 }
 
@@ -1784,7 +1799,8 @@ void internal_upload_segment_progressive(void* arg)
     {
       restore_job_md5(de->job2);
       //wait until cache data is read and ready to feed into http
-      debugf(DBG_EXT, "int_upload_seg_prog(%s): waiting for http resume", de->name);
+      debugf(DBG_EXT, "int_upload_seg_prog(%s:%s): waiting for http resume",
+             de->name, de_tmp->name);
       //unblock potential wait for seg completion in cfs_flush
       sem_post(de_tmp->upload_buf.sem_list[SEM_DONE]);
       //fixme: sometimes it will freeze here, see cfs_flush note
@@ -1834,20 +1850,7 @@ void internal_upload_segment_progressive(void* arg)
     }
   }
 
-  //signal cfs_write (and cfs_flush?) we're done
-  unblock_semaphore(de_tmp->upload_buf.sem_list[SEM_EMPTY],
-                    de_tmp->upload_buf.sem_name_list[SEM_EMPTY]);
-  if (de_tmp->upload_buf.sem_list[SEM_EMPTY])
-    free_semaphores(&de_tmp->upload_buf, SEM_EMPTY);
-  if (de_tmp->upload_buf.sem_list[SEM_FULL])
-    free_semaphores(&de_tmp->upload_buf, SEM_FULL);
-  //don't free DONE semaphore on last segment upload, is freed in cfsflush
-  if (de_tmp->segment_part != de->segment_count - 1)
-  {
-    unblock_semaphore(de_tmp->upload_buf.sem_list[SEM_DONE],
-                      de_tmp->upload_buf.sem_name_list[SEM_DONE]);
-    free_semaphores(&de_tmp->upload_buf, SEM_DONE);
-  }
+
 
   if (!op_ok)
   {
@@ -1936,6 +1939,22 @@ void internal_upload_segment_progressive(void* arg)
     if (de_tmp->upload_buf.sem_list[SEM_DONE])
       sem_post(de_tmp->upload_buf.sem_list[SEM_DONE]);
   }
+
+  //signal cfs_write (and cfs_flush?) we're done
+  unblock_semaphore(de_tmp->upload_buf.sem_list[SEM_EMPTY],
+                    de_tmp->upload_buf.sem_name_list[SEM_EMPTY]);
+  if (de_tmp->upload_buf.sem_list[SEM_EMPTY])
+    free_semaphores(&de_tmp->upload_buf, SEM_EMPTY);
+  if (de_tmp->upload_buf.sem_list[SEM_FULL])
+    free_semaphores(&de_tmp->upload_buf, SEM_FULL);
+  //don't free DONE semaphore on last segment upload, is freed in cfsflush
+  //if (de_tmp->segment_part != de->segment_count - 1)
+  //{
+  unblock_semaphore(de_tmp->upload_buf.sem_list[SEM_DONE],
+                    de_tmp->upload_buf.sem_name_list[SEM_DONE]);
+  free_semaphores(&de_tmp->upload_buf, SEM_DONE);
+  //}
+
   //sometimes, de will be freed by now by cfs_flush
   debugf(DBG_EXT, "exit: internal_upload_segment_progressive");
   //free only if is true segment, keep first job for complete file md5sum
@@ -2772,7 +2791,8 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
         debugf(DBG_NORM, KRED
                "cloudfs_copy_object(%s): missing src segments expected %d vs %d",
                de->full_name, de->segment_count, src_seg_count);
-        cloudfs_free_dir_list(de_versions);
+        if (de_versions)
+          cloudfs_free_dir_list(de_versions);
         sleep_ms(1000 * iterations);
       }
     }
@@ -2855,7 +2875,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
       add_header(&headers, HEADER_TEXT_MANIFEST, new_de->manifest_time);
       add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
       add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
-      copy_dir_entry(de, new_de);
+      copy_dir_entry(de, new_de, false);
       int response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                        0, 0, new_de, NULL);
       //now file is updated on cloud
@@ -2959,9 +2979,11 @@ bool cloudfs_post_object_th(dir_entry* de)
   ca be done with COPY (slow) or with POST
   http://developer.openstack.org/api-ref-objectstorage-v1.html#updateObjectMeta
   http://www.17od.com/2012/12/19/ten-useful-openstack-swift-features/
+  if sync=true perform meta update on cloud synchro.
 */
-bool cloudfs_update_meta(dir_entry* de)
+bool cloudfs_update_meta(dir_entry* de, bool sync)
 {
+  debugf(DBG_EXT, "cloudfs_update_meta(%s) ", de->name);
   //copy version
   /*
     int response = cloudfs_copy_object(de->full_name, de->full_name);
@@ -2971,9 +2993,18 @@ bool cloudfs_update_meta(dir_entry* de)
   //POST version
   //NOTE: this is loosing the segmented meta data. add all fields before post!!!
   pthread_t thread;
-  pthread_create(&thread, NULL, (void*)cloudfs_post_object_th, de);
-  //bool response = cloudfs_post_object(de);
-  return true;
+  if (sync)
+  {
+    bool res = cloudfs_post_object(de);
+    close_lock_file(de->full_name, de->lock_fd);
+    return res;
+  }
+  else
+  {
+    pthread_create(&thread, NULL, (void*)cloudfs_post_object_th, de);
+    //bool response = cloudfs_post_object(de);
+    return true;
+  }
 }
 
 //optimised with cache

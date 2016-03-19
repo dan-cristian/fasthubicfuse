@@ -785,7 +785,6 @@ void create_manifest_meta(dir_entry* de)
   set_manifest_meta(de->full_name, de, META_MANIF_ALL);
 }
 
-
 /*
   populates segment standard fields
 */
@@ -994,8 +993,7 @@ void unblock_semaphore(sem_t* semaphore, char* name)
   {
     int sem_val1, sem_val2, i;
     sem_getvalue(semaphore, &sem_val1);
-    debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) start, val=%d",
-           name, sem_val1);
+    debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) start, val=%d", name, sem_val1);
     sem_post(semaphore);
     for (i = 0; i < 250; i++)
     {
@@ -1198,7 +1196,7 @@ void free_de_before_get(dir_entry* de)
 {
   debugf(DBG_EXTALL, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
   free(de->md5sum_local);
-  de->md5sum_local = strdup("");//why not set to null
+  de->md5sum_local = NULL;//why not set to null
   free_de_before_head(de);
 }
 
@@ -1246,7 +1244,7 @@ void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
 /*
   duplicate a dir_entry, does not overwrite name fields
 */
-void copy_dir_entry(dir_entry* src, dir_entry* dst)
+void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
 {
   debugf(DBG_EXT, KCYN"copy_dir_entry(%s->%s)",
          src->name ? src->name : "nul", dst->name ? dst->name : "nul");
@@ -1296,19 +1294,21 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
     free(dst->content_type);
   if (src->content_type)
     dst->content_type = strdup(src->content_type);
-  if (!dst->manifest_cloud)
-    free(dst->manifest_cloud);
-  if (src->manifest_cloud)
-    dst->manifest_cloud = strdup(src->manifest_cloud);
-  if (!dst->manifest_time)
-    free(dst->manifest_time);
-  if (src->manifest_time)
-    dst->manifest_time = strdup(src->manifest_time);
-  if (!dst->manifest_seg)
-    free(dst->manifest_seg);
-  if (src->manifest_seg)
-    dst->manifest_seg = strdup(src->manifest_seg);
-
+  if (copy_manifests)
+  {
+    if (!dst->manifest_cloud)
+      free(dst->manifest_cloud);
+    if (src->manifest_cloud)
+      dst->manifest_cloud = strdup(src->manifest_cloud);
+    if (!dst->manifest_time)
+      free(dst->manifest_time);
+    if (src->manifest_time)
+      dst->manifest_time = strdup(src->manifest_time);
+    if (!dst->manifest_seg)
+      free(dst->manifest_seg);
+    if (src->manifest_seg)
+      dst->manifest_seg = strdup(src->manifest_seg);
+  }
   //fixme: segments not copied ok
   if (src->segments)
   {
@@ -1318,7 +1318,7 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst)
     dst->segments = dst_seg;
     while (src_seg)
     {
-      copy_dir_entry(src_seg, dst_seg);
+      copy_dir_entry(src_seg, dst_seg, false);
       src_seg = src_seg->next;
       if (src_seg)
       {
@@ -1878,18 +1878,29 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 {
   assert(*fp == NULL);
   char file_path[NAME_MAX] = { 0 };
-  get_safe_cache_file_path(de->full_name, file_path, NULL, temp_dir, -1);
+  //use seg_part=0 (not -1) to ensure data is saved in cache segment folder
+  get_safe_cache_file_path(de->full_name, file_path, NULL, temp_dir, 0);
   bool file_exist = access(file_path, F_OK) != -1;
+  int err = errno;
+  if (!file_exist)
+    debugf(DBG_EXTALL, KMAG "open_file_in_cache(%s) cannot access, err=%s",
+           file_path, strerror(err));
   *fp = fopen(file_path, method[0] == 'G' ?
               (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
-  int err = errno;
-  assert(*fp);
+  err = errno;
+  if (!fp)
+  {
+    debugf(DBG_EXTALL, KRED "open_file_in_cache(%s): cannot open, err=%s",
+           file_path, strerror(err));
+    abort();
+  }
   if (file_exist)
   {
     debugf(DBG_EXTALL, KMAG "open_file_in_cache(%s) ok", file_path);
     int fno = fileno(*fp);
     assert(fno != -1);
   }
+
   return file_exist;
 }
 
@@ -1904,9 +1915,10 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   debugf(DBG_EXTALL, KMAG"open_file_cache_md5: open fp=%p", *fp);
   if (file_exist)
   {
-    debugf(DBG_EXTALL, KMAG "open_file_cache_md5: found file md5=%s",
+    debugf(DBG_EXTALL, KMAG "open_file_cache_md5: found file, md5=%s",
            de->md5sum);
     //check if segment is in cache, with md5sum ok
+    //fixme: sometimes md5sum_local = "" (not null)!
     if (de->md5sum_local == NULL)
     {
       char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = "\0";
@@ -1915,20 +1927,22 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
     }
     else
       debugf(DBG_EXTALL, KMAG
-             "open_file_cache_md5: md5sum_local=%s md5sum=%s",
+             "open_file_cache_md5: md5sum_local=%s, md5sum=%s",
              de->md5sum_local, de->md5sum);
     bool match = (de && de->md5sum != NULL
                   && (!strcasecmp(de->md5sum_local, de->md5sum)));
     if (!match)
     {
-      debugf(DBG_EXT, "open_file_cache_md5: "
-             KYEL "no match, md5sum_local=%s md5sum=%s",
-             de->md5sum_local, de->md5sum);
+      debugf(DBG_EXT, "open_file_cache_md5: " KYEL
+             "no match, md5sum_local=%s, md5sum=%s", de->md5sum_local, de->md5sum);
       free(de->md5sum_local);
       de->md5sum_local = NULL;
     }
     return match;
   }
+  else
+    debugf(DBG_EXTALL, KMAG "open_file_cache_md5(%s): file not in cache",
+           de->name);
   return false;
 }
 
@@ -2046,7 +2060,7 @@ void flags_to_openmode(unsigned int flags, char* openmode)
 
 
 void add_lock_file(const char* path, const char* open_flags,
-                   FILE* temp_file, int fd)
+                   FILE* temp_file, int fd, char* fuse_op)
 {
   debugf(DBG_EXT, "add_lock_file(%s): mode=%s fd=%d",
          path, open_flags, fd);
@@ -2056,6 +2070,7 @@ void add_lock_file(const char* path, const char* open_flags,
   of->path = strdup(path);
   of->open_flags = strdup(open_flags);
   of->opened = get_time_now();
+  of->fuse_operation = strdup(fuse_op);
   //todo: search for process that opened the file in /proc/pid/fd
   //of->process_origin = ? ;
   if (openfile_list)
@@ -2093,6 +2108,7 @@ bool close_lock_file(const char* path, int fd)
         fclose(of->cached_file);
         free(of->path);
         free(of->open_flags);
+        free(of->fuse_operation);
         free(of);
         if (prev)
           prev->next = of->next;
@@ -2123,13 +2139,13 @@ bool close_lock_file(const char* path, int fd)
   if file is open for read, a read lock can be obtained
   if file is open for write, no lock can be obtained
 */
-bool can_add_lock(const char* path, char* open_flags)
+bool can_add_lock(const char* path, char* open_flags, char* fuse_op)
 {
   open_file* of = openfile_list;
   while (of)
   {
-    debugf(DBG_EXT, KCYN "can_add_lock(%s, flags=%s): iterate [%s, %s]", path,
-           open_flags, of->open_flags, of->path);
+    debugf(DBG_EXT, KCYN "can_add_lock(%s, %s, flags=%s): iterate [%s, %s, %s]",
+           path, fuse_op, open_flags, of->open_flags, of->path, of->fuse_operation);
     if (!strcasecmp(of->path, path))
     {
       //if try to open for write and hard lock exists, fail
@@ -2144,8 +2160,8 @@ bool can_add_lock(const char* path, char* open_flags)
     }
     of = of->next;
   }
-  debugf(DBG_EXT, KCYN "can_add_lock(%s, flags=%s): can add OK", path,
-         open_flags);
+  debugf(DBG_EXT, KCYN "can_add_lock(%s, %s, flags=%s): can add OK",
+         path, fuse_op, open_flags);
   return true;
 }
 
@@ -2155,7 +2171,7 @@ bool can_add_lock(const char* path, char* open_flags)
   and returns file descriptor.
   return -1 if lock can't be obtained
 */
-int open_lock_file(const char* path, unsigned int flags)
+int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
 {
   debugf(DBG_EXT, "open_lock_file(%s): flags=%d", path, flags);
   FILE* temp_file = NULL;
@@ -2165,13 +2181,14 @@ int open_lock_file(const char* path, unsigned int flags)
   flags_to_openmode(flags, open_flags);
   int i;
   bool can_add;
-  //for (i = 0; i < LOCK_WAIT_SEC; i++)
-  //{
-  can_add = can_add_lock(path, open_flags);
-  /*  if (can_add)
+  //wait until lock is removed, can happen on async POST (meta update) operations
+  for (i = 0; i < LOCK_WAIT_SEC * (1000 / 250); i++)
+  {
+    can_add = can_add_lock(path, open_flags, fuse_op);
+    if (can_add)
       break;
-    else sleep_ms(1000);
-    }*/
+    else sleep_ms(250);
+  }
 
   if (!can_add)
   {
@@ -2197,7 +2214,7 @@ int open_lock_file(const char* path, unsigned int flags)
   }
   int fd = fileno(temp_file);
   assert(fd != -1);
-  add_lock_file(path, open_flags, temp_file, fd);
+  add_lock_file(path, open_flags, temp_file, fd, fuse_op);
   return fd;
 }
 
@@ -2229,31 +2246,36 @@ void unlink_cache_segments(dir_entry* de)
   char segment_parent_dir_path[PATH_MAX] = { 0 };
   dir_entry* de_seg = de->segments;
 
-  do
+  if (de->segments)
   {
-    //ensure we remove first segment
-    get_safe_cache_file_path(de->full_name, segment_file_path,
-                             segment_parent_dir_path,
-                             temp_dir, de_seg ? de_seg->segment_part : 0);
-    if (unlink(segment_file_path) != 0)
-      debugf(DBG_ERR, "unlink_cache_segments(%s): error del file [%s]",
-             segment_file_path, strerror(errno));
-    else
-      debugf(DBG_EXT, "unlink_cache_segments(%s): removed file ok",
-             segment_file_path);
-    if (!de_seg)
-      break;
-    else
-      de_seg = de_seg->next;
-  }
-  while (de_seg);
+    do
+    {
+      //ensure we remove first segment
+      get_safe_cache_file_path(de->full_name, segment_file_path,
+                               segment_parent_dir_path,
+                               temp_dir, de_seg ? de_seg->segment_part : 0);
+      if (unlink(segment_file_path) != 0)
+        debugf(DBG_ERR, "unlink_cache_segments(%s): error del file [%s]",
+               segment_file_path, strerror(errno));
+      else
+        debugf(DBG_EXT, "unlink_cache_segments(%s): removed file ok",
+               segment_file_path);
+      if (!de_seg)
+        break;
+      else
+        de_seg = de_seg->next;
+    }
+    while (de_seg);
 
-  if (rmdir(segment_parent_dir_path) != 0)
-    debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
-           segment_parent_dir_path, strerror(errno));
-  else
-    debugf(DBG_EXT, "unlink_cache_segments(%s): removed dir ok",
-           segment_parent_dir_path);
+    if (rmdir(segment_parent_dir_path) != 0)
+      debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
+             segment_parent_dir_path, strerror(errno));
+    else
+      debugf(DBG_EXT, "unlink_cache_segments(%s): removed dir ok",
+             segment_parent_dir_path);
+  }
+  else debugf(DBG_EXT, "unlink_cache_segments(%s): skipped null segments",
+                de->name);
 }
 
 void sleep_ms(int milliseconds)

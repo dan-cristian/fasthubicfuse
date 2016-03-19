@@ -73,7 +73,7 @@ char* public_container;
 
 
 bool int_convert_first_segment_th(dir_entry* de);
-bool int_cfs_write_cache_data_feed(dir_entry* de_seg);
+bool int_cfs_write_cache_data_feed(dir_entry* de);
 const char* get_file_mimetype (const char* filename);
 int cloudfs_list_directory(const char* path, dir_entry**);
 bool cloudfs_delete_object(dir_entry* de);
@@ -88,7 +88,7 @@ off_t cloudfs_file_size(int fd);
 int cloudfs_statfs(const char* path, struct statvfs* stat);
 bool get_file_metadata(dir_entry* de, bool force_segment_update,
                        bool force_meta);
-bool cloudfs_update_meta(dir_entry* de);
+bool cloudfs_update_meta(dir_entry* de, bool sync);
 //int cloudfs_object_upload_progressive(dir_entry* de, dir_entry* de_seg);
 void* cloudfs_object_downld_progressive(void* path);
 int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,

@@ -23,7 +23,7 @@ typedef enum { false, true } bool;
 #define MAX_COPY_THREADS 10
 #define REQUEST_RETRIES 5
 #define BUFFER_READ_SIZE 128 * 1024
-#define INTERNET_TIMEOUT_SEC 100
+#define INTERNET_TIMEOUT_SEC 180
 #define OPTION_SIZE 1024
 
 #define FILE_OPEN_MODE_READ 32768
@@ -111,7 +111,7 @@ typedef enum { false, true } bool;
 
 #define FUSE_FLAG_O_RDONLY 32768
 #define FUSE_FLAG_O_WRONLY 32769
-#define LOCK_WAIT_SEC 5
+#define LOCK_WAIT_SEC 10
 
 typedef struct
 {
@@ -242,6 +242,7 @@ typedef struct open_file
   FILE* cached_file;
   int fd;
   char* process_origin;
+  char* fuse_operation;
   struct open_file* next;
 } open_file;
 
@@ -308,7 +309,7 @@ void free_thread_copy_job(thread_copy_job* job);
 thread_job* init_thread_job(char* job_name);
 void free_thread_job(thread_job* job);
 void create_dir_entry(dir_entry* de, const char* path);// , mode_t mode);
-void copy_dir_entry(dir_entry* src, dir_entry* dst);
+void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);
 void debug_print_file_name(FILE* fp);
@@ -353,7 +354,7 @@ bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
 bool close_lock_file(const char* path, int fd);
-int open_lock_file(const char* path, unsigned int flags);
+int open_lock_file(const char* path, unsigned int flags, char* fuse_op);
 bool update_lock_file(const char* path, int fd, const char* search_flag,
                       const char* new_flag);
 void interrupt_handler(int sig);

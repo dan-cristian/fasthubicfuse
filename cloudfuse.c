@@ -264,7 +264,11 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
       //so add this meta for future speed improvements
       debugf(DBG_NORM, "cfs_getattr(%s):" KYEL
              " update meta to latest fields (add size)", de->name);
-      cloudfs_update_meta(de);
+      int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY, "getattr-size");
+      if (fd == -1)
+        return -EBUSY;
+      de->lock_fd = fd;
+      cloudfs_update_meta(de, true);
     }
   }
   if (option_enable_chown && de->uid != -1 && de->gid != -1)
@@ -377,17 +381,14 @@ static int cfs_mkdir(const char* path, mode_t mode)
   }
   debugf(DBG_NORM, KRED "exit 1: cfs_mkdir(%s) response=%d", path,
          response);
-  return
-
-
-    -ENOENT;
+  return -ENOENT;
 }
 
 static int cfs_create(const char* path, mode_t mode,
                       struct fuse_file_info* info)
 {
   debugf(DBG_NORM, KBLU "cfs_create(%s)", path);
-  int fd = open_lock_file(path, info->flags);
+  int fd = open_lock_file(path, info->flags, "create");
   if (fd == -1)
     return -EBUSY;
   info->fh = (uintptr_t)fd;
@@ -404,6 +405,7 @@ static int cfs_create(const char* path, mode_t mode,
 
   //create empty file
   int result = cloudfs_create_object(de);
+  close_lock_file(path, fd);
   if (!result)
   {
     debugf(DBG_NORM, KRED"exit: cfs_create(%s), create failed", path);
@@ -431,7 +433,7 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   if (!de)
     return -ENOENT;
   //create/open file in cache so we can manage concurrent operations on same file
-  int fd = open_lock_file(path, info->flags);
+  int fd = open_lock_file(path, info->flags, "open");
   if (fd == -1)
   {
     debugf(DBG_ERR, KRED "exit: cfs_open(%s) lock failed", path);
@@ -638,8 +640,11 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         fp_file = NULL;
         in_cache = open_file_cache_md5(de, &fp_file, HTTP_GET);
         if (!in_cache)
-          debugf(DBG_EXT, KYEL
-                 "cfs_read: download failed file=%s", de->name);
+        {
+          debugf(DBG_EXT, KRED
+                 "cfs_read(%s): download failed, cache not ok, file=%s", path, de->name);
+          abort();
+        }
         else
           debugf(DBG_EXT, "cfs_read: download OK file=%s", de->name);
       }
@@ -686,44 +691,36 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
     debugf(DBG_NORM, KRED "cfs_flush: received NULL path");
     return 0;
   }
-
-  debug_print_descriptor(info);
   int errsv = 0;
   dir_entry* de = check_path_info(path);
   update_cache_access(de);
   dir_entry* de_upload = check_path_info_upload(path);
-
   if (!de_upload)
     assert(de);
 
   if (de_upload)
   {
-    debugf(DBG_EXT, KMAG
-           "cfs_flush(%s): signal upload done, size=%lu", path, de_upload->size);
-
+    debugf(DBG_EXT, KMAG "cfs_flush(%s): signal upload done, size=%lu",
+           path, de_upload->size);
     //on cfs_create empty file segment count is 0, no need to enter here
     if (de_upload->is_segmented && de_upload->segment_count > 0)
     {
       dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
       assert(de_seg);
-      //close-flushes last cache file. pevious are closed in cfs_write
-      assert(de_seg->upload_buf.local_cache_file);
-      fclose(de_seg->upload_buf.local_cache_file);
       //will be blocked until http upload trully terminates
-      debugf(DBG_EXT, KMAG "cfs_flush(%s): seg_count=%d",
-             de_upload->name, de_upload->segment_count);
+      debugf(DBG_EXT, KMAG "cfs_flush(%s): seg_count=%d", de_upload->name,
+             de_upload->segment_count);
       //unblock the last segment wait in http callback
       if (de_seg->upload_buf.sem_list[SEM_FULL])
       {
-        debugf(DBG_EXT, KMAG "cfs_flush(%s): wait upload completion",
-               de_upload->name);
+        debugf(DBG_EXT, KMAG "cfs_flush(%s): wait upload completion, last=%s",
+               de_upload->name, de_seg->name);
+        //notify data feed is done
         sem_post(de_seg->upload_buf.sem_list[SEM_FULL]);
         //wait until upload and cleanup of previous versions fully completes
         //otherwise errors will be thrown by rsync (due to early rename)
         //fixme: sometimes we get freeze
         sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
-        //signal free of semaphores is safe now
-        free_semaphores(&de_seg->upload_buf, SEM_DONE);
         //check if all previous segment uploads are done (except last)
         //sometimes prev uploads are still in progress
         int seg_index;
@@ -761,14 +758,18 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
               }
               pending = true;
             }
-            debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
-                   de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
+            else
+              debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
+                     de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
           }
           if (pending)
             sleep_ms(200);
           loops++;
         }
         while (pending && loops < 120);
+
+        //signal free of last semaphore is safe now
+        //free_semaphores(&de_seg->upload_buf, SEM_DONE);
 
         //if operation completed ok calculate file cumulative segment etag
         if (!pending)
@@ -788,13 +789,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           de_upload->md5sum_local = strdup(job->md5str);
           free_thread_job(job);
         }
-
         //complete md5sum using fuse provided content
         complete_job_md5(de_upload->job);
         //complete md5sum using http uploaded content
         complete_job_md5(de_upload->job2);
-
-        close_lock_file(de_upload->full_name, info->fh);
 
         if (pending)
         {
@@ -820,11 +818,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         //fixme: sometimes last segment is not yet visible on cloud
         //copy dir_entry for to have segment list complete
         if (de_upload->has_unvisible_segments)
-          copy_dir_entry(de_upload, de);
-        else
-        {
-          //
-        }
+          copy_dir_entry(de_upload, de, true);
 
         //mark file meta as obsolete to force a reload (for md5sums mostly)
         //if has unvisible segments update_segments in get_file_meta will skip
@@ -832,10 +826,19 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         bool meta_ok = get_file_metadata(de, true, true);
         if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
         {
-          //md5sums are different, upload is corrupt
-          debugf(DBG_EXT, KRED
-                 "cfs_flush(%s): etags md5sum not match, cloud(%s) local(%s)",
-                 de_upload->name, de->md5sum, de_upload->md5sum_local);
+          if (!strcasecmp(de->md5sum, de_upload->segments->md5sum_local))
+          {
+            debugf(DBG_EXT, KRED
+                   "cfs_flush(%s): etags not match, EARLY?, cloud(%s) local(%s)",
+                   de_upload->name, de->md5sum, de_upload->md5sum_local);
+          }
+          else
+          {
+            //md5sums are different, upload is corrupt
+            debugf(DBG_EXT, KRED
+                   "cfs_flush(%s): etags md5sum not match, cloud(%s) local(%s)",
+                   de_upload->name, de->md5sum, de_upload->md5sum_local);
+          }
           result = -EILSEQ;
           abort();
         }
@@ -846,6 +849,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         free_thread_job(de_upload->job);
         free_thread_job(de_upload->job2);
       }
+      //close-flushes last cache file. previous are closed in cfs_write
+      assert(de_seg->upload_buf.local_cache_file);
+      fclose(de_seg->upload_buf.local_cache_file);
+      close_lock_file(de_upload->full_name, info->fh);
     }
     else if (!de_upload->is_segmented)
     {
@@ -867,14 +874,16 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           debugf(DBG_EXT, KMAG "cfs_flush(%s): wait non-segmented pending upload",
                  de_upload->name);
         sleep_ms(200);
+        if (de_upload->upload_buf.feed_from_cache)
+        {
+          //;
+          int_cfs_write_cache_data_feed(de_upload);
+          de_upload->upload_buf.feed_from_cache = false;
+          //signal to force http upload completion
+          if (de->upload_buf.sem_list[SEM_FULL])
+            sem_post(de->upload_buf.sem_list[SEM_FULL]);
+        }
         loops++;
-      }
-      close_lock_file(de_upload->full_name, info->fh);
-      //might be already closed via first segment in cfs_write
-      if (de_upload->upload_buf.local_cache_file)
-      {
-        fclose(de_upload->upload_buf.local_cache_file);
-        de_upload->upload_buf.local_cache_file = NULL;
       }
 
       if (fuse_md5 && strcasecmp(fuse_md5, de_upload->md5sum))
@@ -890,11 +899,18 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         debugf(DBG_EXT, KGRN "cfs_flush(%s): non_seg content md5sum OK (%s)",
                de_upload->name, fuse_md5);
       //update meta de
-      copy_dir_entry(de_upload, de);
+      copy_dir_entry(de_upload, de, true);
       free(fuse_md5);
       //free md5sum holders
       if (de_upload->job)
         free_thread_job(de_upload->job);
+      //might be already closed via first segment in cfs_write
+      if (de_upload->upload_buf.local_cache_file)
+      {
+        fclose(de_upload->upload_buf.local_cache_file);
+        de_upload->upload_buf.local_cache_file = NULL;
+      }
+      close_lock_file(de_upload->full_name, info->fh);
     }
     else
       debugf(DBG_EXT, "cfs_flush(%s): no need to wait!?", de->name);
@@ -904,7 +920,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   }
   else//not upload
   {
-    unlink_cache_segments(de);
+    //unlink_cache_segments(de);
     debugf(DBG_EXT, KMAG
            "cfs_flush(%s): non-upload done, size=%lu", path, de->size);
   }
@@ -924,8 +940,8 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
   dir_entry* de = check_path_info(path);
   update_cache_access(de);
   //duplicate as cfs_flush not always called
-  close_lock_file(de->full_name, info->fh);
-  unlink_cache_segments(de);
+  if (close_lock_file(de->full_name, info->fh))
+    unlink_cache_segments(de);
   debugf(DBG_NORM, KBLU "exit: cfs_release(%s)", path);
   return 0;
 }
@@ -1237,7 +1253,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
 static int cfs_unlink(const char* path)
 {
   debugf(DBG_NORM, KBLU "cfs_unlink(%s)", path);
-  int fd = open_lock_file(path, 0);
+  int fd = open_lock_file(path, 0, "unlink");
   if (fd == -1)
     return -EBUSY;
   dir_entry* de = check_path_info(path);
@@ -1317,7 +1333,11 @@ static int cfs_chown(const char* path, uid_t uid, gid_t gid)
                path, de->uid, de->gid, uid, gid);
         de->uid = uid;
         de->gid = gid;
-        int response = cloudfs_update_meta(de);
+        int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY, "chown");
+        if (fd == -1)
+          return -EBUSY;
+        de->lock_fd = fd;
+        int response = cloudfs_update_meta(de, false);
       }
     }
     debugf(DBG_NORM, KBLU "exit: cfs_chown(%s,%d,%d)", path, uid, gid);
@@ -1341,11 +1361,11 @@ static int cfs_chmod(const char* path, mode_t mode)
                de->chmod, mode);
         de->chmod = mode;
         //lock here, will be unlocked after meta update thread completes
-        int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY);
+        int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY, "chmod");
         if (fd == -1)
           return -EBUSY;
         de->lock_fd = fd;
-        int response = cloudfs_update_meta(de);
+        int response = cloudfs_update_meta(de, false);
       }
     }
     debugf(DBG_NORM, KBLU"exit: cfs_chmod(%s,%d)", path, mode);
@@ -1356,10 +1376,10 @@ static int cfs_chmod(const char* path, mode_t mode)
 static int cfs_rename(const char* src, const char* dst)
 {
   debugf(DBG_NORM, KBLU"cfs_rename(%s, %s)", src, dst);
-  int fd_src = open_lock_file(src, FUSE_FLAG_O_RDONLY);
+  int fd_src = open_lock_file(src, FUSE_FLAG_O_RDONLY, "rename-src");
   if (fd_src == -1)
     return -EBUSY;
-  int fd_dst = open_lock_file(dst, FUSE_FLAG_O_WRONLY);
+  int fd_dst = open_lock_file(dst, FUSE_FLAG_O_WRONLY, "rename-dst");
   if (fd_dst == -1)
   {
     close_lock_file(src, fd_src);
@@ -1384,8 +1404,9 @@ static int cfs_rename(const char* src, const char* dst)
     get_file_metadata(src_de, true, true);
     if (cloudfs_copy_object(src_de, dst, false))
     {
+      debugf(DBG_NORM, KBLU "cfs_rename(%s,%s): copy ok, del src", src, dst);
       cloudfs_delete_object(src_de);
-      debugf(DBG_NORM, KBLU "exit 2: cfs_rename(%s,%s)", src, dst);
+      debugf(DBG_NORM, KBLU "cfs_rename(%s,%s): del OK %s", src, dst, src);
     }
     else result = -ENODATA;
   }
@@ -1465,7 +1486,7 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
            path, de->atime.tv_sec, de->atime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
            times[0].tv_sec, times[0].tv_nsec, times[1].tv_sec, times[1].tv_nsec);
     //lock here, will be unlocked after meta update thread completes
-    int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY);
+    int fd = open_lock_file(path, FUSE_FLAG_O_WRONLY, "utimens");
     if (fd == -1)
       return -EBUSY;
     de->lock_fd = fd;
@@ -1480,7 +1501,7 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     // not sure how to best obtain ctime from fuse source file
     //just record current date.
     clock_gettime(CLOCK_REALTIME, &de->ctime);
-    cloudfs_update_meta(de);
+    cloudfs_update_meta(de, false);
   }
   else
     debugf(DBG_EXT, KCYN"cfs_utimens: a/m/time not changed");
@@ -1522,7 +1543,7 @@ void control_thread_run()
   while (true)
   {
     debugf(DBG_EXT, KGRN "control_thread_run: locks=%d", get_open_locks());
-    sleep_ms(5000);
+    sleep_ms(10000);
   }
   debugf(DBG_NORM, "control_thread_run exit");
   pthread_exit(NULL);

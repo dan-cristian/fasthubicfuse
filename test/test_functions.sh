@@ -1,15 +1,14 @@
 #!/bin/bash
 
 MOUNT_HUBIC=/mnt/hubic2
-TEST1_ROOT=/default/test/t1
+TEST1_ROOT=/default/test/$TEST_FOLDER
 HUB=$MOUNT_HUBIC$TEST1_ROOT
-HUB2=$MOUNT_HUBIC/default/test/t2
 CACHE_RESET_KEY=/debug-decache
 #HUB_NOCACHE=$MOUNT_HUBIC/test/ref
 SRC=~/test/ref
 HUBIC_TMP=/media/temp/hubicfuse
 HUBIC_CFG=~/.hubicfuse
-TMP=/media/temp/hubic_test_tmp
+TMP=/media/temp/hubic_test_tmp/$TEST_FOLDER
 BUILD_FILE=newbuild
 SRC_FILE=newsrc
 SMALL=small.txt
@@ -27,6 +26,8 @@ COPY_CMD=cp
 
 PASSED_MSG="\e[32m PASSED \e[0m"
 FAILED_MSG="\e[31m FAILED \e[0m"
+COL_YEL="\e[33m"
+COL_NORM="\e[0m"
 
 function check()
 {
@@ -34,7 +35,7 @@ if [ "$?" == "0" ]; then
   echo -e $PASSED_MSG
   return 1
 else
-  echo -e $FAILED_MSG
+  echo -e "$FAILED_MSG [$COL_YEL$1$COL_NORM]"
   return 0
 fi
 }
@@ -42,7 +43,7 @@ fi
 function check_not()
 {
 if [ "$?" == "0" ]; then
-  echo -e $FAILED_MSG
+  echo -e "$FAILED_MSG $COL_YEL[$1]$COL_NORM"
   return 0
 else
   echo -e $PASSED_MSG
@@ -52,15 +53,15 @@ fi
 
 function test(){
   echo -n $(date +"%H:%m:%S")" $! Testing: $1 [$2] ..."
-  eval $2 > /dev/null 2>&1
-  check
+  OUTPUT="$((eval $2 > /dev/null) 2>&1)"
+  check "$OUTPUT"
 }
 export -f test
 
 function test_not(){
   echo -n $(date +"%H:%m:%S")" $! Testing: $1 [$2]..."
-  eval $2 > /dev/null 2>&1
-  check_not
+  OUTPUT="$((eval $2 > /dev/null) 2>&1)"
+  check_not "$OUTPUT"
 }
 export -f test_not
 
@@ -153,21 +154,18 @@ function delete_fuse_cache(){
 
 function setup_test(){
 	echo
-	echo Cleaning folders...
+	echo Cleaning folders $TMP/* ...
 	rm -Rf $TMP/*
 	delete_fuse_cache
 	rm -Rf $HUB/*
-	rm -Rf $HUB2/*
 	rmdir $HUB
-	rmdir $HUB2
-
+	
 	echo Preparing temp folders...
 	mkdir -p $TMP
 
 	if test MKDIR "mkdir $HUB"; then return; fi
 	if test RMDIR "rmdir $HUB"; then return; fi
 	if test "create test folder" "mkdir $HUB"; then return; fi
-	if test MKDIR "mkdir $HUB2"; then return; fi
 }
 
 function cache_reset()
@@ -344,43 +342,6 @@ function test_delete_small(){
 	if test_not "old file must not exist" "stat $HUB/$MEDIUM"; then return 0; fi
 	
 	echo Test completed!
-	echo ---------------
-	return 1
-}
-
-#function to run in parallel
-function test_long_running(){
-	if test "upload2 tiny file" "$COPY_CMD $SRC/$TINY $HUB2/"; then return 0; fi
-	if test "upload2 small file" "$COPY_CMD $SRC/$SMALL $HUB2/"; then return 0; fi
-	if test "upload2 medium file" "$COPY_CMD $SRC/$MEDIUM $HUB2/"; then return 0; fi
-	if test "upload2 large file" "$COPY_CMD $SRC/$LARGE $HUB2/"; then return 0; fi
-	
-	if test "rename2 tiny file" "mv $HUB2/$TINY $HUB2/renamed$TINY"; then return 0; fi
-	if test "rename2 small file" "mv $HUB2/$SMALL $HUB2/renamed$SMALL"; then return 0; fi
-	if test "rename2 medium file" "mv $HUB2/$MEDIUM $HUB2/renamed$MEDIUM"; then return 0; fi
-	if test "rename2 large file" "mv $HUB2/$LARGE $HUB2/renamed$LARGE"; then return 0; fi
-	
-	if test "upload2 tiny file" "$COPY_CMD $SRC/$TINY $HUB2/"; then return 0; fi
-	if test "upload2 small file" "$COPY_CMD $SRC/$SMALL $HUB2/"; then return 0; fi
-	if test "upload2 medium file" "$COPY_CMD $SRC/$MEDIUM $HUB2/"; then return 0; fi
-	if test "upload2 large file" "$COPY_CMD $SRC/$LARGE $HUB2/"; then return 0; fi
-	
-	if test "download2 tiny file" "$COPY_CMD $HUB2/renamed$TINY $TMP/"; then return 0; fi
-	if check_md5 "$TMP/renamed$TINY" "$TINY_MD5"; then return 0; fi
-	if test "download2 small file" "$COPY_CMD $HUB2/renamed$SMALL $TMP/"; then return 0; fi
-	if check_md5 "$TMP/renamed$SMALL" "$SMALL_MD5"; then return 0; fi
-	if test "download2 medium file" "$COPY_CMD $HUB2/renamed$MEDIUM $TMP/"; then return 0; fi
-	if check_md5 "$TMP/renamed$MEDIUM" "$MEDIUM_MD5"; then return 0; fi
-	if test "download2 large file" "$COPY_CMD $HUB2/renamed$LARGE $TMP/"; then return 0; fi
-	if check_md5 "$TMP/renamed$LARGE" "$LARGE_MD5"; then return 0; fi
-	
-	if test "delete2 tiny file" "rm $HUB2/$TINY"; then return 0; fi
-	if test "delete2 small file" "rm $HUB2/$SMALL"; then return 0; fi
-	if test "delete2 medium file" "rm $HUB2/$MEDIUM"; then return 0; fi
-	if test "delete2 large file" "rm $HUB2/$LARGE"; then return 0; fi
-	
-	
-	echo Test2 completed!
 	echo ---------------
 	return 1
 }
