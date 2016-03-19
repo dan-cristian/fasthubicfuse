@@ -156,7 +156,6 @@ function setup_test(){
 	echo
 	echo Cleaning folders $TMP/* ...
 	rm -Rf $TMP/*
-	delete_fuse_cache
 	rm -Rf $HUB/*
 	rmdir $HUB
 	
@@ -323,6 +322,7 @@ function test_rename_large(){
 
 function test_create(){
 	echo "Testing create file..."
+	rm "$HUB/touch$TINY"
 	if test "create empty file" "touch $HUB/touch$TINY"; then return 0; fi
 	if test "new file must exist" "stat $HUB/touch$TINY"; then return 0; fi
 	if test "append to new file" "cat $HUB/$TINY >> $HUB/touch$TINY"; then return 0; fi

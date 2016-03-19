@@ -682,12 +682,9 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   struct segment_info* info = (struct segment_info*)userp;
-  //show progress from time to time
-  if (info->size_processed % 100000 == 0)
-    debugf(DBG_EXT, KMAG
-           "write_callback: progressive=%d size=%lu max=%lu current=%lu",
-           info->de->is_progressive, size * nmemb, CURL_MAX_WRITE_SIZE,
-           info->size_processed);
+  //show progress
+  debugf(DBG_EXTALL, KMAG "write_callback(%s): size=%lu current=%lu",
+         info->de->name, size * nmemb, info->size_processed);
   //send data to fuse buffer
   if (info->de->is_progressive)
     write_callback_progressive(ptr, size, nmemb, userp);
@@ -700,7 +697,7 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
     debugf(DBG_EXT, KMAG "write_callback: post buf full, res=%lu, size=%lu",
            result, info->size_processed);
   }
-  debugf(DBG_EXTALL, KMAG"write_callback: result=%lu", result);
+  debugf(DBG_EXTALL, KMAG "write_callback: result=%lu", result);
   return result;
 }
 
@@ -2953,6 +2950,7 @@ bool cloudfs_post_object(dir_entry* de)
   {
     char manifest_str[MAX_PATH_SIZE];
     //remove "/" prefix from manifest path
+    assert(de->manifest_cloud);
     snprintf(manifest_str, MAX_PATH_SIZE, "%s", de->manifest_cloud + 1);
     add_header(&headers, HEADER_TEXT_MANIFEST, manifest_str);
   }

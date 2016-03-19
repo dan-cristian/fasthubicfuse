@@ -1202,10 +1202,11 @@ void free_de_before_get(dir_entry* de)
 
 void free_de_before_head(dir_entry* de)
 {
-  debugf(DBG_EXTALL, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
+  //debugf(DBG_EXTALL, KCYN "free_de_before_head (%s)", de ? de->name : "nil");
   //assumes a file might change from segmented to none
-  free(de->manifest_cloud);
-  de->manifest_cloud = NULL;
+  //fixme: commented out as crashes on post_object
+  //free(de->manifest_cloud);
+  //de->manifest_cloud = NULL;
 }
 
 /*
@@ -1857,6 +1858,7 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
 */
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
 {
+  assert(fp);
   bool result = false;
   char segment_file_path[PATH_MAX] = { 0 };
   get_safe_cache_file_path(de->full_name, segment_file_path, NULL,
@@ -1864,7 +1866,9 @@ bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
   bool file_exist = access(segment_file_path, F_OK) != -1;
   if (file_exist)
   {
-    size_t seg_size = cloudfs_file_size(fileno(fp));
+    int fd = fileno(fp);
+    assert(fd != -1);
+    size_t seg_size = cloudfs_file_size(fd);
     if (seg_size == de_seg->size)
       result = (de && de->md5sum && de_seg->md5sum_local && de_seg->md5sum
                 && (!strcasecmp(de_seg->md5sum_local, de_seg->md5sum)));
@@ -1876,10 +1880,14 @@ bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
 */
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 {
-  assert(*fp == NULL);
   char file_path[NAME_MAX] = { 0 };
+  char segment_file_dir[NAME_MAX] = { 0 };
   //use seg_part=0 (not -1) to ensure data is saved in cache segment folder
-  get_safe_cache_file_path(de->full_name, file_path, NULL, temp_dir, 0);
+  get_safe_cache_file_path(de->full_name, file_path, segment_file_dir, temp_dir,
+                           0);
+  struct stat dir_status = { 0 };
+  if (stat(segment_file_dir, &dir_status) == -1)
+    mkdir(segment_file_dir, 0700);
   bool file_exist = access(file_path, F_OK) != -1;
   int err = errno;
   if (!file_exist)
@@ -1888,7 +1896,7 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
   *fp = fopen(file_path, method[0] == 'G' ?
               (file_exist ? "r+" : "w+") : (file_exist ? "r+" : "w+"));
   err = errno;
-  if (!fp)
+  if (!*fp)
   {
     debugf(DBG_EXTALL, KRED "open_file_in_cache(%s): cannot open, err=%s",
            file_path, strerror(err));
@@ -1911,8 +1919,9 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 */
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
 {
+  debugf(DBG_EXTALL, KMAG"open_file_cache_md5(%s): open fp=%p", de->name, *fp);
   bool file_exist = open_file_in_cache(de, fp, method);
-  debugf(DBG_EXTALL, KMAG"open_file_cache_md5: open fp=%p", *fp);
+
   if (file_exist)
   {
     debugf(DBG_EXTALL, KMAG "open_file_cache_md5: found file, md5=%s",
@@ -1941,8 +1950,12 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
     return match;
   }
   else
-    debugf(DBG_EXTALL, KMAG "open_file_cache_md5(%s): file not in cache",
-           de->name);
+  {
+    assert(*fp);
+    debugf(DBG_EXTALL, KMAG
+           "open_file_cache_md5(%s): file was not in cache, created fp=%p",
+           de->name, *fp);
+  }
   return false;
 }
 
@@ -2242,40 +2255,37 @@ bool update_lock_file(const char* path, int fd, const char* search_flag,
 */
 void unlink_cache_segments(dir_entry* de)
 {
+  debugf(DBG_EXT, "unlink_cache_segments(%s)", de->full_name);
+
   char segment_file_path[PATH_MAX] = { 0 };
   char segment_parent_dir_path[PATH_MAX] = { 0 };
   dir_entry* de_seg = de->segments;
 
-  if (de->segments)
+  do
   {
-    do
-    {
-      //ensure we remove first segment
-      get_safe_cache_file_path(de->full_name, segment_file_path,
-                               segment_parent_dir_path,
-                               temp_dir, de_seg ? de_seg->segment_part : 0);
-      if (unlink(segment_file_path) != 0)
-        debugf(DBG_ERR, "unlink_cache_segments(%s): error del file [%s]",
-               segment_file_path, strerror(errno));
-      else
-        debugf(DBG_EXT, "unlink_cache_segments(%s): removed file ok",
-               segment_file_path);
-      if (!de_seg)
-        break;
-      else
-        de_seg = de_seg->next;
-    }
-    while (de_seg);
-
-    if (rmdir(segment_parent_dir_path) != 0)
-      debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
-             segment_parent_dir_path, strerror(errno));
+    //ensure we remove first segment
+    get_safe_cache_file_path(de->full_name, segment_file_path,
+                             segment_parent_dir_path,
+                             temp_dir, de_seg ? de_seg->segment_part : 0);
+    if (unlink(segment_file_path) != 0)
+      debugf(DBG_ERR, "unlink_cache_segments(%s): error del file [%s]",
+             segment_file_path, strerror(errno));
     else
-      debugf(DBG_EXT, "unlink_cache_segments(%s): removed dir ok",
-             segment_parent_dir_path);
+      debugf(DBG_EXT, "unlink_cache_segments(%s): removed file ok",
+             segment_file_path);
+    if (!de_seg)
+      break;
+    else
+      de_seg = de_seg->next;
   }
-  else debugf(DBG_EXT, "unlink_cache_segments(%s): skipped null segments",
-                de->name);
+  while (de_seg);
+
+  if (rmdir(segment_parent_dir_path) != 0)
+    debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
+           segment_parent_dir_path, strerror(errno));
+  else
+    debugf(DBG_EXT, "unlink_cache_segments(%s): removed dir ok",
+           segment_parent_dir_path);
 }
 
 void sleep_ms(int milliseconds)

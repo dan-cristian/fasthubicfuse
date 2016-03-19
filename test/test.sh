@@ -1,14 +1,17 @@
 #!/bin/bash
 
-if [ $# -eq 0 ]
-	then
+if [ $# -eq 0 ]; then
 		TEST_FOLDER=t1
 		echo "No arguments supplied, test folder=$1"
 	else
-	TEST_FOLDER=$1
+		TEST_FOLDER=$1
+		echo "Not cleaning fuse cache folder"
 fi
 
 . test_functions.sh
+if [ $# -eq 0 ]; then
+	delete_fuse_cache
+fi
 echo "Test folder = $HUB"
 #echo Waiting for a new build...
 setup_config_progressive

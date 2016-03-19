@@ -549,7 +549,8 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
             if (offset % 100000 == 0)
               debugf(DBG_EXT, KBLU
                      "cfs_read(%s) fno=%d fp=%p part=%d off=%lu res=%lu",
-                     de_seg->name, fno, fp_segment, segment_index, offset_seg, result);
+                     de_seg->name, fno, fp_segment, segment_index, offset_seg,
+                     result);
             close(fno);
             fclose(fp_segment);
             //download if segment ahead not in cache and no other download runs
@@ -656,8 +657,11 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         {
           result = pread(fno, buf, size, offset);
           err = errno;
-          debugf(DBG_EXT, KBLU "cfs_read(%s) fno=%d fp=%p err=%s",
-                 de->name, fno, fp_file, strerror(err));
+          if (result == -1)
+            debugf(DBG_EXT, KRED "cfs_read(%s) fno=%d fp=%p err=%s",
+                   de->name, fno, fp_file, strerror(err));
+          else
+            debugf(DBG_EXT, KBBLU"cfs_read(%s) fno=%d", de->name, fno);
           close(fno);
           fclose(fp_file);
           fp_file = NULL;
@@ -1050,9 +1054,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     update_job_md5(de->job, buf, length);
   else
   {
+    //fixme: potentially an append operation, not yet supported
     debugf(DBG_ERR, KRED
            "cfs_write(%s) unexpected empty job off=%lu", path, offset);
-    abort();
+    return -EIO;
   }
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
