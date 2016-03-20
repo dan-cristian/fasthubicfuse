@@ -304,6 +304,9 @@ bool complete_job_md5(thread_job* job)
     job->md5str = strdup(md5_str);
   }
   else abort();
+  debugf(DBG_EXT, KMAG "complete_job_md5(%s:%s): md5sum=%s",
+         job->de ? job->de->name : "nil", job->de_seg ? job->de_seg->name : "nil",
+         job->md5str);
   return result;
 }
 
@@ -331,6 +334,8 @@ thread_job* init_thread_job(char* job_name)
   thread_job* job = malloc(sizeof(struct thread_job));
   job->md5str = NULL;
   job->job_name = job_name;
+  job->de = NULL;
+  job->de_seg = NULL;
   return job;
 }
 
@@ -343,6 +348,9 @@ void free_thread_job(thread_job* job)
     free(job->job_name);
   job->md5str = NULL;
   job->job_name = NULL;
+  job->de = NULL;
+  job->de_seg = NULL;
+  free(job);
 }
 /*
   determines if local cache content equals cloud content
@@ -1194,7 +1202,8 @@ dir_entry* init_dir_entry()
 
 void free_de_before_get(dir_entry* de)
 {
-  debugf(DBG_EXTALL, KCYN "free_de_before_get (%s)", de ? de->name : "nil");
+  debugf(DBG_EXTALL, KCYN "free_de_before_get (%s): md5local was=%s",
+         de ? de->name : "nil", de->md5sum_local);
   free(de->md5sum_local);
   de->md5sum_local = NULL;//why not set to null
   free_de_before_head(de);

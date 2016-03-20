@@ -788,10 +788,14 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           }
           //complete md5sum compute for this file using cumulative segment etags
           complete_job_md5(job);
+          debugf(DBG_EXT, KMAG "cfs_flush(%s): md5sum etag total=%s", de_upload->name,
+                 job->md5str);
+          assert(job->md5str);
           if (de_upload->md5sum_local)
             free(de_upload->md5sum_local);
           de_upload->md5sum_local = strdup(job->md5str);
           free_thread_job(job);
+          job = NULL;
         }
         //complete md5sum using fuse provided content
         complete_job_md5(de_upload->job);
@@ -851,7 +855,9 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
                  de_upload->name, de_upload->md5sum_local);
         //free md5sum holders
         free_thread_job(de_upload->job);
+        de_upload->job = NULL;
         free_thread_job(de_upload->job2);
+        de_upload->job2 = NULL;
       }
       //close-flushes last cache file. previous are closed in cfs_write
       assert(de_seg->upload_buf.local_cache_file);
@@ -908,6 +914,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       //free md5sum holders
       if (de_upload->job)
         free_thread_job(de_upload->job);
+      de_upload->job = NULL;
       //might be already closed via first segment in cfs_write
       if (de_upload->upload_buf.local_cache_file)
       {
