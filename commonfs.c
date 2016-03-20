@@ -1928,7 +1928,7 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 */
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
 {
-  debugf(DBG_EXTALL, KMAG"open_file_cache_md5(%s): open fp=%p", de->name, *fp);
+  debugf(DBG_EXTALL, KMAG "open_file_cache_md5(%s): open fp=%p", de->name, *fp);
   bool file_exist = open_file_in_cache(de, fp, method);
 
   if (file_exist)

@@ -679,12 +679,15 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
   return result;
 }
 
+/*
+  write downloaded data to file (& fuse memory?)
+*/
 static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   struct segment_info* info = (struct segment_info*)userp;
   //show progress
   debugf(DBG_EXTALL, KMAG "write_callback(%s): size=%lu current=%lu",
-         info->de->name, size * nmemb, info->size_processed);
+         info->de->full_name, size * nmemb, info->size_processed);
   //send data to fuse buffer
   if (info->de->is_progressive)
     write_callback_progressive(ptr, size, nmemb, userp);
@@ -697,7 +700,8 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userp)
     debugf(DBG_EXT, KMAG "write_callback: post buf full, res=%lu, size=%lu",
            result, info->size_processed);
   }
-  debugf(DBG_EXTALL, KMAG "write_callback: result=%lu", result);
+  debugf(DBG_EXTALL, KMAG "write_callback(%s): result=%lu", info->de->full_name,
+         result);
   return result;
 }
 
@@ -744,18 +748,17 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
 
   if (myp->method == 'P' && (curtime - myp->last_ultime > INTERNET_TIMEOUT_SEC))
   {
-    debugf(DBG_NORM, KRED
-           "progress_callback_xfer(%s): interrupting stalled upload",
-           myp->de->name);
+
+    debugf(DBG_NORM, KRED "progress_callback_xfer(%s): stopping stalled upload",
+           myp->de ? myp->de->name : "nil");
     myp->response = 408;
     return 1;
   }
 
   if (myp->method == 'G' && (curtime  - myp->last_dltime > INTERNET_TIMEOUT_SEC))
   {
-    debugf(DBG_NORM, KRED
-           "progress_callback_xfer(%s): interrupting stalled download",
-           myp->de->name);
+    debugf(DBG_NORM, KRED "progress_callback_xfer(%s): stopping stalled download",
+           myp->de ? myp->de->name : "nil");
     myp->response = 408;
     return 1;
   }
@@ -1286,8 +1289,7 @@ static int send_request_size(const char* method, const char* encoded_path,
     //something went really wrong
     if (response == 0)
     {
-      debugf(DBG_NORM, KRED
-             "status: send_request_size(%s:%s) unexpected error, retry forever",
+      debugf(DBG_NORM, KYEL "send_request_size(%s:%s) got response=0, retry forever",
              print_path, method);
       sleep_ms(1000);
       tries--;
@@ -1300,8 +1302,7 @@ static int send_request_size(const char* method, const char* encoded_path,
       debugf(DBG_NORM, KRED
              "send_request_size: error, resp=%d , size=%lu, [HTTP %d] (%s)(%s)",
              response, (long)chunk.size, response, method, print_path);
-      debugf(DBG_NORM, KRED"send_request_size: error message=[%s]",
-             chunk.memory);
+      debugf(DBG_NORM, "send_request_size: error message=[%s]", chunk.memory);
     }
     free(chunk.memory);
 
@@ -1311,7 +1312,7 @@ static int send_request_size(const char* method, const char* encoded_path,
         && (de && info->size_processed != de->size)
         && (de_seg && info->size_processed != de_seg->size))
     {
-      debugf(DBG_NORM, KRED
+      debugf(DBG_NORM, KYEL
              "send_request_size: download interrupted, expect size=%lu got size=%.0f",
              info->size_copy, size_downloaded);
       response = 417;//too slow, signal error and hope for faster download
@@ -2170,10 +2171,13 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   setvbuf(info.fp, NULL, _IOFBF, DISK_BUFF_SIZE);
   int response = send_request_size(info.method, NULL, &info, NULL, NULL,
                                    info.size_copy, de->is_segmented, de, de_seg);
-  if (!(response >= 200 && response < 300))
+  if (!valid_http_response(response))
     debugf(DBG_NORM, KRED
            "cloudfs_download_segment: %s failed resp=%d proc=%lu",
            info.seg_base, response, info.size_processed);
+  else
+    debugf(DBG_EXT, "cloudfs_download_segment(%s) download ok proc=%lu",
+           info.seg_base, info.size_processed);
   fflush(info.fp);
   //compute md5sum after each seg download
   if (de_seg->md5sum_local)
@@ -2186,14 +2190,18 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   char md5_file_hash_str[MD5_DIGEST_HEXA_STRING_LEN] = { 0 };
   file_md5(fp, md5_file_hash_str);
   if (md5_file_hash_str && !strcasecmp(md5_file_hash_str, de_seg->md5sum))
+  {
+    debugf(DBG_EXTALL, "cloudfs_download_seg(%s) md5local=%s",
+           de_seg->name, md5_file_hash_str);
     de_seg->md5sum_local = strdup(md5_file_hash_str);
+  }
   else
   {
     //todo: delete segment content if fully loaded but corrupted
     if (info.size_processed == de_seg->size)
     {
       debugf(DBG_NORM, KRED
-             "cloudfs_download_segment(%s): corrupted segment", de_seg->name);
+             "cloudfs_download_seg(%s): corrupted segment", de_seg->name);
       int fd = fileno(fp);
       assert(fd != -1);
       assert(ftruncate(fd, 0) == 0);
@@ -2201,13 +2209,12 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   }
   unblock_semaphore(de_seg->downld_buf.sem_list[SEM_FULL],
                     de_seg->downld_buf.sem_name_list[SEM_FULL]);
-  //sem_post(de_seg->downld_buf.sem_list[SEM_FULL]);
   free_semaphores(&de_seg->downld_buf, SEM_EMPTY);
   free_semaphores(&de_seg->downld_buf, SEM_FULL);
   free_semaphores(&de_seg->downld_buf, SEM_DONE);
   pthread_mutex_unlock(&de_seg->downld_buf.mutex);
   debugf(DBG_EXT, KMAG
-         "cloudfs_download_segment: done fp=%p part=%lu proc=%lu",
+         "cloudfs_download_segment: done fp=%p part=%d proc=%lu",
          de_seg->downld_buf.local_cache_file, de_seg->segment_part,
          info.size_processed);
   return true;
