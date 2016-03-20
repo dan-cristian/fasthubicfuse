@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <openssl/md5.h>
 #include <assert.h>
+#include <dirent.h>
 #include "commonfs.h"
 #include "cloudfsapi.h"
 #include "config.h"
@@ -104,7 +105,12 @@ bool initialise_options(struct fuse_args args)
   override_storage_url = options.storage_url;
   public_container = options.container;
   temp_dir = options.temp_dir;
-
+    DIR* dir = opendir(temp_dir);
+    if (!dir)
+    {
+        fprintf(stderr, "Unable to access temp folder [%s], aborting", temp_dir);
+        abort();
+    }
   if (*options.verify_ssl)
     verify_ssl = !strcasecmp(options.verify_ssl, "true") ? 2 : 0;
 

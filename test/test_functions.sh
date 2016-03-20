@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MOUNT_HUBIC=/mnt/hubic2
+MOUNT_HUBIC=/mnt/hubic
 TEST1_ROOT=/default/test/$TEST_FOLDER
 HUB=$MOUNT_HUBIC$TEST1_ROOT
 CACHE_RESET_KEY=/debug-decache
