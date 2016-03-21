@@ -836,7 +836,7 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   size_t max_size_to_upload;
   int sem_val_empty, sem_val_full;
   //wait to get fuse buffer data
-  //fixme: sometimes freezes here
+  //fixme: sometimes freezes here, after data feed from cache
   sem_wait(de->upload_buf.sem_list[SEM_FULL]);
   //ensure we upload no more than fuse buf available
   max_size_to_upload = min(http_buf_size, de->upload_buf.work_buf_size);

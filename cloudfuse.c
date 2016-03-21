@@ -887,11 +887,15 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         if (de_upload->upload_buf.feed_from_cache)
         {
           //;
+		      //init_semaphores(&de_upload->upload_buf, de_upload, "upload-cache");
           int_cfs_write_cache_data_feed(de_upload);
           de_upload->upload_buf.feed_from_cache = false;
           //signal to force http upload completion
-          if (de->upload_buf.sem_list[SEM_FULL])
-            sem_post(de->upload_buf.sem_list[SEM_FULL]);
+		      //fixme: this was not unblocking progressive_upload_callback
+		      unblock_semaphore(de_upload->upload_buf.sem_list[SEM_FULL], 
+            de_upload->upload_buf.sem_name_list[SEM_FULL]);
+          //if (de_upload->upload_buf.sem_list[SEM_FULL])
+          //  sem_post(de_upload->upload_buf.sem_list[SEM_FULL]);
         }
         loops++;
       }
