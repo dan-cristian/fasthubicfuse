@@ -1405,7 +1405,7 @@ int send_request(char* method, const char* path, FILE* fp,
 /*
   updates file entry with segment list & details
 */
-bool update_segments(dir_entry* de)
+bool update_segments(dir_entry* de, int * segment_count)
 {
   assert(de);
   if (!de->manifest_cloud)
@@ -1417,8 +1417,7 @@ bool update_segments(dir_entry* de)
   else
     de->is_segmented = true;
 
-  debugf(DBG_EXT, "update_segments(%s): man=%s ", de->name,
-         de->manifest_cloud);
+  debugf(DBG_EXT, "update_segments(%s): man=%s ", de->name, de->manifest_cloud);
   dir_entry* seg_dir;
   char* manifest_path;
   //get a list with all segment files composing the parent large file
@@ -1439,12 +1438,14 @@ bool update_segments(dir_entry* de)
   bool check_ok;
   int iterations = 0;
   int seg_count;
+  //check folder content, iterate through files
   do
   {
     debugf(DBG_EXT, "update_segments(%s): check segments try #%d",
            de->name, iterations);
     check_ok = true;
     seg_count = 0;
+    (*segment_count) = 0;
     if (seg_dir && !seg_dir->isdir)
     {
       //most reliable way to get true size is to add all segments
@@ -1462,6 +1463,7 @@ bool update_segments(dir_entry* de)
                  de->name, index, iterations);
           cloudfs_free_dir_list(seg_dir);
           sleep_ms(1000 * iterations);
+          //reload folder content
           if (!cloudfs_list_directory(manifest_path, &seg_dir))
             abort();
           check_ok = false;
@@ -1472,6 +1474,7 @@ bool update_segments(dir_entry* de)
         seg_count++;
         index++;
       }
+      (*segment_count) = seg_count;
       if (check_ok)
       {
         if (de->lazy_segment_load && (de->size != 0) && (de->size != total_size))
@@ -1514,7 +1517,8 @@ bool update_segments(dir_entry* de)
   if (!check_ok)
   {
     //incomplete segments, might show later
-    //todo: remove entry from cache
+    debugf(DBG_NORM, KRED "update_segments(%s): missing segments, count=%d",
+      de->name, *segment_count);
     return false;
   }
   else
@@ -1710,8 +1714,8 @@ bool int_convert_first_segment_th(dir_entry* de)
 */
 bool int_cfs_write_cache_data_feed(dir_entry* de)
 {
-  debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): starting",
-         de->name);
+  debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): starting, fp=%p",
+         de->name, de->upload_buf.local_cache_file);
   int res = fflush(de->upload_buf.local_cache_file);
 
   //assert(fflush(de->upload_buf.local_cache_file) == 0);
@@ -1825,7 +1829,7 @@ void internal_upload_segment_progressive(void* arg)
       debugf(DBG_EXT, KRED
              "int_upload_seg_prog(%s): md5sum ERR de_seg=%s try=%d sizeproc=%lu",
              de->name, de_tmp->name, i, de_tmp->upload_buf.size_processed);
-      sleep_ms(5000);
+      //ssleep_ms(5000);
       de_tmp->upload_buf.feed_from_cache = true;
       md5err = true;
       debugf(DBG_EXT,
@@ -1916,7 +1920,8 @@ void internal_upload_segment_progressive(void* arg)
     snprintf(manifest_root, MAX_URL_SIZE, "/%s", de->manifest_time);
     de_tmp2->manifest_cloud = strdup(manifest_root);
     de_tmp2->name = strdup(job->de->name);
-    if (!update_segments(de_tmp2))
+    int segment_count;
+    if (!update_segments(de_tmp2, &segment_count))
     {
       debugf(DBG_EXT, KYEL
              "internal_upload_segment_prog(%s): incomplete segs", de->name);
@@ -1925,8 +1930,8 @@ void internal_upload_segment_progressive(void* arg)
     if (de_tmp2->segment_count != de->segment_count)
     {
       debugf(DBG_EXT, KRED
-             "int_upload_seg_prog(%s): some segs unvisible (%d:%d)!",
-             job->de->name, de_tmp2->segment_count, de->segment_count);
+             "int_upload_seg_prog(%s): some segs unvisible (%d<%d)!",
+             job->de->name, segment_count, de->segment_count);
       de->has_unvisible_segments = true;
     }
     else
@@ -2303,7 +2308,8 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
            de->full_name);
     if (!de->lazy_segment_load || force_segment_update)
     {
-      if (!update_segments(de))
+      int seg_count;
+      if (!update_segments(de, &seg_count))
       {
         //fixme: corrupt file, what to do?
         cloudfs_delete_path(de->manifest_cloud, true, false, NULL);
@@ -2896,8 +2902,9 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
 
         //check if all segments are visible in cloud after copy
         //dir_entry* new_dir_entry;
-        update_segments(new_de);
-        if (new_de->segment_count != de->segment_count)
+        int segment_count;
+        update_segments(new_de, &segment_count);
+        if (segment_count != de->segment_count)
         {
           debugf(DBG_EXT, KRED
                  "cloudfs_copy_object(%s): last segment missing, retry",

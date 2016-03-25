@@ -23,7 +23,8 @@ xcopy "..\..\test\test_functions.sh" %TD% /Y /D
 xcopy "..\..\test\test_multithread.sh" %TD% /Y /D
 xcopy "..\..\test\debug.sh" %TD% /Y /D
 xcopy "..\..\test\.hubicfuse.*" %TD% /Y /D
-touch %TD%newsrc
+rem copy /b %TD%newsrc +,,
+rem touch %TD%newsrc
 GOTO end
 
 :set_remote

@@ -30,6 +30,8 @@ extern pthread_mutex_t dcachemut;
 extern pthread_mutex_t dcacheuploadmut;
 extern pthread_mutexattr_t mutex_attr;
 extern pthread_mutexattr_t segment_mutex_attr;
+extern pthread_mutex_t dlockmut;
+extern pthread_mutexattr_t lock_mutex_attr;
 extern int debug;
 extern int cache_timeout;
 extern int verify_ssl;
@@ -895,7 +897,8 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         sleep_ms(200);
         if (de_upload->upload_buf.feed_from_cache)
         {
-          //;
+          //local_cache is null when segment is missing
+          assert(de_upload->upload_buf.local_cache_file);
 		      //init_semaphores(&de_upload->upload_buf, de_upload, "upload-cache");
           int_cfs_write_cache_data_feed(de_upload);
           de_upload->upload_buf.feed_from_cache = false;
@@ -1136,6 +1139,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         if (last_seg_index != -1)
         {
           //close prev cache file as segment changed. last is closed in cfs_flush
+          debugf(DBG_EXT, KMAG "cfs_write(%s:%s): close seg %d", path, 
+            prev_seg->name, de_tmp->segment_part);
           assert(prev_seg->upload_buf.local_cache_file);
           fclose(prev_seg->upload_buf.local_cache_file);
           prev_seg->upload_buf.local_cache_file = NULL;
@@ -1690,6 +1695,11 @@ int main(int argc, char** argv)
   pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(&dcachemut, &mutex_attr);
   pthread_mutex_init(&dcacheuploadmut, &mutex_attr);
+  
+  pthread_mutexattr_init(&lock_mutex_attr);
+  pthread_mutexattr_settype(&lock_mutex_attr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(&dlockmut, &lock_mutex_attr);
+
   pthread_mutexattr_init(&segment_mutex_attr);
   pthread_mutexattr_settype(&segment_mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
   //init control thread

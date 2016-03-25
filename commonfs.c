@@ -28,8 +28,11 @@
 
 pthread_mutex_t dcachemut;
 pthread_mutex_t dcacheuploadmut;
+pthread_mutex_t dlockmut;//file locking
 pthread_mutexattr_t mutex_attr;
 pthread_mutexattr_t segment_mutex_attr;
+pthread_mutexattr_t lock_mutex_attr;
+
 
 dir_cache* dcache;//stores accessed files
 dir_cache* dcache_upload;//stores files being modified
@@ -2116,6 +2119,7 @@ int get_open_locks()
 
 bool close_lock_file(const char* path, int fd)
 {
+  lock_mutex(dlockmut);
   open_file* of = openfile_list;
   open_file* prev = NULL;
   int count = 0;
@@ -2127,10 +2131,15 @@ bool close_lock_file(const char* path, int fd)
       count++;
       if (of->fd == fd)
       {
+        of->fd = -1;
         fclose(of->cached_file);
+        of->cached_file = NULL;
         free(of->path);
+        of->path = NULL;
         free(of->open_flags);
+        of->open_flags = NULL;
         free(of->fuse_operation);
+        of->fuse_operation = NULL;
         free(of);
         if (prev)
           prev->next = of->next;
@@ -2147,12 +2156,11 @@ bool close_lock_file(const char* path, int fd)
   {
     char file_path_safe[NAME_MAX] = "";
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
-    debugf(DBG_EXT, "close_lock_file(%s): deleting %s", path,
-           file_path_safe);
+    debugf(DBG_EXT, "close_lock_file(%s): deleting %s", path, file_path_safe);
     unlink(file_path_safe);
   }
-  debugf(DBG_EXT, "close_lock_file(%s): %d instances were open", path,
-         count);
+  debugf(DBG_EXT, "close_lock_file(%s): %d instances were open", path, count);
+  unlock_mutex(dlockmut);
   return result;
 }
 
@@ -2196,6 +2204,7 @@ bool can_add_lock(const char* path, char* open_flags, char* fuse_op)
 int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
 {
   debugf(DBG_EXT, "open_lock_file(%s): flags=%d", path, flags);
+  
   FILE* temp_file = NULL;
   char open_flags[10];
   char file_path_safe[NAME_MAX];
@@ -2206,44 +2215,57 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
   //wait until lock is removed, can happen on async POST (meta update) operations
   for (i = 0; i < LOCK_WAIT_SEC * (1000 / 250); i++)
   {
+    lock_mutex(dlockmut);
     can_add = can_add_lock(path, open_flags, fuse_op);
     if (can_add)
       break;
-    else sleep_ms(250);
+    else {
+      unlock_mutex(dlockmut);
+      sleep_ms(250);
+    }
   }
 
+  int fd;
   if (!can_add)
   {
     debugf(DBG_EXT, KRED
            "open_lock_file(%s): lock not secured, mode=%s", path, open_flags);
-    return -1;
+    fd = -1;
   }
-  bool file_exist = access(file_path_safe, F_OK) != -1;
-  if (!file_exist)
+  else
   {
-    //create the file in cache
-    fclose(fopen(file_path_safe, "w"));
+    bool file_exist = access(file_path_safe, F_OK) != -1;
+    if (!file_exist)
+    {
+      //create the file in cache
+      fclose(fopen(file_path_safe, "w"));
+    }
+    //this fails if open mode is r, so need to create file first
+    temp_file = fopen(file_path_safe, open_flags);
+    int errsv = errno;
+    if (!temp_file)
+    {
+      debugf(DBG_EXT, KRED
+        "open_lock_file(%s): lock file busy, mode=%s err=%s",
+        path, open_flags, strerror(errsv));
+      fd = -1;
+    }
+    else {
+      fd = fileno(temp_file);
+      assert(fd != -1);
+      add_lock_file(path, open_flags, temp_file, fd, fuse_op);
+    }
+    unlock_mutex(dlockmut);
   }
-  //this fails if open mode is r, so need to create file first
-  temp_file = fopen(file_path_safe, open_flags);
-  int errsv = errno;
-  if (!temp_file)
-  {
-    debugf(DBG_EXT, KRED
-           "open_lock_file(%s): lock file busy, mode=%s err=%s",
-           path, open_flags, strerror(errsv));
-    return -1;
-  }
-  int fd = fileno(temp_file);
-  assert(fd != -1);
-  add_lock_file(path, open_flags, temp_file, fd, fuse_op);
   return fd;
 }
 
 bool update_lock_file(const char* path, int fd, const char* search_flag,
                       const char* new_flag)
 {
+  lock_mutex(dlockmut);
   open_file* of = openfile_list;
+  bool result = false;
   while (of)
   {
     if (!strcasecmp(of->path, path) && of->fd == fd)
@@ -2252,12 +2274,14 @@ bool update_lock_file(const char* path, int fd, const char* search_flag,
       {
         free(of->open_flags);
         of->open_flags = strdup(new_flag);
-        return true;
+        result = true;
+        break;
       }
     }
     of = of->next;
   }
-  return false;
+  unlock_mutex(dlockmut);
+  return result;
 }
 /*
   delete all segment cached files from disk
@@ -2334,6 +2358,7 @@ int file_is_readable(const char* fname)
 
 off_t get_file_size(FILE* fp)
 {
+  assert(fp);
   struct stat st;
   int fd = fileno(fp);
   assert(fd != -1);
