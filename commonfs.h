@@ -246,6 +246,22 @@ typedef struct open_file
   struct open_file* next;
 } open_file;
 
+
+typedef struct options
+{
+  char cache_timeout[OPTION_SIZE];
+  char verify_ssl[OPTION_SIZE];
+  char segment_size[OPTION_SIZE];
+  char segment_above[OPTION_SIZE];
+  char storage_url[OPTION_SIZE];
+  char container[OPTION_SIZE];
+  char temp_dir[OPTION_SIZE];
+  char client_id[OPTION_SIZE];
+  char client_secret[OPTION_SIZE];
+  char refresh_token[OPTION_SIZE];
+} FuseOptions;
+
+
 typedef struct extra_options
 {
   char get_extended_metadata[OPTION_SIZE];
@@ -263,6 +279,7 @@ typedef struct extra_options
   char enable_syslog[OPTION_SIZE];
   char enable_chaos_test_monkey[OPTION_SIZE];
   char disable_atime_check[OPTION_SIZE];
+  char http_log_path[OPTION_SIZE];
 } ExtraFuseOptions;
 
 time_t my_timegm(struct tm* tm);
@@ -361,6 +378,8 @@ void interrupt_handler(int sig);
 void sigpipe_callback_handler(int signum);
 void clear_full_cache();
 void print_options();
+void set_global_thread_debug(char* operation, const char* path);
+void debug_http(const char* method, const char* url);
 void debugf(int level, char* fmt, ...);
 
 #endif

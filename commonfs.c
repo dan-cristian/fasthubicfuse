@@ -60,7 +60,10 @@ long option_min_speed_timeout;
 long option_read_ahead = 0;
 bool option_enable_chaos_test_monkey = false;//create random errors for testing
 bool option_disable_atime_check = false;
+char* option_http_log_path;
 pthread_t control_thread = NULL;
+char* g_current_op;//current thread operation
+int g_thread_id;//current thread id
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -92,8 +95,8 @@ time_t get_time_from_str_as_gmt(char* time_str)
 }
 
 /*
-  return time as time_t, and if time_str != NULL returns also a string
-  representation in time_str
+   return time as time_t, and if time_str != NULL returns also a string
+   representation in time_str
 */
 time_t get_time_as_local(time_t time_t_val, char time_str[], int char_buf_size)
 {
@@ -152,8 +155,8 @@ size_t get_time_now_as_str(char* time_str, int time_str_len)
 }
 
 /*
-  get current time with milisecond precision
-  return size of time string
+   get current time with milisecond precision
+   return size of time string
 */
 size_t get_time_now_milisec_as_str(char* time_str, int time_str_len)
 {
@@ -175,7 +178,7 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
 }
 
 /*
-  set dir_entry access time to now
+   set dir_entry access time to now
 */
 void update_cache_access(dir_entry* de)
 {
@@ -207,8 +210,8 @@ char* str2md5(const char* str, int length)
 }
 
 /*
-  solution from http://stackoverflow.com/questions/10324611/how-to-calculate-the-md5-hash-of-a-large-file-in-c
-  carefull with md5_file_str size
+   solution from http://stackoverflow.com/questions/10324611/how-to-calculate-the-md5-hash-of-a-large-file-in-c
+   carefull with md5_file_str size
 */
 int file_md5(FILE* file_handle, char* md5_file_str)
 {
@@ -218,7 +221,6 @@ int file_md5(FILE* file_handle, char* md5_file_str)
     debugf(DBG_NORM, KRED"file_md5: NULL file handle");
     return 0;
   }
-
   unsigned char c[MD5_DIGEST_LENGTH];
   int i;
   MD5_CTX mdContext;
@@ -248,8 +250,8 @@ int file_md5(FILE* file_handle, char* md5_file_str)
 }
 
 /*
-  init md5 context before starting
-  to calculate md5sum on a http job (upload or download)
+   init md5 context before starting
+   to calculate md5sum on a http job (upload or download)
 */
 bool init_job_md5(thread_job* job)
 {
@@ -261,7 +263,7 @@ bool init_job_md5(thread_job* job)
 }
 
 /*
-  updates md5sum based on data received
+   updates md5sum based on data received
 */
 bool update_job_md5(thread_job* job, const unsigned char* data_buf,
                     int buf_len)
@@ -271,7 +273,7 @@ bool update_job_md5(thread_job* job, const unsigned char* data_buf,
 }
 
 /*
-  saves a snapshot of md5 context
+   saves a snapshot of md5 context
 */
 void save_job_md5(thread_job* job)
 {
@@ -279,7 +281,7 @@ void save_job_md5(thread_job* job)
   job->is_mdcontext_saved = true;
 }
 /*
-  restores the snapshot of md5 context
+   restores the snapshot of md5 context
 */
 void restore_job_md5(thread_job* job)
 {
@@ -287,7 +289,7 @@ void restore_job_md5(thread_job* job)
   memcpy(&job->mdContext, &job->mdContext_saved, sizeof(MD5_CTX));
 }
 /*
-  generates final md5sum for data received so far
+   generates final md5sum for data received so far
 */
 bool complete_job_md5(thread_job* job)
 {
@@ -356,7 +358,7 @@ void free_thread_job(thread_job* job)
   free(job);
 }
 /*
-  determines if local cache content equals cloud content
+   determines if local cache content equals cloud content
 */
 bool file_changed_md5(dir_entry* de)
 {
@@ -367,8 +369,8 @@ bool file_changed_md5(dir_entry* de)
 }
 
 /*
-  determines if cached file time is different than cloud time.
-  if different this usually means content has changed (write or trunc).
+   determines if cached file time is different than cloud time.
+   if different this usually means content has changed (write or trunc).
 */
 bool file_changed_time(dir_entry* de)
 {
@@ -407,16 +409,16 @@ void removeSubstr(char* string, char* sub)
 }
 
 /*
-  check if http response code means the operation completed ok
+   check if http response code means the operation completed ok
 */
 bool valid_http_response(int response)
 {
   return (response >= 200 && response < 300);
 }
-/*compose a unique cache file path within max name bounds
-  temp_dir = file folder prefix
-  parent_dir_path_safe = returns parent dir, optional, set to null if not needed
-  segment_part >=0 for segmented files, otherwise use -1
+/* compose a unique cache file path within max name bounds
+   temp_dir = file folder prefix
+   parent_dir_path_safe = returns parent dir, optional, set to null if not needed
+   segment_part >=0 for segmented files, otherwise use -1
 */
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
@@ -494,7 +496,6 @@ void debug_print_file_name(FILE* fp)
   char filename[0xFFF];
   int fno;
   ssize_t r;
-
   if (fp != NULL)
   {
     fno = fileno(fp);
@@ -509,7 +510,6 @@ void debug_print_file_name(FILE* fp)
              fp, fno, filename);
     }
   }
-
 }
 void debug_print_descriptor(struct fuse_file_info* info)
 {
@@ -638,9 +638,9 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
 
 
 /*
-  return a segment entry from dir_entry
-  it assumes segments are stored in sorted ascending order
-  NOTE!: it also sets the segment_part field
+   return a segment entry from dir_entry
+   it assumes segments are stored in sorted ascending order
+   NOTE!: it also sets the segment_part field
 */
 dir_entry* get_segment(dir_entry* de, int segment_index)
 {
@@ -656,7 +656,6 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
              segment_index, des->name, de_segment);
       abort();
     }
-
     if (de_segment == segment_index)
     {
       if (des->segment_part != segment_index)
@@ -670,7 +669,7 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
 }
 
 /*
-  unencode string, convert %2f to /
+   unencode string, convert %2f to /
 */
 void decode_path(char* path)
 {
@@ -708,7 +707,7 @@ void split_path(const char* path, char* seg_base, char* container,
 }
 
 /*
-  get manifest path using main file mane
+   get manifest path using main file mane
 */
 void get_manifest_path(dir_entry* de, char* manifest_path)
 {
@@ -727,7 +726,7 @@ void get_segment_manifest(char* manifest_seg, dir_entry* de, int seg_index)
 
 
 /*
-  set manifest fields, usually for a new file
+   set manifest fields, usually for a new file
 */
 void set_manifest_meta(char* path, dir_entry* de, int man_type)
 {
@@ -737,7 +736,6 @@ void set_manifest_meta(char* path, dir_entry* de, int man_type)
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
   split_path(path, seg_base, container, object);
-
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
   char string_float[TIME_CHARS];
@@ -747,14 +745,12 @@ void set_manifest_meta(char* path, dir_entry* de, int man_type)
   //fixme: manifest path might be too long
   snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments",
            HUBIC_SEGMENT_STORAGE_ROOT, container);
-
   if (man_type == META_MANIF_SEG || man_type == META_MANIF_ALL)
   {
     if (de->manifest_seg)
       free(de->manifest_seg);
     de->manifest_seg = strdup(manifest);
   }
-
   if (man_type == META_MANIF_TIME || man_type == META_MANIF_ALL)
   {
     snprintf(manifest, MAX_URL_SIZE, "%s/%s_segments/%s/%s",
@@ -784,7 +780,7 @@ void set_manifest_meta(char* path, dir_entry* de, int man_type)
 }
 
 /*
-  set all manifest fields
+   set all manifest fields
 */
 void create_manifest_meta(dir_entry* de)
 {
@@ -792,12 +788,11 @@ void create_manifest_meta(dir_entry* de)
   assert(!de->manifest_cloud);
   assert(!de->manifest_seg);
   assert(!de->manifest_time);
-
   set_manifest_meta(de->full_name, de, META_MANIF_ALL);
 }
 
 /*
-  populates segment standard fields
+   populates segment standard fields
 */
 void create_segment_meta(dir_entry* de_seg, int seg_index, dir_entry* de)
 {
@@ -805,7 +800,6 @@ void create_segment_meta(dir_entry* de_seg, int seg_index, dir_entry* de)
   assert(!de_seg->name);
   assert(!de_seg->full_name);
   assert(!de_seg->full_name_hash);
-
   de_seg->segment_part = seg_index;
   char seg_name[8 + 1] = { 0 };
   snprintf(seg_name, 8 + 1, "%08i", seg_index);
@@ -822,7 +816,7 @@ void create_segment_meta(dir_entry* de_seg, int seg_index, dir_entry* de)
   else de_seg->segment_size = de->segment_remaining;
 }
 /*
-  set dir_entry standard meta using path (like name, full_name, hash)
+   set dir_entry standard meta using path (like name, full_name, hash)
 */
 void create_entry_meta(const char* path, dir_entry* de)
 {
@@ -830,7 +824,6 @@ void create_entry_meta(const char* path, dir_entry* de)
   //assert(!de->full_name);
   //assert(!de->name);
   //assert(!de->full_name_hash);
-
   char seg_base[MAX_URL_SIZE] = "";
   char container[MAX_URL_SIZE] = "";
   char object[MAX_URL_SIZE] = "";
@@ -844,16 +837,15 @@ void create_entry_meta(const char* path, dir_entry* de)
     de->full_name_hash = strdup(str2md5(de->full_name, strlen(de->full_name)));
 }
 /*
-  returns the segment.
-  if does not exist then a new empty segment is created, used when writing new files.
-  removed -> NOTE!: sets de->manifest field
+   returns the segment.
+   if does not exist then a new empty segment is created, used when writing new files.
+   removed -> NOTE!: sets de->manifest field
 */
 dir_entry* get_create_segment(dir_entry* de, int segment_index)
 {
   int de_segment;
   dir_entry* de_seg;
   bool reused = false;
-
   if (!de->segments)
   {
     debugf(DBG_EXT, "get_create_segment(%s:%d): creating first segment",
@@ -896,7 +888,7 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
 }
 
 /*
-  delete segments from memory cache
+   delete segments from memory cache
 */
 void dir_decache_segments(dir_entry* de)
 {
@@ -924,7 +916,7 @@ void unlock_mutex(pthread_mutex_t mutex)
 }
 
 /*
-  removes path from cache, I think only works fine with child objects?
+   removes path from cache, I think only works fine with child objects?
 */
 void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
                           const char* path)
@@ -995,8 +987,8 @@ void dir_decache_upload(const char* path)
 }
 
 /*
-  post a semaphore and waits until semaphore count changes
-  or exits after a period of time (500 milisecond)
+   post a semaphore and waits until semaphore count changes
+   or exits after a period of time (500 milisecond)
 */
 void unblock_semaphore(sem_t* semaphore, char* name)
 {
@@ -1105,7 +1097,6 @@ long random_at_most(long max)
   num_rand = (unsigned long)RAND_MAX + 1,
   bin_size = num_rand / num_bins,
   defect = num_rand % num_bins;
-
   long x;
   do
   {
@@ -1113,23 +1104,21 @@ long random_at_most(long max)
   }
   // This is carefully written not to overflow
   while (num_rand - defect <= (unsigned long)x);
-
   // Truncated division is intentional
   return x / bin_size;
 }
 
 /*
-  init with cloud values without knowing extended metadata
-  this is not safe for operations relaying on extended attribs
+   init with cloud values without knowing extended metadata
+   this is not safe for operations relaying on extended attribs
 */
 void init_entry_lazy(dir_entry* de)
 {
   de->lazy_meta = true;
-
 }
 
 /*
-  default values for entry
+   default values for entry
 */
 dir_entry* init_dir_entry()
 {
@@ -1222,7 +1211,7 @@ void free_de_before_head(dir_entry* de)
 }
 
 /*
-  create and initialise a dir_entry with now values
+   create and initialise a dir_entry with now values
 */
 void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
 {
@@ -1255,7 +1244,7 @@ void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
 }
 
 /*
-  duplicate a dir_entry, does not overwrite name fields
+   duplicate a dir_entry, does not overwrite name fields
 */
 void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
 {
@@ -1267,7 +1256,6 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
     dst->full_name = strdup(src->full_name);
   if (!dst->full_name_hash && src->full_name_hash)
     dst->full_name_hash = strdup(src->full_name_hash);
-
   dst->atime.tv_sec = src->atime.tv_sec;
   dst->atime.tv_nsec = src->atime.tv_nsec;
   dst->mtime.tv_sec = src->mtime.tv_sec;
@@ -1290,7 +1278,6 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
       free(dst->md5sum_local);
     dst->md5sum_local = strdup(src->md5sum_local);
   }
-
   dst->has_unvisible_segments = src->has_unvisible_segments;
   dst->lazy_segment_load = src->lazy_segment_load;
   dst->size = src->size;
@@ -1372,16 +1359,13 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
           return;
         }
       }
-
       de = init_dir_entry();
       create_dir_entry(de, path);
-
       de->size = size;
       de->isdir = isdir;
       de->islink = islink;
       //de->name = strdup(&path[strlen(cw->path) + 1]);
       //de->full_name = strdup(path);
-
       if (islink)
         de->content_type = strdup("application/link");
       if (isdir)
@@ -1426,13 +1410,12 @@ void update_dir_cache_upload(const char* path, off_t size, int isdir,
   //create a folder in cache if does not exist to hold the file
   if (!check_caching_list_dir_upload(dir, &tmp))
     new_cache_upload(dir);
-
   internal_update_dir_cache(dcache_upload, dcacheuploadmut, true, path, size,
                             isdir, islink);
 }
 
 /*
-  return cache entry
+   return cache entry
 */
 dir_cache* get_cache_entry(const char* path)
 {
@@ -1569,8 +1552,8 @@ dir_entry* path_info(const char* path)
 }
 
 /*
-  appends a dir entry object (file) in cache
-  returns false if parent folder is not found
+   appends a dir entry object (file) in cache
+   returns false if parent folder is not found
 */
 bool append_dir_entry(dir_entry* de)
 {
@@ -1630,8 +1613,8 @@ int internal_check_caching_list_directory(dir_cache* cache,
 }
 
 /*
-  retrieve folder from local cache if exists,
-  return null if does not exist (rather than download)
+   retrieve folder from local cache if exists,
+   return null if does not exist (rather than download)
 */
 int check_caching_list_directory(const char* path, dir_entry** list)
 {
@@ -1639,8 +1622,8 @@ int check_caching_list_directory(const char* path, dir_entry** list)
 }
 
 /*
-  retrieve folder from upload local cache if exists,
-  return null if does not exist
+   retrieve folder from upload local cache if exists,
+   return null if does not exist
 */
 int check_caching_list_dir_upload(const char* path, dir_entry** list)
 {
@@ -1660,28 +1643,28 @@ dir_entry* check_parent_folder_for_file(const char* path)
 }
 
 /*
-  replace an object with a new one in cache.
-  returns the old object which must be freed in the caller
+   replace an object with a new one in cache.
+   returns the old object which must be freed in the caller
 */
 /*
-  dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
-  {
-  debugf(DBG_EXTALL, "replace_cache_object(%s:%s)", de->name,
+   dir_entry*  replace_cache_object(const dir_entry* de, dir_entry* de_new)
+   {
+   debugf(DBG_EXTALL, "replace_cache_object(%s:%s)", de->name,
          de_new->name);
-  char dir[MAX_PATH_SIZE];
-  dir_for(de->full_name, dir);
-  dir_entry* tmp;
-  //get parent folder cache entry
-  if (!check_caching_list_directory(dir, &tmp))
-  {
+   char dir[MAX_PATH_SIZE];
+   dir_for(de->full_name, dir);
+   dir_entry* tmp;
+   //get parent folder cache entry
+   if (!check_caching_list_directory(dir, &tmp))
+   {
     debugf(DBG_EXTALL,
            "exit 0: replace_cache_object(%s) " KYEL "[CACHE-MISS]",
            de->full_name);
     return false;
-  }
-  dir_entry* prev = NULL;
-  for (; tmp; tmp = tmp->next)
-  {
+   }
+   dir_entry* prev = NULL;
+   for (; tmp; tmp = tmp->next)
+   {
     if (!strcmp(tmp->full_name, de->full_name))
     {
       debugf(DBG_EXTALL, "exit 1: replace_cache_object(%s) "KGRN"[CACHE-HIT]",
@@ -1695,13 +1678,13 @@ dir_entry* check_parent_folder_for_file(const char* path)
       return tmp;
     }
     prev = tmp;
-  }
-  return NULL;
-  }
+   }
+   return NULL;
+   }
 */
 
 /*
-  check if local path is in cache, without downloading from cloud if not in cache
+   check if local path is in cache, without downloading from cloud if not in cache
 */
 dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
 {
@@ -1742,7 +1725,7 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
 }
 
 /*
-  check if local path is in cache, without downloading from cloud if not in cache
+   check if local path is in cache, without downloading from cloud if not in cache
 */
 dir_entry* check_path_info(const char* path)
 {
@@ -1750,8 +1733,8 @@ dir_entry* check_path_info(const char* path)
 }
 
 /*
-  check if local path is in upload cache,
-  without downloading from cloud if not in cache
+   check if local path is in upload cache,
+   without downloading from cloud if not in cache
 */
 dir_entry* check_path_info_upload(const char* path)
 {
@@ -1759,7 +1742,7 @@ dir_entry* check_path_info_upload(const char* path)
 }
 
 /*
-  unlink a segment file from cache
+   unlink a segment file from cache
 */
 bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
 {
@@ -1784,11 +1767,11 @@ bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
   return result == 0;
 }
 /*
-  look for segment in cache
-  if exists, returns file handle to file in cache
-  if does not exist, create file and return handle
+   look for segment in cache
+   if exists, returns file handle to file in cache
+   if does not exist, create file and return handle
 
-  de_seg can be null if file is not segmented, work with main file
+   de_seg can be null if file is not segmented, work with main file
 */
 bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
                            FILE** fp_segment, const char* method)
@@ -1820,15 +1803,14 @@ bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
 }
 
 /*
-  look for segment in cache
-  if exists, check md5sum, returns file handle to file in cache
-  if does not exist, create file and return handle
+   look for segment in cache
+   if exists, check md5sum, returns file handle to file in cache
+   if does not exist, create file and return handle
 */
 bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
                             FILE** fp_segment, const char* method)
 {
   bool file_exist = open_segment_in_cache(de, de_seg, fp_segment, method);
-
   if (file_exist)
   {
     debugf(DBG_EXTALL,
@@ -1866,7 +1848,7 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
 }
 
 /*
-  verify if file is in cache and has correct content
+   verify if file is in cache and has correct content
 */
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
 {
@@ -1888,7 +1870,7 @@ bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp)
   return result;
 }
 /*
-  returns if file was found in cache and sets open fp pointer
+   returns if file was found in cache and sets open fp pointer
 */
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
 {
@@ -1920,20 +1902,18 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
     int fno = fileno(*fp);
     assert(fno != -1);
   }
-
   return file_exist;
 }
 
 /*
-  look for file in cache
-  if exists, check md5sum, returns file handle to file in cache
-  if does not exist, create file and return handle
+   look for file in cache
+   if exists, check md5sum, returns file handle to file in cache
+   if does not exist, create file and return handle
 */
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
 {
   debugf(DBG_EXTALL, KMAG "open_file_cache_md5(%s): open fp=%p", de->name, *fp);
   bool file_exist = open_file_in_cache(de, fp, method);
-
   if (file_exist)
   {
     debugf(DBG_EXTALL, KMAG "open_file_cache_md5: found file, md5=%s",
@@ -2019,11 +1999,11 @@ bool cleanup_older_segments(char* dir_path, char* exclude_path)
 }
 
 /*
-  O_CREAT = 32768
-  O_RDONLY = 32768
-  O_WRONLY = 32769
-  O_RDWR = 32770
-  O_APPEND = 33792
+   O_CREAT = 32768
+   O_RDONLY = 32768
+   O_WRONLY = 32769
+   O_RDWR = 32770
+   O_APPEND = 33792
 */
 void flags_to_openmode(unsigned int flags, char* openmode)
 {
@@ -2072,7 +2052,6 @@ void flags_to_openmode(unsigned int flags, char* openmode)
     openmode[i] = '!';
     i++;
   }
-
   //default open mode is r
   if (i == 0)
   {
@@ -2165,9 +2144,9 @@ bool close_lock_file(const char* path, int fd)
 }
 
 /*
-  verifies if lock can be obtained
-  if file is open for read, a read lock can be obtained
-  if file is open for write, no lock can be obtained
+   verifies if lock can be obtained
+   if file is open for read, a read lock can be obtained
+   if file is open for write, no lock can be obtained
 */
 bool can_add_lock(const char* path, char* open_flags, char* fuse_op)
 {
@@ -2197,14 +2176,13 @@ bool can_add_lock(const char* path, char* open_flags, char* fuse_op)
 
 
 /*
-  creates or opens a lock file in temp folder with flags mode
-  and returns file descriptor.
-  return -1 if lock can't be obtained
+   creates or opens a lock file in temp folder with flags mode
+   and returns file descriptor.
+   return -1 if lock can't be obtained
 */
 int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
 {
   debugf(DBG_EXT, "open_lock_file(%s): flags=%d", path, flags);
-  
   FILE* temp_file = NULL;
   char open_flags[10];
   char file_path_safe[NAME_MAX];
@@ -2219,12 +2197,12 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
     can_add = can_add_lock(path, open_flags, fuse_op);
     if (can_add)
       break;
-    else {
+    else
+    {
       unlock_mutex(dlockmut);
       sleep_ms(250);
     }
   }
-
   int fd;
   if (!can_add)
   {
@@ -2246,11 +2224,12 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
     if (!temp_file)
     {
       debugf(DBG_EXT, KRED
-        "open_lock_file(%s): lock file busy, mode=%s err=%s",
-        path, open_flags, strerror(errsv));
+             "open_lock_file(%s): lock file busy, mode=%s err=%s",
+             path, open_flags, strerror(errsv));
       fd = -1;
     }
-    else {
+    else
+    {
       fd = fileno(temp_file);
       assert(fd != -1);
       add_lock_file(path, open_flags, temp_file, fd, fuse_op);
@@ -2284,16 +2263,14 @@ bool update_lock_file(const char* path, int fd, const char* search_flag,
   return result;
 }
 /*
-  delete all segment cached files from disk
+   delete all segment cached files from disk
 */
 void unlink_cache_segments(dir_entry* de)
 {
   debugf(DBG_EXT, "unlink_cache_segments(%s)", de->full_name);
-
   char segment_file_path[PATH_MAX] = { 0 };
   char segment_parent_dir_path[PATH_MAX] = { 0 };
   dir_entry* de_seg = de->segments;
-
   do
   {
     //ensure we remove first segment
@@ -2312,7 +2289,6 @@ void unlink_cache_segments(dir_entry* de)
       de_seg = de_seg->next;
   }
   while (de_seg);
-
   if (rmdir(segment_parent_dir_path) != 0)
     debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
            segment_parent_dir_path, strerror(errno));
@@ -2376,14 +2352,12 @@ void interrupt_handler(int sig)
   //TODO: clear dir cache
   dir_decache("");
   pthread_mutex_destroy(&dcachemut);
-
   exit(0);
 }
 
 /* Catch Signal Handler function */
 void sigpipe_callback_handler(int signum)
 {
-
   debugf(DBG_NORM, KRED "Caught signal SIGPIPE, ignoring %d", signum);
 }
 
@@ -2394,6 +2368,7 @@ void clear_full_cache()
 
 void print_options()
 {
+  fprintf(stderr, "temp_dir= %s\n", temp_dir);
   fprintf(stderr, "verify_ssl = %d\n", verify_ssl);
   fprintf(stderr, "curl_progress_state = %d\n", option_curl_progress_state);
   fprintf(stderr, "segment_size = %lu\n", segment_size);
@@ -2415,8 +2390,45 @@ void print_options()
   fprintf(stderr, "enable_chaos_test_monkey = %d\n",
           option_enable_chaos_test_monkey);
   fprintf(stderr, "disable_atime_check = %d\n", option_disable_atime_check);
+  fprintf(stderr, "http_log_path = %s\n", option_http_log_path);
 }
 
+
+
+void debug_http(const char* method, const char* url)
+{
+#ifdef SYS_gettid
+  pid_t thread_id = syscall(SYS_gettid);
+#else
+  int thread_id = 0;
+#error "SYS_gettid unavailable on this system"
+#endif
+  if (option_http_log_path && strlen(option_http_log_path) > 0)
+  {
+    FILE* log = fopen(option_http_log_path, "a");
+    if (log)
+    {
+      char time_str[TIME_CHARS];
+      get_time_now_milisec_as_str(time_str, sizeof(time_str));
+      fprintf(log, "[%s] %d-%d %s %s %s\n", time_str, g_thread_id, thread_id,
+              g_current_op, method, url);
+      fclose(log);
+    }
+  }
+}
+
+void set_global_thread_debug(char* operation, const char* path)
+{
+  g_current_op = operation;
+#ifdef SYS_gettid
+  pid_t thread_id = syscall(SYS_gettid);
+#else
+  int thread_id = 0;
+#error "SYS_gettid unavailable on this system"
+#endif
+  g_thread_id = thread_id;
+  debug_http("FUSE", path);
+}
 
 void debugf(int level, char* fmt, ...)
 {
@@ -2437,7 +2449,6 @@ void debugf(int level, char* fmt, ...)
         prefix = "==DBG%d [%s]:%d==";
       else
         prefix = "==DBG%d [%s]:%d=="KBRED KWHT"Chaos Testing: ";
-
       char startstr[4096];
       char endstr[4096];
       char time_str[TIME_CHARS];

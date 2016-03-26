@@ -23,7 +23,7 @@
 #include "config.h"
 
 /*
-  http://docs.openstack.org/developer/swift/api/object_api_v1_overview.html
+   http://docs.openstack.org/developer/swift/api/object_api_v1_overview.html
 */
 extern char* temp_dir;
 extern pthread_mutex_t dcachemut;
@@ -50,7 +50,9 @@ extern long option_read_ahead;
 extern bool option_enable_syslog;
 extern bool option_enable_chaos_test_monkey;
 extern bool option_disable_atime_check;
+extern char* option_http_log_path;
 extern pthread_t control_thread;
+extern char* g_current_op;
 
 FuseOptions options =
 {
@@ -83,7 +85,8 @@ ExtraFuseOptions extra_options =
   .read_ahead = "0",
   .enable_syslog = "0",
   .enable_chaos_test_monkey = "false",
-  .disable_atime_check = "false"
+  .disable_atime_check = "false",
+  .http_log_path = ""
 };
 
 bool initialise_options(struct fuse_args args)
@@ -99,7 +102,6 @@ bool initialise_options(struct fuse_args args)
       parse_option(NULL, line, -1, &args);
     fclose(settings);
   }
-
   cache_timeout = atoi(options.cache_timeout);
   segment_size = atoll(options.segment_size);
   segment_above = atoll(options.segment_above);
@@ -115,7 +117,6 @@ bool initialise_options(struct fuse_args args)
   }
   if (*options.verify_ssl)
     verify_ssl = !strcasecmp(options.verify_ssl, "true") ? 2 : 0;
-
   if (*extra_options.get_extended_metadata)
     option_get_extended_metadata = !strcasecmp(extra_options.get_extended_metadata,
                                    "true");
@@ -155,6 +156,7 @@ bool initialise_options(struct fuse_args args)
   if (*extra_options.disable_atime_check)
     option_disable_atime_check = !strcasecmp(extra_options.disable_atime_check,
                                  "true");
+  option_http_log_path = extra_options.http_log_path;
   if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
   {
     fprintf(stderr,
@@ -205,16 +207,19 @@ bool initialise_options(struct fuse_args args)
             "  enable_chaos_test_monkey=[Enable creation of random errors to test program stability]\n");
     fprintf(stderr,
             "  disable_atime_check=[Disable atime file check even if is enabled at mount]\n");
+    fprintf(stderr,
+            "  http_log_path=[file path to log all http request for debug]\n");
     return false;
   }
   return true;
 }
 
 /*
-  with lazy meta file size (and segmented status) can be incorrect
+   with lazy meta file size (and segmented status) can be incorrect
 */
 static int cfs_getattr(const char* path, struct stat* stbuf)
 {
+  set_global_thread_debug("cfs_getattr", path);
   debugf(DBG_NORM, KBBLU "cfs_getattr(%s)", path);
   if (debug > 0)
   {
@@ -345,6 +350,7 @@ static int cfs_getattr(const char* path, struct stat* stbuf)
 static int cfs_fgetattr(const char* path, struct stat* stbuf,
                         struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_fgetattr", path);
   debugf(DBG_NORM, KBBLU "cfs_fgetattr(%s): calling getattr", path);
   int result = cfs_getattr(path, stbuf);
   debugf(DBG_NORM, KBBLU "cfs_fgetattr(%s): exit getattr", path);
@@ -354,6 +360,7 @@ static int cfs_fgetattr(const char* path, struct stat* stbuf,
 static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
                        off_t offset, struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_readdir", path);
   debugf(DBG_NORM, KBBLU "cfs_readdir(%s)", path);
   dir_entry* de, *de_root;
   //fixme: if this called while an upload is in progress and cache expires,
@@ -378,6 +385,7 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
 
 static int cfs_mkdir(const char* path, mode_t mode)
 {
+  set_global_thread_debug("cfs_mkdir", path);
   debugf(DBG_NORM, KBBLU "cfs_mkdir(%s)", path);
   int response = cloudfs_create_directory(path);
   if (response)
@@ -395,6 +403,7 @@ static int cfs_mkdir(const char* path, mode_t mode)
 static int cfs_create(const char* path, mode_t mode,
                       struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_create", path);
   debugf(DBG_NORM, KBBLU "cfs_create(%s)", path);
   int fd = open_lock_file(path, info->flags, "create");
   if (fd == -1)
@@ -407,10 +416,8 @@ static int cfs_create(const char* path, mode_t mode,
   info->direct_io = 1;
   dir_entry* de = check_path_info_upload(path);
   assert(de);
-
   //create_dir_entry(de, path, mode);
   de->chmod = mode;
-
   //create empty file
   int result = cloudfs_create_object(de);
   close_lock_file(path, fd);
@@ -431,6 +438,7 @@ static int cfs_create(const char* path, mode_t mode,
 */
 static int cfs_open(const char* path, struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_open", path);
   debugf(DBG_NORM, KBBLU
          "cfs_open(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
@@ -451,7 +459,6 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
   //if (option_get_extended_metadata &&
   //    (!de->metadata_downloaded || de->lazy_segment_load))
   bool res = get_file_metadata(de, true, true);
-
   info->fh = (uintptr_t)fd;
   info->direct_io = 1;
   //non seek must be set to 0 to enable
@@ -462,8 +469,8 @@ static int cfs_open(const char* path, struct fuse_file_info* info)
 }
 
 /*
-  download file from cloud
-  http://docs.openstack.org/developer/swift/api/large_objects.html
+   download file from cloud
+   http://docs.openstack.org/developer/swift/api/large_objects.html
 */
 static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                     struct fuse_file_info* info)
@@ -478,15 +485,14 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
   //sleep_ms(rnd);
   if (offset == 0)
   {
+    set_global_thread_debug("cfs_read", path);
     //mark as exclusive read lock instead of soft read
     assert(update_lock_file(path, info->fh, "r", "r!"));
   }
   int iters = 0;
   bool in_cache = false;
-
   dir_entry* de = check_path_info(path);
   update_cache_access(de);
-
   if (de && de->is_segmented)
   {
     int read_ahead_count = (option_read_ahead / de->segment_size) + 1;
@@ -546,7 +552,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
           else
             debugf(DBG_EXT, "cfs_read: read ahead OK seg=%s", de_seg->name);
         }
-
         if (in_cache)
         {
           int fno = fileno(fp_segment);
@@ -568,7 +573,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
                 (de_seg_next->md5sum_local == NULL
                  || (strcasecmp(de_seg_next->md5sum_local, de_seg_next->md5sum))))
               download_ahead_segment(de_seg_next, de, fp_segment, false);
-
             if (result > 0)
               return result;
             else
@@ -595,7 +599,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         //was open after read_ahead
         fclose(fp_segment);
         fp_segment = NULL;
-
         if (false)//de->is_progressive)
         {
           //sleep_ms(rnd);
@@ -635,7 +638,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
     }//end while
     return result;
   }
-
   //non-segmented files
   if (de && !de->is_segmented)
   {
@@ -660,7 +662,6 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
         else
           debugf(DBG_EXT, "cfs_read: download OK file=%s", de->name);
       }
-
       if (in_cache)
       {
         int fno = fileno(fp_file);
@@ -695,6 +696,7 @@ static int cfs_read(const char* path, char* buf, size_t size, off_t offset,
 //and to only save meta when just attribs are modified.
 static int cfs_flush(const char* path, struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_flush", path);
   debugf(DBG_NORM, KBBLU
          "cfs_flush(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
@@ -712,12 +714,14 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
   dir_entry* de_upload = check_path_info_upload(path);
   if (!de_upload)
     assert(de);
-
   if (de_upload)
   {
     debugf(DBG_EXT, KMAG "cfs_flush(%s): signal upload done, size=%lu",
            path, de_upload->size);
-    //on cfs_create empty file segment count is 0, no need to enter here
+
+    //todo: mark file as non-segmented if has no segments
+
+    //on cfs_create, empty file segment count is 0, no need to enter here
     if (de_upload->is_segmented && de_upload->segment_count > 0)
     {
       dir_entry* de_seg = get_segment(de_upload, de_upload->segment_count - 1);
@@ -736,6 +740,8 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         //otherwise errors will be thrown by rsync (due to early rename)
         //fixme: sometimes we get freeze
         sem_wait(de_seg->upload_buf.sem_list[SEM_DONE]);
+        debugf(DBG_EXT, KMAG "cfs_flush(%s): wait done for last=%s",
+               de_upload->name, de_seg->name);
         //check if all previous segment uploads are done (except last)
         //sometimes prev uploads are still in progress
         int seg_index;
@@ -757,9 +763,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
             assert(de_seg_tmp);
             if (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
             {
-              if (loops % 20 == 0)
-                debugf(DBG_EXT, KMAG "cfs_flush(%s): wait for pending upload %s",
-                       de->name, de_seg_tmp->name);
+              //if (loops % 20 == 0)
+              debugf(DBG_EXT, KMAG
+                     "cfs_flush(%s, #%d): wait for pending upload %s",
+                     de->name, loops, de_seg_tmp->name);
               //upload might be blocked in sem_wait @ upload_prog
               //after cfs_write completed, so feed data from here
               if (de_seg_tmp->upload_buf.feed_from_cache)
@@ -774,18 +781,16 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
               pending = true;
             }
             else
-              debugf(DBG_EXT, KMAG "cfs_flush(%s): upload done %s md5=%s",
-                     de_upload->name, de_seg_tmp->name, de_seg_tmp->md5sum);
+              debugf(DBG_EXT, KMAG "cfs_flush(%s, #%d): upload done %s md5=%s",
+                     de_upload->name, loops, de_seg_tmp->name, de_seg_tmp->md5sum);
           }
           if (pending)
             sleep_ms(200);
           loops++;
         }
         while (pending && loops < 120);
-
         //signal free of last semaphore is safe now
         //free_semaphores(&de_seg->upload_buf, SEM_DONE);
-
         //if operation completed ok calculate file cumulative segment etag
         if (!pending)
         {
@@ -812,7 +817,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         complete_job_md5(de_upload->job);
         //complete md5sum using http uploaded content
         complete_job_md5(de_upload->job2);
-
         if (pending)
         {
           debugf(DBG_EXT, KRED
@@ -820,7 +824,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           abort();
           result = -EIO;
         }
-
         if (strcasecmp(de_upload->job->md5str, de_upload->job2->md5str))
         {
           //md5sums are different, upload is corrupt
@@ -833,16 +836,37 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         else
           debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
                  de_upload->name, de_upload->job->md5str);
-
         //fixme: sometimes last segment is not yet visible on cloud
         //copy dir_entry for to have segment list complete
         if (de_upload->has_unvisible_segments)
+        {
+          //de might not be null, segs to be removed
+          if (de->segments)
+          {
+            //cloudfs_free_dir_list(de->segments);
+            //de->segments = NULL;
+            abort();//should have been deleted in cfs_write
+          }
           copy_dir_entry(de_upload, de, true);
-
+        }
         //mark file meta as obsolete to force a reload (for md5sums mostly)
         //if has unvisible segments update_segments in get_file_meta will skip
         de->metadata_downloaded = false;
-        bool meta_ok = get_file_metadata(de, true, true);
+        bool meta_ok;
+        loops = 0;
+        do
+        {
+          //sometimes head on meta returns incomplete info (e.g. segmented=0)
+          meta_ok = get_file_metadata(de, true, true);
+          loops++;
+          if (!de->is_segmented)
+          {
+            debugf(DBG_EXT, KRED "cfs_flush(%s): expected segmented",
+                   de_upload->name);
+            abort();
+          }
+        }
+        while (!de->is_segmented && loops < REQUEST_RETRIES);
         if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
         {
           if (!strcasecmp(de->md5sum, de_upload->segments->md5sum_local))
@@ -899,19 +923,18 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         {
           //local_cache is null when segment is missing
           assert(de_upload->upload_buf.local_cache_file);
-		      //init_semaphores(&de_upload->upload_buf, de_upload, "upload-cache");
+          //init_semaphores(&de_upload->upload_buf, de_upload, "upload-cache");
           int_cfs_write_cache_data_feed(de_upload);
           de_upload->upload_buf.feed_from_cache = false;
           //signal to force http upload completion
-		      //fixme: this was not unblocking progressive_upload_callback
-		      unblock_semaphore(de_upload->upload_buf.sem_list[SEM_FULL], 
-            de_upload->upload_buf.sem_name_list[SEM_FULL]);
+          //fixme: this was not unblocking progressive_upload_callback
+          unblock_semaphore(de_upload->upload_buf.sem_list[SEM_FULL],
+                            de_upload->upload_buf.sem_name_list[SEM_FULL]);
           //if (de_upload->upload_buf.sem_list[SEM_FULL])
           //  sem_post(de_upload->upload_buf.sem_list[SEM_FULL]);
         }
         loops++;
       }
-
       if (fuse_md5 && strcasecmp(fuse_md5, de_upload->md5sum))
       {
         //md5sums are different, upload is corrupt
@@ -960,6 +983,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
 
 static int cfs_release(const char* path, struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_release", path);
   debugf(DBG_NORM, KBBLU
          "cfs_release(%s) d_io=%d flush=%d non_seek=%d write_pg=%d fh=%p",
          path, info->direct_io, info->flush, info->nonseekable, info->writepage,
@@ -975,6 +999,7 @@ static int cfs_release(const char* path, struct fuse_file_info* info)
 
 static int cfs_rmdir(const char* path)
 {
+  set_global_thread_debug("cfs_rmdir", path);
   debugf(DBG_NORM, KBBLU "cfs_rmdir(%s)", path);
   dir_entry* de = check_path_info(path);
   int success = cloudfs_delete_object(de);
@@ -996,39 +1021,40 @@ static int cfs_rmdir(const char* path)
 static int cfs_ftruncate(const char* path, off_t size,
                          struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_ftruncate", path);
   debugf(DBG_NORM, KBBLU "cfs_ftruncate(%s): size=%lu, ignored", path, size);
-
   dir_entry* de = check_path_info_upload(path);
   if (!de)
     de = check_path_info(path);
   if (de && de->size != size)
     debugf(DBG_ERR, KRED "cfs_ftruncate(%s): file size (%lu) != truncate (%lu)",
            path, de->size, size);
-  /*openfile* of = (openfile*)(uintptr_t)info->fh;
-    if (ftruncate(of->fd, size))
-    return -errno;
-    lseek(of->fd, 0, SEEK_SET);
-    update_dir_cache(path, size, 0, 0);
+  /* openfile* of = (openfile*)(uintptr_t)info->fh;
+     if (ftruncate(of->fd, size))
+     return -errno;
+     lseek(of->fd, 0, SEEK_SET);
+     update_dir_cache(path, size, 0, 0);
   */
   debugf(DBG_NORM, KBBLU "exit: cfs_ftruncate(%s)", path);
   return 0;
 }
 
 /*
-  upload file to cloud
-  http://docs.openstack.org/developer/swift/api/large_objects.html
+   upload file to cloud
+   http://docs.openstack.org/developer/swift/api/large_objects.html
 
-  todo: implement versioning?
-  https://docs.hpcloud.com/publiccloud/api/swift-api.html
+   todo: implement versioning?
+   https://docs.hpcloud.com/publiccloud/api/swift-api.html
 
-  error codes
-  http://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
+   error codes
+   http://www-numi.fnal.gov/offline_software/srt_public_context/WebDocs/Errors/unix_system_errors.html
 */
 static int cfs_write(const char* path, const char* buf, size_t length,
                      off_t offset, struct fuse_file_info* info)
 {
   if (offset == 0)  //avoid clutter
   {
+    set_global_thread_debug("cfs_write", path);
     debugf(DBG_EXT, KBBLU
            "cfs_write(%s) blen=%lu off=%lu", path, length, offset);
   }
@@ -1064,28 +1090,29 @@ static int cfs_write(const char* path, const char* buf, size_t length,
                                       de->name)));
     init_job_md5(job_http_md5);
     de->job2 = job_http_md5;
-
     //if overwriting existing file check if is segmented and
     //remove older segment files
     if (de_orig && de_orig->is_segmented)
     {
       debugf(DBG_EXT, KMAG "cfs_write(%s): deleting old segments", de->name);
       cloudfs_delete_path(de_orig->manifest_cloud, true, false, NULL);
+      cloudfs_free_dir_list(de_orig->segments);//will be replaced by new
+      de_orig->segments = NULL;
     }
   }
   if (de->job)
     update_job_md5(de->job, buf, length);
   else
   {
-    //fixme: potentially an append operation, not yet supported
+    //fixme: potentially an append operation?, not yet supported
     debugf(DBG_ERR, KRED
            "cfs_write(%s) unexpected empty job off=%lu", path, offset);
+    abort();
     return -EIO;
   }
   //force seg_size as this dir_entry might be already initialised?
   de->segment_size = segment_size;
   de->segment_remaining = segment_size; //we don't know remaining size
-
   //assert(de->is_segmented);
   dir_entry* de_seg, *de_tmp;
   int seg_index = 0;
@@ -1095,7 +1122,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
   off_t seg_size_to_upload;
   off_t seg_size_uploaded;
   off_t fuse_size_uploaded = 0;
-
   int last_seg_index = -1;
   int loops = 0;
   dir_entry* prev_seg = NULL;
@@ -1111,7 +1137,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       {
         prev_seg = get_segment(de, seg_index - 1);
         //we know this is segmented so if 2nd segment, set prev to main de
-
         if (!prev_seg && seg_index == 1)
           prev_seg = de;
         assert(prev_seg);
@@ -1139,8 +1164,8 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         if (last_seg_index != -1)
         {
           //close prev cache file as segment changed. last is closed in cfs_flush
-          debugf(DBG_EXT, KMAG "cfs_write(%s:%s): close seg %d", path, 
-            prev_seg->name, de_tmp->segment_part);
+          debugf(DBG_EXT, KMAG "cfs_write(%s:%s): close seg %d", path,
+                 prev_seg->name, de_tmp->segment_part);
           assert(prev_seg->upload_buf.local_cache_file);
           fclose(prev_seg->upload_buf.local_cache_file);
           prev_seg->upload_buf.local_cache_file = NULL;
@@ -1160,7 +1185,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
         assert(de->manifest_seg);
         de_tmp = de_seg;
       }
-
       de_tmp->upload_buf.fuse_buf_size = length;
       //this is called once per segment
       if (!de_tmp->upload_buf.mutex_initialised)
@@ -1191,7 +1215,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     //(when buffer did not fit in the current segment)
     ptr_offset = de->size - offset;
     de_tmp->upload_buf.readptr = buf + ptr_offset;
-
     //start a new segment upload thread when segment upload is at start
     //or at last segment byte (why?)
     if ((de_tmp->upload_buf.size_processed == 0)
@@ -1212,7 +1235,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       bool op_ok = cloudfs_create_segment(de_seg, de);
       assert(op_ok);
     }
-
     //signal there is data available in buffer for upload
     if (de_tmp->upload_buf.sem_list[SEM_FULL])
       sem_post(de_tmp->upload_buf.sem_list[SEM_FULL]);
@@ -1239,7 +1261,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     de->size += seg_size_uploaded;
     if (de_seg)
       de_tmp->size += seg_size_uploaded;
-
     debugf(DBG_EXTALL,
            KMAG "cfs_write(%s:%s): wait done de_seg=%lu de=%lu szproc=%lu",
            de->name, de_tmp->name, de_tmp->size, de->size,
@@ -1261,7 +1282,6 @@ static int cfs_write(const char* path, const char* buf, size_t length,
              "cfs_write(%s:%s): resume fuse data feed workbuf=%lu",
              de->name, de_tmp->name, de_tmp->upload_buf.work_buf_size);
     }
-
     debugf(DBG_EXTALL, KMAG
            "cfs_write(%s:%s): buffer empty work=%lu upld=%lu left=%lu fusz=%lu",
            de->name, de_tmp->name, de_tmp->upload_buf.work_buf_size,
@@ -1277,11 +1297,11 @@ static int cfs_write(const char* path, const char* buf, size_t length,
     debugf(DBG_EXTALL, KBBLU "cfs_write(%s): exit, seg_count=%d",
            path, de->segment_count);
   return length;
-
 }
 
 static int cfs_unlink(const char* path)
 {
+  set_global_thread_debug("cfs_unlink", path);
   debugf(DBG_NORM, KBBLU "cfs_unlink(%s)", path);
   int fd = open_lock_file(path, 0, "unlink");
   if (fd == -1)
@@ -1307,6 +1327,7 @@ static int cfs_unlink(const char* path)
 static int cfs_fsync(const char* path, int idunno,
                      struct fuse_file_info* info)
 {
+  set_global_thread_debug("cfs_fsync", path);
   debugf(DBG_NORM, KBBLU "cfs_fsync(%s)", path);
   return 0;
 }
@@ -1314,6 +1335,7 @@ static int cfs_fsync(const char* path, int idunno,
 //todo: implement this
 static int cfs_truncate(const char* path, off_t size)
 {
+  set_global_thread_debug("cfs_truncate", path);
   debugf(DBG_NORM, KBBLU "cfs_truncate(%s): size=%lu", path, size);
   dir_entry* de = check_path_info_upload(path);
   if (!de)
@@ -1334,6 +1356,7 @@ static int cfs_truncate(const char* path, off_t size)
 //this is called regularly on copy (via mc), is optimised (cached)
 static int cfs_statfs(const char* path, struct statvfs* stat)
 {
+  set_global_thread_debug("cfs_statfs", path);
   debugf(DBG_NORM, KBBLU "cfs_statfs(%s)", path);
   if (cloudfs_statfs(path, stat))
   {
@@ -1349,6 +1372,7 @@ static int cfs_statfs(const char* path, struct statvfs* stat)
 
 static int cfs_chown(const char* path, uid_t uid, gid_t gid)
 {
+  set_global_thread_debug("cfs_chown", path);
   if (option_enable_chown)
   {
     debugf(DBG_NORM, KBBLU "cfs_chown(%s,%d,%d)", path, uid, gid);
@@ -1377,6 +1401,7 @@ static int cfs_chown(const char* path, uid_t uid, gid_t gid)
 
 static int cfs_chmod(const char* path, mode_t mode)
 {
+  set_global_thread_debug("cfs_chmod", path);
   if (option_enable_chmod)
   {
     debugf(DBG_NORM, KBBLU"cfs_chmod(%s,%d)", path, mode);
@@ -1405,6 +1430,7 @@ static int cfs_chmod(const char* path, mode_t mode)
 
 static int cfs_rename(const char* src, const char* dst)
 {
+  set_global_thread_debug("cfs_rename", src);
   debugf(DBG_NORM, KBBLU"cfs_rename(%s, %s)", src, dst);
   int fd_src = open_lock_file(src, FUSE_FLAG_O_RDONLY, "rename-src");
   if (fd_src == -1)
@@ -1449,6 +1475,7 @@ static int cfs_rename(const char* src, const char* dst)
 
 static int cfs_symlink(const char* src, const char* dst)
 {
+  set_global_thread_debug("cfs_symlink", src);
   debugf(DBG_NORM, KBBLU"cfs_symlink(%s, %s)", src, dst);
   //dir_entry* de = check_path_info(src);
   if (cloudfs_create_symlink(src, dst))
@@ -1463,16 +1490,17 @@ static int cfs_symlink(const char* src, const char* dst)
 
 static int cfs_readlink(const char* path, char* buf, size_t size)
 {
+  set_global_thread_debug("cfs_readlink", path);
   debugf(DBG_NORM, KBBLU"cfs_readlink(%s)", path);
   dir_entry* de = check_path_info(path);
   //fixme: use temp file specified in config
   FILE* temp_file = tmpfile();
   int ret = 0;
-  /*if (!cloudfs_object_write_fp(de, temp_file))
-    {
-    debugf(DBG_NORM, KRED"exit 1: cfs_readlink(%s) not found", path);
-    ret = -ENOENT;
-    }
+  /* if (!cloudfs_object_write_fp(de, temp_file))
+     {
+     debugf(DBG_NORM, KRED"exit 1: cfs_readlink(%s) not found", path);
+     ret = -ENOENT;
+     }
   */
   if (!pread(fileno(temp_file), buf, size, 0))
   {
@@ -1486,6 +1514,7 @@ static int cfs_readlink(const char* path, char* buf, size_t size)
 
 static void* cfs_init(struct fuse_conn_info* conn)
 {
+  set_global_thread_debug("cfs_init", "");
   signal(SIGPIPE, SIG_IGN);
   return NULL;
 }
@@ -1494,6 +1523,7 @@ static void* cfs_init(struct fuse_conn_info* conn)
 //http://man7.org/linux/man-pages/man2/utimensat.2.html
 static int cfs_utimens(const char* path, const struct timespec times[2])
 {
+  set_global_thread_debug("cfs_utimens", path);
   debugf(DBG_NORM, KBLU "cfs_utimens(%s)", path);
   // looking for file entry in cache
   dir_entry* de = path_info(path);
@@ -1505,7 +1535,6 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
   }
   //get extended attributes
   bool res = get_file_metadata(de, true, true);
-
   if (!option_disable_atime_check &&
       (de->atime.tv_sec != times[0].tv_sec || de->atime.tv_nsec != times[0].tv_nsec)
       || de->mtime.tv_sec != times[1].tv_sec
@@ -1520,7 +1549,6 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
     if (fd == -1)
       return -EBUSY;
     de->lock_fd = fd;
-
     char time_str[TIME_CHARS] = "";
     get_timespec_as_str(&times[1], time_str, sizeof(time_str));
     debugf(DBG_EXT, KCYN"cfs_utimens: set mtime=[%s]", time_str);
@@ -1543,6 +1571,7 @@ static int cfs_utimens(const char* path, const struct timespec times[2])
 int cfs_setxattr(const char* path, const char* name, const char* value,
                  size_t size, int flags)
 {
+  set_global_thread_debug("cfs_setxattr", path);
   debugf(DBG_EXT, KBLU "cfs_setxattr(%s): name=%s value=%s",
          path, name, value);
   return 0;
@@ -1550,6 +1579,7 @@ int cfs_setxattr(const char* path, const char* name, const char* value,
 
 int cfs_getxattr(const char* path, const char* name, char* value, size_t size)
 {
+  set_global_thread_debug("cfs_getxattr", path);
   debugf(DBG_EXT, KBLU "cfs_getxattr(%s): name=%s value=%s",
          path, name, value);
   return 0;
@@ -1557,13 +1587,15 @@ int cfs_getxattr(const char* path, const char* name, char* value, size_t size)
 
 int cfs_removexattr(const char* path, const char* name)
 {
+  set_global_thread_debug("cfs_removexattr", path);
   debugf(DBG_EXT, KBLU "cfs_removexattr(%s): name=%s", path, name);
   return 0;
 }
 
 int cfs_listxattr(const char* path, char* list, size_t size)
 {
-  debugf(DBG_EXT, KBLU "cfs_listxattr(%s): name=%s", path);
+  set_global_thread_debug("cfs_listxattr", path);
+  debugf(DBG_EXT, KBLU "cfs_listxattr(%s)", path);
   return 0;
 }
 
@@ -1578,7 +1610,6 @@ void control_thread_run()
   debugf(DBG_NORM, "control_thread_run exit");
   pthread_exit(NULL);
 }
-
 
 int parse_option(void* data, const char* arg, int key,
                  struct fuse_args* outargs)
@@ -1616,7 +1647,8 @@ int parse_option(void* data, const char* arg, int key,
       sscanf(arg, " enable_chaos_test_monkey = %[^\r\n ]",
              extra_options.enable_chaos_test_monkey) ||
       sscanf(arg, " disable_atime_check = %[^\r\n ]",
-             extra_options.disable_atime_check)
+             extra_options.disable_atime_check) ||
+      sscanf(arg, " http_log_path = %[^\r\n ]", extra_options.http_log_path)
      )
     return 0;
   if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
@@ -1631,7 +1663,6 @@ int main(int argc, char** argv)
   signal(SIGINT, interrupt_handler);
   /* Catch Signal Handler SIGPIPE */
   signal(SIGPIPE, sigpipe_callback_handler);
-
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if (!initialise_options(args))
     return 1;
@@ -1640,7 +1671,6 @@ int main(int argc, char** argv)
   cloudfs_init();
   if (debug)
     print_options();
-
   cloudfs_set_credentials(options.client_id, options.client_secret,
                           options.refresh_token);
   if (!cloudfs_connect())
@@ -1695,11 +1725,9 @@ int main(int argc, char** argv)
   pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(&dcachemut, &mutex_attr);
   pthread_mutex_init(&dcacheuploadmut, &mutex_attr);
-  
   pthread_mutexattr_init(&lock_mutex_attr);
   pthread_mutexattr_settype(&lock_mutex_attr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(&dlockmut, &lock_mutex_attr);
-
   pthread_mutexattr_init(&segment_mutex_attr);
   pthread_mutexattr_settype(&segment_mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
   //init control thread

@@ -29,20 +29,6 @@ struct curl_progress
   double last_dltime;
 };
 
-typedef struct options
-{
-  char cache_timeout[OPTION_SIZE];
-  char verify_ssl[OPTION_SIZE];
-  char segment_size[OPTION_SIZE];
-  char segment_above[OPTION_SIZE];
-  char storage_url[OPTION_SIZE];
-  char container[OPTION_SIZE];
-  char temp_dir[OPTION_SIZE];
-  char client_id[OPTION_SIZE];
-  char client_secret[OPTION_SIZE];
-  char refresh_token[OPTION_SIZE];
-} FuseOptions;
-
 
 
 void cloudfs_init(void);

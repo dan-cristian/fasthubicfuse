@@ -22,3 +22,4 @@ enable_syslog = true
 cache_max_size = 1048576000
 enable_chaos_test_monkey = false
 disable_atime_check=false
+http_log_path=""
