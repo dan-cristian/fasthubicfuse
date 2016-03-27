@@ -24,3 +24,6 @@ enable_syslog = true
 enable_chaos_test_monkey = false
 disable_atime_check=true
 http_log_path = /media/temp/log/fasthubicfuse-http.log
+fast_list_dir_limit = 0
+async_delete = true
+

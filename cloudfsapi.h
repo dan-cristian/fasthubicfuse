@@ -54,8 +54,6 @@ struct segment_info
 extern long segment_size;//segment file size
 extern long segment_above;//max size of a file before being segmented
 
-char* override_storage_url;
-char* public_container;
 
 
 bool int_convert_first_segment_th(dir_entry* de);
@@ -63,6 +61,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de);
 const char* get_file_mimetype (const char* filename);
 int cloudfs_list_directory(const char* path, dir_entry**);
 bool cloudfs_delete_object(dir_entry* de);
+void cloudfs_delete_object_unlink_async(dir_entry* de, int fd);
 bool cloudfs_delete_path(char* path, bool is_dir, bool is_segmented,
                          dir_entry* de);
 bool cloudfs_create_object(dir_entry* de);

@@ -59,7 +59,11 @@ extern long option_min_speed_timeout;
 extern char* temp_dir;
 extern long option_read_ahead;
 extern bool option_enable_chaos_test_monkey;
+extern int option_fast_list_dir_limit;
+
 static int rhel5_mode = 0;
+extern int g_delete_thread_count;
+
 static struct statvfs statcache =
 {
   .f_bsize = 4096,
@@ -1671,7 +1675,6 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
   debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): starting, fp=%p",
          de->name, de->upload_buf.local_cache_file);
   int res = fflush(de->upload_buf.local_cache_file);
-  //assert(fflush(de->upload_buf.local_cache_file) == 0);
   if (res == 0)
     debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): flushed ok",
            de->name);
@@ -1854,7 +1857,8 @@ void internal_upload_segment_progressive(void* arg)
            "internal_upload_segment_prog(%s): clean new manifest versions",
            job->de->name);
     //delete older versions from current manifest (neeed on overwrites)
-    cleanup_older_segments(manifest_root, new_manifest_root);
+    if (strcasecmp(manifest_root, new_manifest_root))//only if different
+      cleanup_older_segments(manifest_root, new_manifest_root);
     //check if all segments are visible in cloud
     //as there are cases when last segment appears late
     dir_entry* de_tmp2 = init_dir_entry();
@@ -1900,6 +1904,7 @@ void internal_upload_segment_progressive(void* arg)
   //free only if is true segment, keep first job for complete file md5sum
   if (job->de_seg)
     de_tmp->job = NULL;
+  close_file(&de_tmp->upload_buf.local_cache_file);
   //unlock to allow another upload segment to retry a failed transfer
   pthread_mutex_unlock(&de_tmp->upload_buf.mutex);
   free_thread_job(job);
@@ -2189,8 +2194,10 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
   debugf(DBG_EXT, "get_file_meta(%s) isdir=%d isseg=%d file_count=%d",
          de->full_name, de->isdir, de->is_segmented,
          de->parent ? de->parent->object_count : -1);
-  //fast dir list mode
-  if (!force_meta && de->parent && de->parent->object_count > 20)
+  //fast dir list mode, if option is enabled (>0) and count > limit
+  if (!force_meta && de->parent
+      && (option_fast_list_dir_limit != -1
+          && (de->parent->object_count > option_fast_list_dir_limit)))
   {
     debugf(DBG_EXT, KYEL "get_file_meta(%s): many files(%d), enable lazy/fast",
            de->name, de->parent->object_count);
@@ -2199,6 +2206,7 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
     init_entry_lazy(de);
     return true;
   }
+
   //meta on isdir sometimes returns HTTP404 (segment folders)
   if (option_get_extended_metadata
       &&  (!de->metadata_downloaded || force_meta))// && !de->isdir)
@@ -2510,6 +2518,11 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   return retval;
 }
 
+
+
+/*
+  simple threaded delete
+*/
 void thread_cloudfs_delete_object(dir_entry* de)
 {
   cloudfs_delete_object(de);
@@ -2535,6 +2548,41 @@ bool cloudfs_delete_object(dir_entry* de)
     }
   }
   return cloudfs_delete_path(de->full_name, de->isdir, de->is_segmented, de);
+}
+
+/*
+  simple threaded delete
+*/
+void cloudfs_delete_object_unlink_async_th(thread_delete_job* job)
+{
+  debugf(DBG_EXT, "cloudfs_del_obj_async_th(%s): deleting, threadcount=%d",
+         job->de->full_name, g_delete_thread_count);
+  g_delete_thread_count++;
+  char* path = strdup(job->de->full_name);//as de will be NULLed
+  cloudfs_delete_object(job->de);
+  close_lock_file(path, job->fd);
+  g_delete_thread_count--;
+  free(job);
+  free(path);
+  pthread_exit(NULL);
+}
+
+/*
+  delete using max threads
+*/
+void cloudfs_delete_object_unlink_async(dir_entry* de, int fd)
+{
+  debugf(DBG_EXT, "cloudfs_del_obj_unl_async(%s): to delete, threadcount=%d",
+         de->name, g_delete_thread_count);
+  //fixme: replace with semaphores
+  while (g_delete_thread_count >= MAX_DELETE_THREADS)
+    sleep_ms(250);
+  thread_delete_job* job = malloc(sizeof(struct thread_delete_job));
+  job->de = de;
+  job->fd = fd;
+  pthread_t thread;
+  pthread_create(&thread, NULL, (void*)cloudfs_delete_object_unlink_async_th,
+                 job);
 }
 
 /*

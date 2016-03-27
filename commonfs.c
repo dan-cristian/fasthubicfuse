@@ -23,6 +23,7 @@
 #include <curl/easy.h>
 #include <errno.h>
 #include <syslog.h>
+#include <dirent.h>
 #include "commonfs.h"
 #include "config.h"
 
@@ -61,9 +62,51 @@ long option_read_ahead = 0;
 bool option_enable_chaos_test_monkey = false;//create random errors for testing
 bool option_disable_atime_check = false;
 char* option_http_log_path;
+//if file count more than this do not load meta
+int option_fast_list_dir_limit = 0;
+bool option_async_delete = false;
 pthread_t control_thread = NULL;
 char* g_current_op;//current thread operation
 int g_thread_id;//current thread id
+int g_delete_thread_count = 0;
+
+FuseOptions options =
+{
+  .cache_timeout = "600",
+  .verify_ssl = "true",
+  .segment_size = "1073741824",
+  .segment_above = "2147483647",
+  .storage_url = "",
+  .container = "",
+  //.temp_dir = "/tmp/",
+  .temp_dir = "",
+  .client_id = "",
+  .client_secret = "",
+  .refresh_token = ""
+};
+
+ExtraFuseOptions extra_options =
+{
+  .get_extended_metadata = "false",
+  .curl_verbose = "false",
+  .cache_statfs_timeout = 0,
+  .debug_level = 0,
+  .curl_progress_state = "false",
+  .enable_chown = "false",
+  .enable_chmod = "false",
+  .enable_progressive_upload = "false",
+  .enable_progressive_download = "false",
+  .min_speed_limit_progressive = "0",
+  .min_speed_timeout = "3",
+  .read_ahead = "0",
+  .enable_syslog = "0",
+  .enable_chaos_test_monkey = "false",
+  .disable_atime_check = "false",
+  .http_log_path = "",
+  .fast_list_dir_limit = 0,
+  .async_delete = "false"
+};
+
 
 // needed to get correct GMT / local time, as it does not work
 // http://zhu-qy.blogspot.ro/2012/11/ref-how-to-convert-from-utc-to-local.html
@@ -930,7 +973,7 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
   dir_for(path, dir);
   for (cw = cache; cw; cw = cw->next)
   {
-    debugf(DBG_EXT, "dir_decache: parse(%s)", cw->path);
+    //debugf(DBG_EXTALL, "dir_decache: parse(%s)", cw->path);
     if (!strcmp(cw->path, path) || path[0] == '*')
     {
       if (cw == cache)
@@ -1457,8 +1500,8 @@ int caching_list_directory(const char* path, dir_entry** list)
     }
     if (cw->was_deleted == false)
     {
-      debugf(DBG_EXTALL, KYEL
-             "caching_list_directory: compare cache=[%s] and [%s]", cw->path, path);
+      //debugf(DBG_EXTALL, KYEL
+      //       "caching_list_directory: compare cache=[%s] and [%s]", cw->path, path);
       if (!strcmp(cw->path, path))
         break;
     }
@@ -2068,6 +2111,7 @@ void add_lock_file(const char* path, const char* open_flags,
 {
   debugf(DBG_EXT, "add_lock_file(%s): mode=%s fd=%d",
          path, open_flags, fd);
+  lock_mutex(dlockmut);
   open_file* of = (open_file*)malloc(sizeof(open_file));
   of->cached_file = temp_file;
   of->fd = fd;
@@ -2082,6 +2126,7 @@ void add_lock_file(const char* path, const char* open_flags,
   else
     of->next = NULL;
   openfile_list = of;
+  unlock_mutex(dlockmut);
 }
 
 int get_open_locks()
@@ -2200,9 +2245,10 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
     else
     {
       unlock_mutex(dlockmut);
-      sleep_ms(250);
+      sleep_ms(250);//see for / if change value
     }
   }
+
   int fd;
   if (!can_add)
   {
@@ -2342,6 +2388,14 @@ off_t get_file_size(FILE* fp)
   return st.st_size;
 }
 
+void close_file(FILE** file)
+{
+  debugf(DBG_EXT, KCYN "close_file: file=%p", *file);
+  assert(*file);
+  fclose(*file);
+  *file = NULL;
+}
+
 //allows memory leaks inspections
 void interrupt_handler(int sig)
 {
@@ -2391,8 +2445,189 @@ void print_options()
           option_enable_chaos_test_monkey);
   fprintf(stderr, "disable_atime_check = %d\n", option_disable_atime_check);
   fprintf(stderr, "http_log_path = %s\n", option_http_log_path);
+  fprintf(stderr, "fast_list_dir_limit = %d\n", option_fast_list_dir_limit);
+  fprintf(stderr, "async_delete = %d\n", option_async_delete);
 }
 
+bool initialise_options(struct fuse_args args)
+{
+  char settings_filename[MAX_PATH_SIZE] = "";
+  FILE* settings;
+  snprintf(settings_filename, sizeof(settings_filename), "%s/.hubicfuse",
+           get_home_dir());
+  if ((settings = fopen(settings_filename, "r")))
+  {
+    char line[OPTION_SIZE];
+    while (fgets(line, sizeof(line), settings))
+      parse_option(NULL, line, -1, &args);
+    fclose(settings);
+  }
+  cache_timeout = atoi(options.cache_timeout);
+  segment_size = atoll(options.segment_size);
+  segment_above = atoll(options.segment_above);
+  // this is ok since main is on the stack during the entire execution
+  override_storage_url = options.storage_url;
+  public_container = options.container;
+  temp_dir = options.temp_dir;
+  DIR* dir = opendir(temp_dir);
+  if (!dir)
+  {
+    fprintf(stderr, "Unable to access temp folder [%s], aborting", temp_dir);
+    abort();
+  }
+  if (*options.verify_ssl)
+    verify_ssl = !strcasecmp(options.verify_ssl, "true") ? 2 : 0;
+  if (*extra_options.get_extended_metadata)
+    option_get_extended_metadata = !strcasecmp(extra_options.get_extended_metadata,
+                                   "true");
+  if (*extra_options.curl_verbose)
+    option_curl_verbose = !strcasecmp(extra_options.curl_verbose,
+                                      "true");
+  if (*extra_options.debug_level)
+    option_debug_level = atoi(extra_options.debug_level);
+  if (*extra_options.cache_statfs_timeout)
+    option_cache_statfs_timeout = atoi(extra_options.cache_statfs_timeout);
+  if (*extra_options.curl_progress_state)
+    option_curl_progress_state = !strcasecmp(extra_options.curl_progress_state,
+                                 "true");
+  if (*extra_options.enable_chmod)
+    option_enable_chmod = !strcasecmp(extra_options.enable_chmod, "true");
+  if (*extra_options.enable_chown)
+    option_enable_chown = !strcasecmp(extra_options.enable_chown, "true");
+  if (*extra_options.enable_progressive_download)
+    option_enable_progressive_download = !strcasecmp(
+                                           extra_options.enable_progressive_download, "true");
+  if (*extra_options.enable_progressive_upload)
+    option_enable_progressive_upload = !strcasecmp(
+                                         extra_options.enable_progressive_upload, "true");
+  if (*extra_options.min_speed_limit_progressive)
+    option_min_speed_limit_progressive = atoll(
+                                           extra_options.min_speed_limit_progressive);
+  if (*extra_options.read_ahead)
+    option_read_ahead = atoll(extra_options.read_ahead);
+  if (*extra_options.min_speed_timeout)
+    option_min_speed_timeout = atoll(extra_options.min_speed_timeout);
+  if (*extra_options.enable_syslog)
+    option_enable_syslog = !strcasecmp(
+                             extra_options.enable_syslog, "true");
+  if (*extra_options.enable_chaos_test_monkey)
+    option_enable_chaos_test_monkey = !strcasecmp(
+                                        extra_options.enable_chaos_test_monkey, "true");
+  if (*extra_options.disable_atime_check)
+    option_disable_atime_check = !strcasecmp(extra_options.disable_atime_check,
+                                 "true");
+  option_http_log_path = extra_options.http_log_path;
+  option_fast_list_dir_limit = atoi(extra_options.fast_list_dir_limit);
+  option_async_delete = !strcasecmp(extra_options.async_delete, "true");
+
+  if (!*options.client_id || !*options.client_secret || !*options.refresh_token)
+  {
+    fprintf(stderr,
+            "Unable to determine client_id, client_secret or refresh_token.\n\n");
+    fprintf(stderr, "These can be set either as mount options or in "
+            "a file named %s\n\n", settings_filename);
+    fprintf(stderr, "  client_id=[App's id]\n");
+    fprintf(stderr, "  client_secret=[App's secret]\n");
+    fprintf(stderr, "  refresh_token=[Get it running hubic_token]\n");
+    fprintf(stderr, "The following settings are optional:\n\n");
+    fprintf(stderr,
+            "  cache_timeout=[Seconds for directory caching, default 600]\n");
+    fprintf(stderr, "  verify_ssl=[false to disable SSL cert verification]\n");
+    fprintf(stderr,
+            "  segment_size=[Size to use when creating DLOs, default 1073741824]\n");
+    fprintf(stderr,
+            "  segment_above=[File size at which to use segments, defult 2147483648]\n");
+    fprintf(stderr,
+            "  storage_url=[Storage URL for other tenant to view container]\n");
+    fprintf(stderr,
+            "  container=[Public container to view of tenant specified by storage_url]\n");
+    fprintf(stderr, "  temp_dir=[Directory to store temp files]\n");
+    fprintf(stderr,
+            "  get_extended_metadata=[true to enable download of utime, chmod, chown file attributes (but slower)]\n");
+    fprintf(stderr,
+            "  curl_verbose=[true to debug info on curl requests (lots of output)]\n");
+    fprintf(stderr,
+            "  curl_progress_state=[true to enable progress callback enabled. Mostly used for debugging]\n");
+    fprintf(stderr,
+            "  cache_statfs_timeout=[number of seconds to cache requests to statfs (cloud statistics), 0 for no cache]\n");
+    fprintf(stderr,
+            "  debug_level=[0 to 2, 0 for minimal verbose debugging. No debug if -d or -f option is not provided.]\n");
+    fprintf(stderr, "  enable_chmod=[true to enable chmod support on fuse]\n");
+    fprintf(stderr, "  enable_chown=[true to enable chown support on fuse]\n");
+    fprintf(stderr,
+            "  enable_progressive_download=[true to enable progressive operation support]\n");
+    fprintf(stderr,
+            "  enable_progressive_upload=[true to enable progressive operation support]\n");
+    fprintf(stderr,
+            "  min_speed_limit_progressive=[0 to disable, or = number of transferred bytes per second limit under which operation will be aborted and resumed]\n");
+    fprintf(stderr,
+            "  min_speed_timeout=[number of seconds after which slow operation will be aborted and resumed]\n");
+    fprintf(stderr,
+            "  read_ahead=[Bytes to read ahead on progressive download, 0 for none, -1 for full file read]\n");
+    fprintf(stderr,
+            "  enable_syslog=[Write error output to syslog]\n");
+    fprintf(stderr,
+            "  enable_chaos_test_monkey=[Enable creation of random errors to test program stability]\n");
+    fprintf(stderr,
+            "  disable_atime_check=[Disable atime file check even if is enabled at mount]\n");
+    fprintf(stderr,
+            "  http_log_path=[file path to log all http request for debug]\n");
+    fprintf(stderr,
+            "  fast_list_dir_limit=[0 to disable, max number of files in a folder to load meta for]\n");
+    fprintf(stderr,
+            "  async_delete=[delete operations will run async, very fast]\n");
+    return false;
+  }
+  return true;
+}
+
+int parse_option(void* data, const char* arg, int key,
+                 struct fuse_args* outargs)
+{
+  if (sscanf(arg, " cache_timeout = %[^\r\n ]", options.cache_timeout) ||
+      sscanf(arg, " verify_ssl = %[^\r\n ]", options.verify_ssl) ||
+      sscanf(arg, " segment_above = %[^\r\n ]", options.segment_above) ||
+      sscanf(arg, " segment_size = %[^\r\n ]", options.segment_size) ||
+      sscanf(arg, " storage_url = %[^\r\n ]", options.storage_url) ||
+      sscanf(arg, " container = %[^\r\n ]", options.container) ||
+      sscanf(arg, " temp_dir = %[^\r\n ]", options.temp_dir) ||
+      sscanf(arg, " client_id = %[^\r\n ]", options.client_id) ||
+      sscanf(arg, " client_secret = %[^\r\n ]", options.client_secret) ||
+      sscanf(arg, " refresh_token = %[^\r\n ]", options.refresh_token) ||
+      sscanf(arg, " get_extended_metadata = %[^\r\n ]",
+             extra_options.get_extended_metadata) ||
+      sscanf(arg, " curl_verbose = %[^\r\n ]", extra_options.curl_verbose) ||
+      sscanf(arg, " cache_statfs_timeout = %[^\r\n ]",
+             extra_options.cache_statfs_timeout) ||
+      sscanf(arg, " debug_level = %[^\r\n ]", extra_options.debug_level) ||
+      sscanf(arg, " curl_progress_state = %[^\r\n ]",
+             extra_options.curl_progress_state) ||
+      sscanf(arg, " enable_chmod = %[^\r\n ]", extra_options.enable_chmod) ||
+      sscanf(arg, " enable_chown = %[^\r\n ]", extra_options.enable_chown) ||
+      sscanf(arg, " enable_progressive_download = %[^\r\n ]",
+             extra_options.enable_progressive_download) ||
+      sscanf(arg, " enable_progressive_upload = %[^\r\n ]",
+             extra_options.enable_progressive_upload) ||
+      sscanf(arg, " min_speed_limit_progressive = %[^\r\n ]",
+             extra_options.min_speed_limit_progressive) ||
+      sscanf(arg, " min_speed_timeout = %[^\r\n ]",
+             extra_options.min_speed_timeout) ||
+      sscanf(arg, " read_ahead = %[^\r\n ]", extra_options.read_ahead) ||
+      sscanf(arg, " enable_syslog = %[^\r\n ]", extra_options.enable_syslog) ||
+      sscanf(arg, " enable_chaos_test_monkey = %[^\r\n ]",
+             extra_options.enable_chaos_test_monkey) ||
+      sscanf(arg, " disable_atime_check = %[^\r\n ]",
+             extra_options.disable_atime_check) ||
+      sscanf(arg, " http_log_path = %[^\r\n ]", extra_options.http_log_path) ||
+      sscanf(arg, " fast_list_dir_limit = %[^\r\n ]",
+             extra_options.fast_list_dir_limit) ||
+      sscanf(arg, " async_delete = %[^\r\n ]", extra_options.async_delete)
+     )
+    return 0;
+  if (!strcmp(arg, "-f") || !strcmp(arg, "-d") || !strcmp(arg, "debug"))
+    debug = 1;
+  return 1;
+}
 
 
 void debug_http(const char* method, const char* url)
@@ -2417,7 +2652,7 @@ void debug_http(const char* method, const char* url)
   }
 }
 
-void set_global_thread_debug(char* operation, const char* path)
+void set_global_thread_debug(char* operation, const char* path, bool log)
 {
   g_current_op = operation;
 #ifdef SYS_gettid
@@ -2427,7 +2662,8 @@ void set_global_thread_debug(char* operation, const char* path)
 #error "SYS_gettid unavailable on this system"
 #endif
   g_thread_id = thread_id;
-  debug_http("FUSE", path);
+  if (log)
+    debug_http("FUSE", path);
 }
 
 void debugf(int level, char* fmt, ...)

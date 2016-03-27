@@ -23,3 +23,5 @@ cache_max_size = 1048576000
 enable_chaos_test_monkey = false
 disable_atime_check=false
 http_log_path=""
+fast_list_dir_limit=0
+async_delete = false

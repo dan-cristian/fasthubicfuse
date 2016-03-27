@@ -19,7 +19,7 @@ typedef enum { false, true } bool;
 #define INT_CHAR_LEN 16
 #define MD5_DIGEST_HEXA_STRING_LEN  (2 * MD5_DIGEST_LENGTH + 1)
 #define MAX_SEGMENT_THREADS 5
-#define MAX_DELETE_THREADS 10
+#define MAX_DELETE_THREADS 30
 #define MAX_COPY_THREADS 10
 #define REQUEST_RETRIES 5
 #define BUFFER_READ_SIZE 128 * 1024
@@ -133,7 +133,7 @@ typedef struct progressive_data_buf
   bool file_is_in_cache;
   int ahead_thread_count;
   pthread_t thread;
-  pthread_mutex_t mutex;
+  pthread_mutex_t mutex;//for segment uploads
   bool mutex_initialised;
   sem_t* sem_list[SEM_DONE + 1];
   char* sem_name_list[SEM_DONE + 1];
@@ -221,6 +221,12 @@ typedef struct thread_copy_job
   bool thread_exit;
 } thread_copy_job;
 
+typedef struct thread_delete_job
+{
+  dir_entry* de;
+  int fd;
+} thread_delete_job;
+
 // linked list with cached folder names
 typedef struct dir_cache
 {
@@ -246,6 +252,8 @@ typedef struct open_file
   struct open_file* next;
 } open_file;
 
+char* override_storage_url;
+char* public_container;
 
 typedef struct options
 {
@@ -280,7 +288,12 @@ typedef struct extra_options
   char enable_chaos_test_monkey[OPTION_SIZE];
   char disable_atime_check[OPTION_SIZE];
   char http_log_path[OPTION_SIZE];
+  char fast_list_dir_limit[OPTION_SIZE];
+  char async_delete[OPTION_SIZE];
 } ExtraFuseOptions;
+
+
+
 
 time_t my_timegm(struct tm* tm);
 time_t get_time_from_str_as_gmt(char* time_str);
@@ -365,6 +378,7 @@ bool cleanup_older_segments(char* dir_path, char* exclude_path);
 void unlink_cache_segments(dir_entry* de);
 void sleep_ms(int milliseconds);
 off_t get_file_size(FILE* fp);
+void close_file(FILE** file);
 int file_is_readable(const char* fname);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);
@@ -378,7 +392,10 @@ void interrupt_handler(int sig);
 void sigpipe_callback_handler(int signum);
 void clear_full_cache();
 void print_options();
-void set_global_thread_debug(char* operation, const char* path);
+bool initialise_options(struct fuse_args args);
+int parse_option(void* data, const char* arg, int key,
+                 struct fuse_args* outargs);
+void set_global_thread_debug(char* operation, const char* path, bool log);
 void debug_http(const char* method, const char* url);
 void debugf(int level, char* fmt, ...);
 
