@@ -137,6 +137,7 @@ typedef struct progressive_data_buf
   bool mutex_initialised;
   sem_t* sem_list[SEM_DONE + 1];
   char* sem_name_list[SEM_DONE + 1];
+  bool sem_open;
   size_t fuse_read_size;
   FILE* local_cache_file;
   size_t fuse_buf_size;
@@ -325,10 +326,13 @@ void get_manifest_path(dir_entry* de, char* manifest_path);
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
                              const int segment_part);
-void unblock_semaphore(sem_t* semaphore, char* name);
+void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
-int free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
+void free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
+void free_all_semaphores(struct progressive_data_buf* data_buf);
+void unblock_close_all_semaphores(struct progressive_data_buf* data_buf);
+bool is_semaphore_open(struct progressive_data_buf* data_buf);
 long random_at_most(long max);
 void init_entry_lazy(dir_entry* de);
 dir_entry* init_dir_entry();

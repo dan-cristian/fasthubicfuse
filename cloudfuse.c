@@ -613,7 +613,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           {
             de_seg_tmp = get_segment(de_upload, seg_index);
             assert(de_seg_tmp);
-            if (de_seg_tmp->upload_buf.sem_list[SEM_DONE])
+            if (is_semaphore_open(&de_seg_tmp->upload_buf))
             {
               //if (loops % 20 == 0)
               debugf(DBG_EXT, KMAG
@@ -641,8 +641,6 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           loops++;
         }
         while (pending && loops < 120);
-        //signal free of last semaphore is safe now
-        //free_semaphores(&de_seg->upload_buf, SEM_DONE);
         //if operation completed ok calculate file cumulative segment etag
         if (!pending)
         {
@@ -754,8 +752,17 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         de_upload->job = NULL;
         free_thread_job(de_upload->job2);
         de_upload->job2 = NULL;
-      }
+      }//if last is pending
       close_lock_file(de_upload->full_name, info->fh);
+      //free all semaphores
+      int segidx;
+      dir_entry* seg;
+      for (segidx = 0; segidx < de_upload->segment_count; segidx++)
+      {
+        seg = get_segment(de_upload, segidx);
+        assert(seg);
+        free_all_semaphores(&seg->upload_buf);
+      }
     }
     else if (!de_upload->is_segmented)
     {
@@ -768,10 +775,9 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       }
       //signal completion of read/write operation
       //signal last data available in buffer for upload
-      if (de_upload->upload_buf.sem_list[SEM_FULL])
-        sem_post(de_upload->upload_buf.sem_list[SEM_FULL]);
+      unblock_semaphore(&de_upload->upload_buf, SEM_FULL);
       int loops = 0;
-      while (de_upload->upload_buf.sem_list[SEM_DONE])
+      while (is_semaphore_open(&de_upload->upload_buf))
       {
         if (loops % 20 == 0)
           debugf(DBG_EXT, KMAG "cfs_flush(%s): wait non-segmented pending upload",
@@ -781,15 +787,11 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         {
           //local_cache is null when segment is missing
           assert(de_upload->upload_buf.local_cache_file);
-          //init_semaphores(&de_upload->upload_buf, de_upload, "upload-cache");
           int_cfs_write_cache_data_feed(de_upload);
           de_upload->upload_buf.feed_from_cache = false;
           //signal to force http upload completion
           //fixme: this was not unblocking progressive_upload_callback
-          unblock_semaphore(de_upload->upload_buf.sem_list[SEM_FULL],
-                            de_upload->upload_buf.sem_name_list[SEM_FULL]);
-          //if (de_upload->upload_buf.sem_list[SEM_FULL])
-          //  sem_post(de_upload->upload_buf.sem_list[SEM_FULL]);
+          unblock_semaphore(&de_upload->upload_buf, SEM_FULL);
         }
         loops++;
       }
@@ -812,6 +814,10 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       if (de_upload->job)
         free_thread_job(de_upload->job);
       de_upload->job = NULL;
+      //on cfs_create size is 0, no semaphores were created, so skip this
+      //but free if semaphores were open (should not happen)
+      if (de_upload->size > 0 || de_upload->upload_buf.sem_open)
+        free_all_semaphores(&de_upload->upload_buf);
       //might be already closed via first segment in cfs_write
       if (de_upload->upload_buf.local_cache_file)
         close_file(&de_upload->upload_buf.local_cache_file);
@@ -1093,8 +1099,7 @@ static int cfs_write(const char* path, const char* buf, size_t length,
       assert(op_ok);
     }
     //signal there is data available in buffer for upload
-    if (de_tmp->upload_buf.sem_list[SEM_FULL])
-      sem_post(de_tmp->upload_buf.sem_list[SEM_FULL]);
+    unblock_semaphore(&de_tmp->upload_buf, SEM_FULL);
     //wait until previous buffer data is uploaded via curl callback
     sem_wait(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
     seg_size_uploaded = seg_size_to_upload - de_tmp->upload_buf.work_buf_size;
@@ -1556,7 +1561,7 @@ int main(int argc, char** argv)
   pthread_mutexattr_settype(&segment_mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
   //init control thread
   pthread_create(&control_thread, NULL, (void*)control_thread_run, NULL);
-  //create parent segment storage (might exist already)
+  //create parent segment storage (just to be safe, might exist already)
   cloudfs_create_directory(HUBIC_SEGMENT_STORAGE_ROOT);
   return fuse_main(args.argc, args.argv, &cfs_oper, &options);
 }

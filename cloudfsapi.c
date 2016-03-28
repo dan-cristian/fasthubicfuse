@@ -1296,11 +1296,6 @@ static int send_request_size(const char* method, const char* encoded_path,
         //do not retry as data on upload will be lost
         debugf(DBG_EXT, "send_request_size(%s): upload exit", print_path);
         break;
-        //signal cfs_write and cfs_flush we're done
-        //unblock_semaphore(de_seg->upload_buf.sem_list[SEM_EMPTY],
-        //de_seg->upload_buf.sem_name_list[SEM_EMPTY]);
-        //unblock_semaphore(de_seg->upload_buf.sem_list[SEM_EMPTY],
-        //                  de_seg->upload_buf.sem_name_list[SEM_EMPTY]);
       }
     }
     if ((response >= 200 && response < 400) || (!strcasecmp(method, "DELETE")
@@ -1635,7 +1630,7 @@ bool get_file_mimetype_from_path(dir_entry* de, char* mime)
 /*
    moves main file to segment 0 as file is segmented
 */
-bool int_convert_first_segment_th(dir_entry* de)
+void int_convert_first_segment_th(dir_entry* de)
 {
   debugf(DBG_EXT, KMAG "int_convert_first_segment(%s): converting as segment 0",
          de->name);
@@ -1644,7 +1639,7 @@ bool int_convert_first_segment_th(dir_entry* de)
   assert(de_seg->full_name);
   int loops = 0;
   //wait until first seg is fully uploaded
-  while (de->upload_buf.sem_list[SEM_DONE])
+  while (is_semaphore_open(&de->upload_buf))
   {
     if (loops % 20 == 0)
       debugf(DBG_EXT, KMAG "int_convert_first_segment(%s): wait completion",
@@ -1655,16 +1650,13 @@ bool int_convert_first_segment_th(dir_entry* de)
   bool res = cloudfs_copy_object(de, de_seg->full_name, true);
   assert(res);
   //signal cfs_flush we're done
-  free_semaphores(&de_seg->upload_buf, SEM_EMPTY);
-  free_semaphores(&de_seg->upload_buf, SEM_FULL);
-  free_semaphores(&de_seg->upload_buf, SEM_DONE);
+  unblock_close_all_semaphores(&de_seg->upload_buf);
   //copy md5sum to first segment for final etag md5sum compute
   assert(!de_seg->md5sum);
   de_seg->md5sum = strdup(de->md5sum);
   debugf(DBG_EXT, KMAG "int_convert_first_segment(%s): converted to %s",
          de->name, de_seg->full_name);
   pthread_exit(NULL);
-  //return res;
 }
 
 /*
@@ -1708,8 +1700,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
         ptr_offset = read_len - de->upload_buf.work_buf_size;
         de->upload_buf.readptr = cache_buf + ptr_offset;
         //signal there is data available in buffer for upload
-        if (de->upload_buf.sem_list[SEM_FULL])
-          sem_post(de->upload_buf.sem_list[SEM_FULL]);
+        unblock_semaphore(&de->upload_buf, SEM_FULL);
         //wait until previous buffer data is uploaded
         if (de->upload_buf.sem_list[SEM_EMPTY])
           sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
@@ -1820,7 +1811,7 @@ void internal_upload_segment_progressive(void* arg)
     dir_entry* de_first = get_create_segment(de, 0);
     int loops = 0;
     //wait until first seg is fully uploaded
-    while (de_first->upload_buf.sem_list[SEM_DONE])
+    while (is_semaphore_open(&de_first->upload_buf))
     {
       if (loops % 20 == 0)
         debugf(DBG_EXT, KMAG "int_upload_seg_prog(%s): wait first completion",
@@ -1882,24 +1873,11 @@ void internal_upload_segment_progressive(void* arg)
       de->has_unvisible_segments = false;
     cloudfs_free_dir_list(de_tmp2);
     //signal cfs_flush we're done uploading main file so it can exit
-    if (de_tmp->upload_buf.sem_list[SEM_DONE])
-      sem_post(de_tmp->upload_buf.sem_list[SEM_DONE]);
+    unblock_semaphore(&de_tmp->upload_buf, SEM_DONE);
   }
   //signal cfs_write (and cfs_flush?) we're done
-  unblock_semaphore(de_tmp->upload_buf.sem_list[SEM_EMPTY],
-                    de_tmp->upload_buf.sem_name_list[SEM_EMPTY]);
-  if (de_tmp->upload_buf.sem_list[SEM_EMPTY])
-    free_semaphores(&de_tmp->upload_buf, SEM_EMPTY);
-  if (de_tmp->upload_buf.sem_list[SEM_FULL])
-    free_semaphores(&de_tmp->upload_buf, SEM_FULL);
-  //don't free DONE semaphore on last segment upload, is freed in cfsflush
-  //if (de_tmp->segment_part != de->segment_count - 1)
-  //{
-  unblock_semaphore(de_tmp->upload_buf.sem_list[SEM_DONE],
-                    de_tmp->upload_buf.sem_name_list[SEM_DONE]);
-  free_semaphores(&de_tmp->upload_buf, SEM_DONE);
-  //}
-  //sometimes, de will be freed by now by cfs_flush
+  unblock_close_all_semaphores(&de_tmp->upload_buf);
+
   debugf(DBG_EXT, "exit: internal_upload_segment_progressive");
   //free only if is true segment, keep first job for complete file md5sum
   if (job->de_seg)
@@ -2149,11 +2127,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
       assert(ftruncate(fd, 0) == 0);
     }
   }
-  unblock_semaphore(de_seg->downld_buf.sem_list[SEM_FULL],
-                    de_seg->downld_buf.sem_name_list[SEM_FULL]);
-  free_semaphores(&de_seg->downld_buf, SEM_EMPTY);
-  free_semaphores(&de_seg->downld_buf, SEM_FULL);
-  free_semaphores(&de_seg->downld_buf, SEM_DONE);
+  unblock_close_all_semaphores(&de_seg->downld_buf);
   pthread_mutex_unlock(&de_seg->downld_buf.mutex);
   debugf(DBG_EXT, KMAG
          "cloudfs_download_segment: done fp=%p part=%d proc=%lu",

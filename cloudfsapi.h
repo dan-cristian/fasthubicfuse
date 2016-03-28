@@ -56,7 +56,7 @@ extern long segment_above;//max size of a file before being segmented
 
 
 
-bool int_convert_first_segment_th(dir_entry* de);
+void int_convert_first_segment_th(dir_entry* de);
 bool int_cfs_write_cache_data_feed(dir_entry* de);
 const char* get_file_mimetype (const char* filename);
 int cloudfs_list_directory(const char* path, dir_entry**);

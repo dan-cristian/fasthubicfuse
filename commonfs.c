@@ -642,15 +642,12 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
   {
     dir_entry* de = dir_list;
     dir_list = dir_list->next;
-    //remove file from disk cache, fix for issue #89, https://github.com/TurboGit/hubicfuse/issues/89
-    //delete_file(de->full_name);
     free(de->name);
     de->name = NULL;
     free(de->full_name);
     de->full_name = NULL;
     free(de->content_type);
     de->content_type = NULL;
-    //TODO free all added fields
     free(de->md5sum);
     de->md5sum = NULL;
     free(de->md5sum_local);
@@ -668,13 +665,16 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
       cloudfs_free_dir_list(de->segments);
       de->segments = NULL;
     }
+
+    //check as some might be freed already
     if (de->upload_buf.sem_list[SEM_EMPTY])
       free_semaphores(&de->upload_buf, SEM_EMPTY);
     if (de->upload_buf.sem_list[SEM_FULL])
       free_semaphores(&de->upload_buf, SEM_FULL);
     if (de->upload_buf.sem_list[SEM_DONE])
       free_semaphores(&de->upload_buf, SEM_DONE);
-    //no need to free de->upload_buf.readptr as it is only a pointer to a buffer allocated / managed by fuse
+    //no need to free de->upload_buf.readptr as
+    //it is only a pointer to a buffer allocated / managed by fuse
     free(de);
   }
 }
@@ -1029,31 +1029,6 @@ void dir_decache_upload(const char* path)
   internal_dir_decache(dcache_upload, dcacheuploadmut, path);
 }
 
-/*
-   post a semaphore and waits until semaphore count changes
-   or exits after a period of time (500 milisecond)
-*/
-void unblock_semaphore(sem_t* semaphore, char* name)
-{
-  if (semaphore)
-  {
-    int sem_val1, sem_val2, i;
-    sem_getvalue(semaphore, &sem_val1);
-    debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) start, val=%d", name, sem_val1);
-    sem_post(semaphore);
-    for (i = 0; i < 250; i++)
-    {
-      sem_getvalue(semaphore, &sem_val2);
-      if (sem_val2 <= sem_val1)
-        break;
-      sleep_ms(1);
-    }
-    debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) in %d milisec, val %d->%d",
-           name, i, sem_val1, sem_val2);
-  }
-  else
-    debugf(DBG_EXT, KMAG "unblock_semaphore(%s) was null", name);
-}
 
 //data_buf exists for dowload and upload
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
@@ -1112,24 +1087,87 @@ int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
              de->full_name, data_buf->sem_name_list[i], data_buf->work_buf_size, sem_val);
     }
   }
+  data_buf->sem_open = true;
   return true;
 }
 
-int free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
+/*
+  free semaphores from memory, assume it is not null
+*/
+void free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
 {
-  assert(data_buf->sem_list[sem_index]);
   debugf(DBG_EXTALL, KCYN "free_semaphores: %s-%d",
          data_buf->sem_name_list[sem_index], sem_index);
-  if (data_buf->sem_list[sem_index])
+  assert(data_buf->sem_list[sem_index]);
+  assert(data_buf->sem_name_list[sem_index]);
+  sem_close(data_buf->sem_list[sem_index]);
+  sem_unlink(data_buf->sem_name_list[sem_index]);
+  data_buf->sem_list[sem_index] = NULL;
+  free(data_buf->sem_name_list[sem_index]);
+  data_buf->sem_name_list[sem_index] = NULL;
+  data_buf->sem_open = false;
+}
+
+void free_all_semaphores(struct progressive_data_buf* data_buf)
+{
+  free_semaphores(data_buf, SEM_EMPTY);
+  free_semaphores(data_buf, SEM_FULL);
+  free_semaphores(data_buf, SEM_DONE);
+}
+/*
+  post a semaphore and waits until semaphore count changes
+  or exits after a period of time (250 milisecond)
+*/
+void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index)
+{
+  sem_t* semaphore = data_buf->sem_list[sem_index];
+  char* name = data_buf->sem_name_list[sem_index];
+  assert(semaphore);
+
+  //if (semaphore)
+  //{
+  int sem_val1, sem_val2, i;
+  sem_getvalue(semaphore, &sem_val1);
+  //debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) start, val=%d", name, sem_val1);
+  sem_post(semaphore);
+  for (i = 0; i < 250; i++)
   {
-    sem_post(data_buf->sem_list[sem_index]);
-    sem_post(data_buf->sem_list[sem_index]);
-    sem_close(data_buf->sem_list[sem_index]);
-    sem_unlink(data_buf->sem_name_list[sem_index]);
-    free(data_buf->sem_name_list[sem_index]);
-    data_buf->sem_list[sem_index] = NULL;
-    data_buf->sem_name_list[sem_index] = NULL;
+    sem_getvalue(semaphore, &sem_val2);
+    if (sem_val2 <= sem_val1)
+      break;
+    sleep_ms(1);
   }
+  debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) in %d milisec, val %d->%d",
+         name, i, sem_val1, sem_val2);
+}
+//else
+//  debugf(DBG_EXT, KMAG "unblock_semaphore(%s) was null", name);
+}
+
+/*
+  semaphore is marked as closed, signaling operation completion
+*/
+void close_semaphore(struct progressive_data_buf* data_buf)
+{
+  debugf(DBG_EXTALL, KCYN "close_semaphore(%s): state is %d",
+         data_buf->sem_name_list[SEM_DONE], data_buf->sem_open);
+  assert(data_buf->sem_open);
+  data_buf->sem_open = false;
+}
+
+bool is_semaphore_open(struct progressive_data_buf* data_buf)
+{
+  return data_buf->sem_open;
+}
+/*
+  unblock and close all semaphores for this data buf
+*/
+void unblock_close_all_semaphores(struct progressive_data_buf* data_buf)
+{
+  unblock_semaphore(data_buf, SEM_EMPTY);
+  unblock_semaphore(data_buf, SEM_FULL);
+  unblock_semaphore(data_buf, SEM_DONE);
+  close_semaphore(data_buf);
 }
 
 long random_at_most(long max)
@@ -1202,6 +1240,7 @@ dir_entry* init_dir_entry()
   de->downld_buf.sem_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_list[SEM_FULL] = NULL;
   de->downld_buf.sem_list[SEM_DONE] = NULL;
+  de->downld_buf.sem_open = false;
   de->downld_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->downld_buf.sem_name_list[SEM_FULL] = NULL;
   de->downld_buf.sem_name_list[SEM_DONE] = NULL;
@@ -1209,6 +1248,7 @@ dir_entry* init_dir_entry()
   de->upload_buf.sem_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_list[SEM_FULL] = NULL;
   de->upload_buf.sem_list[SEM_DONE] = NULL;
+  de->upload_buf.sem_open = false;
   de->upload_buf.sem_name_list[SEM_EMPTY] = NULL;
   de->upload_buf.sem_name_list[SEM_FULL] = NULL;
   de->upload_buf.sem_name_list[SEM_DONE] = NULL;
