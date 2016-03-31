@@ -715,13 +715,16 @@ int progress_callback_xfer(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
   //chaos test monkey
   if (myp->de && myp->de->upload_buf.feed_from_cache)
     myp->donotstop = true;
-  if (option_enable_chaos_test_monkey
-      && ulnow >= random_at_most(myp->de->segment_size)
+
+  if (option_enable_chaos_test_monkey && myp->de
+      && ulnow >= 1000000//random_at_most(myp->de->segment_size)
       && myp->method == 'P' && myp->tries == 1 && (!myp->donotstop))
   {
     //force connection close
-    debugf(DBG_TEST, "Aborting upload transfer at %lu bytes", ulnow);
-    myp->response = 0;
+    debugf(DBG_TEST,
+           "progress_callback_xfer(%s): aborting upload transfer at %lu bytes",
+           myp->de ? myp->de->name : "nil", ulnow);
+    myp->response = 503;
     return 1;
   }
   if (myp->last_ulnow != ulnow)
@@ -824,7 +827,7 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
   size_t max_size_to_upload;
   int sem_val_empty, sem_val_full;
   //wait to get fuse buffer data
-  //fixme: sometimes freezes here, after data feed from cache
+  //fixme: sometimes freezes here, on HTTP 503 or after data feed from cache
   sem_wait(de->upload_buf.sem_list[SEM_FULL]);
   //ensure we upload no more than fuse buf available
   max_size_to_upload = min(http_buf_size, de->upload_buf.work_buf_size);
@@ -992,22 +995,22 @@ static int send_request_size(const char* method, const char* encoded_path,
     if (!strcasecmp(method, HTTP_PUT) //|| !strcasecmp(method, "MKDIR")
         || !strcasecmp(method, HTTP_POST))
     {
-      debugf(DBG_EXTALL, "send_request_size: set utimens for file %s",
-             orig_path);
+      //debugf(DBG_EXTALL, "send_request_size: set utimens for file %s",
+      //       orig_path);
       //on rename de is null
       if (de)
       {
-        debugf(DBG_EXTALL,
-               "send_request_size: utime is path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
-               orig_path,
-               de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
-               de->atime.tv_sec, de->atime.tv_nsec);
+        //debugf(DBG_EXTALL,
+        //       "send_request_size: utime is path=%s ctime=%li.%li mtime=%li.%li atime=%li.%li",
+        //       orig_path,
+        //       de->ctime.tv_sec, de->ctime.tv_nsec, de->mtime.tv_sec, de->mtime.tv_nsec,
+        //       de->atime.tv_sec, de->atime.tv_nsec);
         set_direntry_headers(de, headers);
       }
     }
-    else
-      debugf(DBG_EXTALL, "send_request_size: not setting utimes (%s)",
-             orig_path);
+    //else
+    //  debugf(DBG_EXTALL, "send_request_size: not setting utimes (%s)",
+    //         orig_path);
     if (!strcasecmp(method, "MKDIR"))
     {
       assert(curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L) == CURLE_OK);
@@ -1051,8 +1054,9 @@ static int send_request_size(const char* method, const char* encoded_path,
       if (option_enable_progressive_upload && file_size > 0)
       {
         assert(de);
-        if (de->is_segmented)
-          assert(de_seg);
+        //do i need this as de_seg is null for first seg file?
+        //if (de->is_segmented)
+        //  assert(de_seg);
         assert(curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L) == CURLE_OK);
         debugf(DBG_EXT, "send_request_size: progressive PUT (%s)", orig_path);
         assert(curl_easy_setopt(curl, CURLOPT_READFUNCTION,
@@ -1290,11 +1294,19 @@ static int send_request_size(const char* method, const char* encoded_path,
       //signal request completion (replaces callback option)
       //only if there was data uploaded
       //otherwise retry as no data is lost
-      if ((option_enable_progressive_upload && file_size > 0) && de_seg
-          && de_seg->upload_buf.size_processed > 0)
+      if (file_size > 0 && (de_tmp && de_tmp->upload_buf.size_processed > 0))
       {
         //do not retry as data on upload will be lost
-        debugf(DBG_EXT, "send_request_size(%s): upload exit", print_path);
+        debugf(DBG_EXT, "send_request_size(%s:%s): upload exit",
+               print_path, de_tmp->name);
+        break;
+      }
+
+      //in case above break is not executed on 503 error
+      if (response == 503)
+      {
+        //do not retry as data on upload will be lost
+        debugf(DBG_EXT, KRED "send_request_size(%s): upload exit @503", print_path);
         break;
       }
     }
@@ -1685,7 +1697,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
   {
     read_len = fread(cache_buf, 1, BUFFER_READ_SIZE,
                      de->upload_buf.local_cache_file);
-    debugf(DBG_EXT, KMAG
+    debugf(DBG_EXTALL, KMAG
            "int_cfs_write_cache(%s): read file size=%lu",
            de->name, read_len);
     if (read_len > 0)
@@ -1693,7 +1705,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
       de->upload_buf.work_buf_size = read_len;
       while (de->upload_buf.work_buf_size > 0)
       {
-        debugf(DBG_EXT, KMAG
+        debugf(DBG_EXTALL, KMAG
                "int_cfs_write_cache(%s): looping workbufsize=%lu",
                de->name, de->upload_buf.work_buf_size);
         //index in buffer to resume upload in a new segment
@@ -1704,7 +1716,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
         //wait until previous buffer data is uploaded
         if (de->upload_buf.sem_list[SEM_EMPTY])
           sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
-        debugf(DBG_EXT, KMAG
+        debugf(DBG_EXTALL, KMAG
                "int_cfs_write_cache(%s): wait done, empty proc=%lu worksize=%lu",
                de->name, de->upload_buf.size_processed,
                de->upload_buf.work_buf_size);
@@ -1736,12 +1748,14 @@ void internal_upload_segment_progressive(void* arg)
   char* dbg_de_seg_name = strdup(de_tmp->name);
   bool cache_file_exist;
   int response, i;
-  bool op_ok = false, md5err = false;
+  bool op_ok = true;
+  bool md5err = false;
   save_job_md5(de->job2);//saves a snapshot in case error resume is needed
-  //multiple attempts, one to create root storage, rest for md5sum failures
+  save_job_md5(de->job);//save as first segment md5 is fuse one
+  //multiple attempts for md5sum failures
   for (i = 0; i < 1 + REQUEST_RETRIES; i++)
   {
-    if (md5err)
+    if (md5err || !op_ok)
     {
       restore_job_md5(de->job2);
       //wait until cache data is read and ready to feed into http
@@ -1750,14 +1764,18 @@ void internal_upload_segment_progressive(void* arg)
       //unblock potential wait for seg completion in cfs_flush
       sem_post(de_tmp->upload_buf.sem_list[SEM_DONE]);
       //fixme: sometimes it will freeze here, see cfs_flush note
+      //wait until data feed from cache is done
       sem_wait(de_tmp->upload_buf.sem_list[SEM_FULL]);
     }
-    if (job->de_seg)
+    if (!md5err && job->de_seg)//already initialised below in case of md5err
       assert(init_job_md5(job));
     //mark file size = 1 to signal we have some data coming in
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL, 1, 0, de,
                                  job->de_seg);//keep job->de_seg as might be NULL
     op_ok = valid_http_response(response);
+
+    //only check md5 for 2nd segment onwards
+    //FIXME: needs a fix to check also first segment, use fuse_md5 (job2)
     if (job->de_seg)
     {
       assert(complete_job_md5(job));
@@ -1765,35 +1783,45 @@ void internal_upload_segment_progressive(void* arg)
     }
     //check if md5 computed locally matches cloud md5
     //de_seg->md5sum is null on failed upload
-    if (job->de_seg && (!de_tmp->md5sum
-                        || strcasecmp(de_tmp->md5sum, job->md5str)))
+    if (job->de_seg || !op_ok)
     {
-      //most likely upload was interrupted by server/network, need to retry
-      debugf(DBG_EXT, KRED
-             "int_upload_seg_prog(%s): md5sum ERR de_seg=%s try=%d sizeproc=%lu",
-             de->name, de_tmp->name, i, de_tmp->upload_buf.size_processed);
-      //ssleep_ms(5000);
-      de_tmp->upload_buf.feed_from_cache = true;
-      md5err = true;
-      debugf(DBG_EXT,
-             "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
-             de_tmp->name, de_tmp->upload_buf.size_processed);
-      //unblock cfs_write to go into cache data feed
-      sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
-      op_ok = false;
+      if (!de_tmp->md5sum || strcasecmp(de_tmp->md5sum, job->md5str) || !op_ok)
+      {
+        //most likely upload was interrupted by server/network, need to retry
+        debugf(DBG_EXT, KRED
+               "int_upload_seg_prog(%s): md5sum ERR de_seg=%s try=%d sizeproc=%lu",
+               de->name, de_tmp->name, i, de_tmp->upload_buf.size_processed);
+        if (job->de_seg)
+          assert(init_job_md5(job));
+        de_tmp->upload_buf.feed_from_cache = true;
+        md5err = true;
+        debugf(DBG_EXT,
+               "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
+               de_tmp->name, de_tmp->upload_buf.size_processed);
+        //unblock cfs_write to go into cache data feed
+        sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
+        op_ok = false;
+      }
+      else
+      {
+        debugf(DBG_EXT, KMAG
+               "int_upload_seg_prog(%s): de_seg=%s try=%d "KGRN"md5sum/size OK",
+               de_tmp->name, de_tmp->full_name, i);
+        //in case segment meta download failed set md5sum for later check in cfs_flush
+        if (!de_tmp->md5sum)
+          de_tmp->md5sum = strdup(job->md5str);
+        md5err = false;
+        break;
+      }
     }
-    else
-    {
-      debugf(DBG_EXT, KMAG
-             "int_upload_seg_prog(%s): de_seg=%s try=%d "KGRN"md5sum/size OK",
-             de_tmp->name, de_tmp->full_name, i);
-      //in case segment meta download failed set md5sum for later check in cfs_flush
-      if (!de_tmp->md5sum)
-        de_tmp->md5sum = strdup(job->md5str);
-      md5err = false;
+    if (op_ok)
       break;
-    }
+    else
+      debugf(DBG_EXT, KMAG
+             "int_upload_seg_prog(%s): de_seg=%s try=%d, retrying upload",
+             de_tmp->name, de_tmp->full_name, i);
   }
+
   if (!op_ok)
   {
     //decrement seg count as upload was not ok
@@ -1810,11 +1838,11 @@ void internal_upload_segment_progressive(void* arg)
     //wait for main file to copy complete as it holds first segment data
     dir_entry* de_first = get_create_segment(de, 0);
     int loops = 0;
-    //wait until first seg is fully uploaded
+    //wait until first seg is fully uploaded so I can create real (0 sz) manifest
     while (is_semaphore_open(&de_first->upload_buf))
     {
       if (loops % 20 == 0)
-        debugf(DBG_EXT, KMAG "int_upload_seg_prog(%s): wait first completion",
+        debugf(DBG_EXT, KMAG "int_upload_seg_prog(%s): wait FIRST seg completion",
                de->name);
       sleep_ms(200);
       loops++;

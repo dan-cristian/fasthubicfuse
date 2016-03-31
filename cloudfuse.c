@@ -640,7 +640,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
             sleep_ms(200);
           loops++;
         }
-        while (pending && loops < 120);
+        while (pending && loops < 120 * 1000 / 200);
         //if operation completed ok calculate file cumulative segment etag
         if (!pending)
         {
@@ -1024,15 +1024,10 @@ static int cfs_write(const char* path, const char* buf, size_t length,
             //rename first segment, as thread to avoid block
             pthread_t thread;
             pthread_create(&thread, NULL, (void*)int_convert_first_segment_th, de);
+            //DEBUG
+            //sleep_ms(100000);
           }
         }
-        /*if (last_seg_index != -1)
-          {
-          //close prev cache file as segment changed. last is closed in cfs_flush
-          debugf(DBG_EXT, KMAG "cfs_write(%s:%s): close seg %d", path,
-                 prev_seg->name, de_tmp->segment_part);
-          close_file(&prev_seg->upload_buf.local_cache_file);
-          }*/
       }
       //for first segment upload to parent file, until we know if is segmented
       if (seg_index == 0)

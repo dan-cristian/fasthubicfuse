@@ -298,6 +298,7 @@ int file_md5(FILE* file_handle, char* md5_file_str)
 */
 bool init_job_md5(thread_job* job)
 {
+  debugf(DBG_EXT, KMAG "init_job_md5(%s)", job->job_name);
   if (job->md5str)
     free(job->md5str);
   job->md5str = NULL;
@@ -352,9 +353,9 @@ bool complete_job_md5(thread_job* job)
     job->md5str = strdup(md5_str);
   }
   else abort();
-  debugf(DBG_EXT, KMAG "complete_job_md5(%s:%s): md5sum=%s",
+  debugf(DBG_EXT, KMAG "complete_job_md5(%s:%s): job %s md5sum=%s",
          job->de ? job->de->name : "nil", job->de_seg ? job->de_seg->name : "nil",
-         job->md5str);
+         job->job_name, job->md5str);
   return result;
 }
 
@@ -1142,7 +1143,7 @@ void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index)
 }
 //else
 //  debugf(DBG_EXT, KMAG "unblock_semaphore(%s) was null", name);
-}
+//}
 
 /*
   semaphore is marked as closed, signaling operation completion
