@@ -2035,8 +2035,12 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   return false;
 }
 
-bool cleanup_older_segments(char* dir_path, char* exclude_path)
+bool cleanup_older_segments(thread_clean_segment_job*
+                            job)//char* dir_path, char* exclude_path)
 {
+  char* dir_path = job->dir_path;
+  char* exclude_path = job->exclude_path;
+
   debugf(DBG_EXT, "cleanup_older_segments(%s - %s)", dir_path,
          exclude_path);
   assert(dir_path);
@@ -2079,9 +2083,21 @@ bool cleanup_older_segments(char* dir_path, char* exclude_path)
       }
     }
   }
+
+  free(job->dir_path);
+  free(job->exclude_path);
   return result;
 }
 
+void cleanup_older_segments_th(char* dir_path, char* exclude_path)
+{
+  pthread_t thread;
+  thread_clean_segment_job* job = malloc(sizeof(struct
+                                         thread_clean_segment_job));
+  job->dir_path = strdup(dir_path);
+  job->exclude_path = strdup(exclude_path);
+  pthread_create(&thread, NULL, (void*)cleanup_older_segments, job);
+}
 /*
    O_CREAT = 32768
    O_RDONLY = 32768

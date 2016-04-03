@@ -228,6 +228,12 @@ typedef struct thread_delete_job
   int fd;
 } thread_delete_job;
 
+typedef struct thread_clean_segment_job
+{
+  char* dir_path;
+  char* exclude_path;
+} thread_clean_segment_job;
+
 // linked list with cached folder names
 typedef struct dir_cache
 {
@@ -378,7 +384,8 @@ bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
 bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
-bool cleanup_older_segments(char* dir_path, char* exclude_path);
+//bool cleanup_older_segments(char* dir_path, char* exclude_path);
+void cleanup_older_segments_th(char* dir_path, char* exclude_path);
 void unlink_cache_segments(dir_entry* de);
 void sleep_ms(int milliseconds);
 off_t get_file_size(FILE* fp);

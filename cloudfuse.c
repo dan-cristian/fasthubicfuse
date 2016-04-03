@@ -676,7 +676,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
         }
         if (strcasecmp(de_upload->job->md5str, de_upload->job2->md5str))
         {
-          //md5sums are different, upload is corrupt
+          //md5sums (fuse vs http) are different, upload is corrupt
           debugf(DBG_EXT, KRED
                  "cfs_flush(%s): md5sum not match between fuse(%s) and http(%s)",
                  de_upload->name, de_upload->job->md5str, de_upload->job2->md5str);
@@ -684,7 +684,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           abort();
         }
         else
-          debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK (%s)",
+          debugf(DBG_EXT, KGRN "cfs_flush(%s): content md5sum OK, fuse=http (%s)",
                  de_upload->name, de_upload->job->md5str);
         if (!de_upload->segments)
         {
@@ -723,12 +723,13 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           }
         }
         while (!de->is_segmented && loops < REQUEST_RETRIES);
+
         if (!de->is_segmented)
           abort();
 
         if (!meta_ok || strcasecmp(de->md5sum, de_upload->md5sum_local))
         {
-          if (!strcasecmp(de->md5sum, de_upload->segments->md5sum_local))
+          if (!strcasecmp(de->md5sum, de_upload->md5sum_local))//segments->md5sum_local))
           {
             debugf(DBG_EXT, KRED
                    "cfs_flush(%s): etags not match, EARLY?, cloud(%s) local(%s)",
@@ -745,7 +746,7 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
           abort();
         }
         else
-          debugf(DBG_EXT, KGRN "cfs_flush(%s): segment md5sum OK (%s)",
+          debugf(DBG_EXT, KGRN "cfs_flush(%s): etag segment md5sum OK (%s)",
                  de_upload->name, de_upload->md5sum_local);
         //free md5sum holders
         free_thread_job(de_upload->job);

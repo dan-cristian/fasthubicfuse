@@ -1714,6 +1714,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
         //signal there is data available in buffer for upload
         unblock_semaphore(&de->upload_buf, SEM_FULL);
         //wait until previous buffer data is uploaded
+        //freezes here after re-uploading a missing segment
         if (de->upload_buf.sem_list[SEM_EMPTY])
           sem_wait(de->upload_buf.sem_list[SEM_EMPTY]);
         debugf(DBG_EXTALL, KMAG
@@ -1799,7 +1800,8 @@ void internal_upload_segment_progressive(void* arg)
                "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
                de_tmp->name, de_tmp->upload_buf.size_processed);
         //unblock cfs_write to go into cache data feed
-        sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
+        unblock_semaphore(&de_tmp->upload_buf, SEM_EMPTY);
+        //sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
         op_ok = false;
       }
       else
@@ -1860,7 +1862,7 @@ void internal_upload_segment_progressive(void* arg)
                                  NULL);
     //now file is updated on cloud
     curl_slist_free_all(headers);
-    //remove older versions
+    //remove older file / segment versions
     char manifest_root[MAX_URL_SIZE];
     snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s", de->manifest_seg, de->name);
     char new_manifest_root[MAX_URL_SIZE];
@@ -1869,15 +1871,19 @@ void internal_upload_segment_progressive(void* arg)
     {
       debugf(DBG_EXT, KMAG
              "internal_upload_segment_prog(%s): clean old manifest", de->name);
-      //delete old segments from prev manifest root
-      cleanup_older_segments(de->manifest_cloud, new_manifest_root);
+      //delete old segments from previous/initial manifest root
+      cleanup_older_segments_th(de->manifest_cloud, new_manifest_root);
     }
-    debugf(DBG_EXT, KMAG
-           "internal_upload_segment_prog(%s): clean new manifest versions",
-           job->de->name);
-    //delete older versions from current manifest (neeed on overwrites)
-    if (strcasecmp(manifest_root, new_manifest_root))//only if different
-      cleanup_older_segments(manifest_root, new_manifest_root);
+    //delete older versions from current manifest (need on overwrites)
+    if (strcasecmp(manifest_root, de->manifest_cloud))
+      //new_manifest_root))//only if different
+    {
+      //abort();//check if compare is working
+      debugf(DBG_EXT, KMAG
+             "internal_upload_segment_prog(%s): clean new manifest versions",
+             job->de->name);
+      cleanup_older_segments_th(manifest_root, new_manifest_root);
+    }
     //check if all segments are visible in cloud
     //as there are cases when last segment appears late
     dir_entry* de_tmp2 = init_dir_entry();
@@ -2396,6 +2402,9 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
             de->size = strtoll(content, NULL, 10);
             //need the original size to check if file is segmented
             de->size_on_cloud = strtoll(content, NULL, 10);
+            if (de->size > segment_size)
+              debugf(DBG_NORM, KRED "Issue? seg size (%lu > %lu) too big?",
+                     de->size, segment_size);
           }
           if (!strcasecmp((const char*)anode->name, "content_type"))
           {

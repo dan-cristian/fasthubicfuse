@@ -23,6 +23,9 @@ sleep 1
 #if [ -f $SRC_FILE ]; then
 	echo New source detected, compiling!
 	rm $SRC_FILE
+	#clean screen log and http log
+	truncate ~/screenlog.0 -s 0
+	truncate /media/temp/log/fasthubicfuse-http.log -s 0
 	main
 	echo Run completed!
 	echo ==============
