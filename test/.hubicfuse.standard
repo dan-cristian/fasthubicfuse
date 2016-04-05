@@ -1,0 +1,23 @@
+client_x_id = api_hubic_xxxxx
+client_x_secret = xxxxxx
+refresh_x_token = xxxx
+cache_timeout = 0
+temp_dir = /media/temp/hubicfuse
+segment_size = 30000000
+segment_above = 30000001
+
+get_extended_metadata = true
+curl_verbose = true
+curl_progress_state = true
+cache_statfs_timeout = 30
+debug_level = 1
+enable_chmod = false
+enable_chown = false
+enable_progressive_upload = false
+enable_progressive_download = false
+min_speed_limit_progressive = 0
+min_speed_timeout = 3
+read_ahead = 0
+enable_syslog = true
+enable_chaos_test_monkey = false
+disable_atime_check=true
