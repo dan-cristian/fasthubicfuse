@@ -27,6 +27,7 @@
 #include "commonfs.h"
 #include "config.h"
 
+// try use this: http://valgrind.org/docs/manual/hg-manual.html
 pthread_mutex_t dcachemut;
 pthread_mutex_t dcacheuploadmut;
 pthread_mutex_t dlockmut;//file locking
@@ -1123,7 +1124,7 @@ void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index)
 {
   sem_t* semaphore = data_buf->sem_list[sem_index];
   char* name = data_buf->sem_name_list[sem_index];
-  assert(semaphore);
+  assert(semaphore);//sometimes is null
 
   //if (semaphore)
   //{

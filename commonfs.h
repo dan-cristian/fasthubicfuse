@@ -113,6 +113,22 @@ typedef enum { false, true } bool;
 #define FUSE_FLAG_O_WRONLY 32769
 #define LOCK_WAIT_SEC 10
 
+//START bogus declarations to help synthax in Visual Studio
+//---------------------------------------------------------
+#ifdef _WIN32
+typedef int pthread_mutex_t;
+typedef int pthread_mutexattr_t;
+typedef int pthread_t;
+typedef int sem_t;
+typedef int mode_t;
+typedef int uid_t;
+typedef int gid_t;
+typedef int MD5_CTX;
+typedef int curl_off_t;
+#endif // !sem_t
+//-------------------------------------------------------
+//END bogus declarations to help synthax in Visual Studio
+
 typedef struct
 {
   int fd;
@@ -247,6 +263,7 @@ typedef struct dir_cache
   struct dir_cache* next, *prev;
 } dir_cache;
 
+//for file locking
 typedef struct open_file
 {
   char* path;
@@ -257,6 +274,7 @@ typedef struct open_file
   char* process_origin;
   char* fuse_operation;
   struct open_file* next;
+  pthread_mutex_t mutex;//for segment uploads
 } open_file;
 
 char* override_storage_url;

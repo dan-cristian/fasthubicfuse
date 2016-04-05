@@ -1108,6 +1108,15 @@ static int send_request_size(const char* method, const char* encoded_path,
       assert(curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
                               writefunc_callback) == CURLE_OK);
       assert(curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk) == CURLE_OK);
+
+      //interrupt a slow download as this could make the next attempt faster
+      //due to hubic throtling. but do this only for half of the tries
+      if (option_min_speed_limit_progressive > 0 && tries <= (REQUEST_RETRIES / 2))
+      {
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT,
+                         option_min_speed_limit_progressive);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, option_min_speed_timeout);
+      }
     }
     else if (!strcasecmp(method, HTTP_GET))
     {
