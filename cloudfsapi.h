@@ -1,8 +1,10 @@
 #ifndef _CLOUDFSAPI_H
 #define _CLOUDFSAPI_H
+#ifndef _WIN32
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <fuse.h>
+#endif
 #include <time.h>
 #include "commonfs.h"
 
@@ -75,12 +77,12 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
                        bool force_meta);
 bool cloudfs_update_meta(dir_entry* de, bool sync);
 //int cloudfs_object_upload_progressive(dir_entry* de, dir_entry* de_seg);
-void* cloudfs_object_downld_progressive(void* path);
+//void* cloudfs_object_downld_progressive(void* path);
 int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                            bool sync_first);
 int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                              size_t size);
-int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de);
+//int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de);
 bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de);
 
 #endif

@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <stdio.h>
-#include <magic.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -9,23 +8,26 @@
 #ifdef __linux__
 #include <alloca.h>
 #endif
-#include <pthread.h>
-#include <time.h>
-#include <unistd.h>
+#include <limits.h>
+#include <errno.h>
 #include <sys/types.h>
+#include <time.h>
+#ifndef _WIN32
+#include <pthread.h>
+#include <unistd.h>
 #include <sys/time.h>
 #include <sys/syscall.h>
 #include <openssl/md5.h>
 #include <pwd.h>
 #include <fuse.h>
-#include <limits.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
-#include <errno.h>
 #include <syslog.h>
 #include <dirent.h>
-#include "commonfs.h"
+#include <magic.h>
 #include "config.h"
+#endif // !_WIN32
+#include "commonfs.h"
 
 // try use this: http://valgrind.org/docs/manual/hg-manual.html
 pthread_mutex_t dcachemut;
@@ -490,8 +492,7 @@ int get_safe_cache_file_path(const char* path, char* file_path_safe,
     snprintf(suffix_str, PATH_MAX, TEMP_SEGMENT_FORMAT, segment_part);
     suffix_len = strlen(suffix_str);
   }
-  size_t safe_len_prefix = min(NAME_MAX - md5len - suffix_len,
-                               file_path_len);
+  size_t safe_len_prefix = min(NAME_MAX - md5len - suffix_len, file_path_len);
   strncpy(file_path_safe, file_path, safe_len_prefix);
   strncpy(file_path_safe + safe_len_prefix, md5_path, md5len);
   strncpy(file_path_safe + safe_len_prefix + md5len, suffix_str,
@@ -2694,7 +2695,9 @@ void debug_http(const char* method, const char* url)
   pid_t thread_id = syscall(SYS_gettid);
 #else
   int thread_id = 0;
+#ifndef _WIN32
 #error "SYS_gettid unavailable on this system"
+#endif
 #endif
   if (option_http_log_path && strlen(option_http_log_path) > 0)
   {
@@ -2717,7 +2720,9 @@ void set_global_thread_debug(char* operation, const char* path, bool log)
   pid_t thread_id = syscall(SYS_gettid);
 #else
   int thread_id = 0;
+#ifndef _WIN32
 #error "SYS_gettid unavailable on this system"
+#endif
 #endif
   g_thread_id = thread_id;
   if (log)
@@ -2734,7 +2739,9 @@ void debugf(int level, char* fmt, ...)
       pid_t thread_id = syscall(SYS_gettid);
 #else
       int thread_id = 0;
+#ifndef _WIN32
 #error "SYS_gettid unavailable on this system"
+#endif
 #endif
       va_list args;
       //char prefix[] = "==DBG%d [%s]:%d==";

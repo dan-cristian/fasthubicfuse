@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <stdio.h>
-#include <magic.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdarg.h>
@@ -10,25 +9,29 @@
 #ifdef __linux__
 #include <alloca.h>
 #endif
-#include <pthread.h>
 #include <time.h>
-#include <unistd.h>
 #include <sys/types.h>
+#include <errno.h>
+#include <assert.h>
+#include <signal.h>
+#ifndef _WIN32
+#include <pthread.h>
+#include <unistd.h>
 #include <sys/time.h>
+#include <magic.h>
 #include <libxml/tree.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <json.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
-#include <errno.h>
 #include <fuse.h>
-#include <assert.h>
-#include <signal.h>
 #include <openssl/md5.h>
+#include "config.h"
+#endif
 #include "commonfs.h"
 #include "cloudfsapi.h"
-#include "config.h"
+
 
 #define RHEL5_LIBCURL_VERSION 462597
 #define RHEL5_CERTIFICATE_FILE "/etc/pki/tls/certs/ca-bundle.crt"
@@ -606,7 +609,7 @@ static size_t write_callback_progressive(void* ptr, size_t size, size_t nmemb,
     data_copy_size = min(de->downld_buf.fuse_read_size -
                          de->downld_buf.work_buf_size,
                          http_size - http_ptr_index);
-    src = ptr + http_ptr_index;
+    src = (unsigned char*)ptr + http_ptr_index;
     dest = de->downld_buf.readptr + de->downld_buf.work_buf_size;
     memcpy((void*)dest, src, data_copy_size);
     de->downld_buf.work_buf_size += data_copy_size;
@@ -1561,7 +1564,7 @@ bool update_segments(dir_entry* de, int* segment_count)
 
 void cloudfs_init()
 {
-  LIBXML_TEST_VERSION
+  LIBXML_TEST_VERSION;
   xmlXPathInit();
   curl_global_init(CURL_GLOBAL_ALL);
   pthread_mutex_init(&pool_mut, NULL);
@@ -3165,15 +3168,15 @@ int cloudfs_connect()
   /* curl default options */
   curl_easy_setopt(curl, CURLOPT_VERBOSE, debug);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
-  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
-  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1 : 0);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, verify_ssl ? 1L : 0L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, verify_ssl);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
-  curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1L);
   curl_easy_setopt(curl, CURLOPT_VERBOSE, 0L);
   curl_easy_setopt(curl, CURLOPT_POST, 0L);
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc_string);
   /* Step 1 : request a token  - Not needed anymore with refresh_token */
   /* Step 2 : get request code - Not needed anymore with refresh_token */
@@ -3182,7 +3185,7 @@ int cloudfs_connect()
           HUBIC_REFRESH_TOKEN);
   curl_easy_setopt(curl, CURLOPT_URL, HUBIC_TOKEN_URL);
   curl_easy_setopt(curl, CURLOPT_POST, 1L);
-  curl_easy_setopt(curl, CURLOPT_HEADER, 0);
+  curl_easy_setopt(curl, CURLOPT_HEADER, 0L);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(payload));
   curl_easy_setopt(curl, CURLOPT_USERNAME, HUBIC_CLIENT_ID);

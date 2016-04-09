@@ -1,9 +1,237 @@
 #ifndef _COMMONFS_H
 #define _COMMONFS_H
+
+#ifndef _WIN32
 #include <fuse.h>
 #include <pthread.h>
 #include <semaphore.h>
+#endif
 #include <assert.h>
+
+//START bogus declarations to help synthax in Visual Studio
+//---------------------------------------------------------
+#ifdef _WIN32
+typedef int pthread_mutex_t;
+typedef int pthread_mutexattr_t;
+typedef int pthread_t;
+typedef int sem_t;
+typedef int mode_t;
+typedef int uid_t;
+typedef int gid_t;
+typedef int MD5_CTX;
+typedef int curl_off_t;
+int CLOCK_REALTIME;
+typedef int ssize_t;
+typedef int DIR;
+typedef void CURL;
+typedef int magic_t;
+typedef void* json_object;
+typedef void BIO;
+typedef struct xmlParserCtxtPtr
+{
+  int myDoc;
+  int wellFormed;
+}* xmlParserCtxtPtr;
+typedef struct xmlNode
+{
+  int next;
+  int name;
+  int type;
+  int children;
+  int content;
+} xmlNode;
+
+typedef struct curl_version_info_data
+{
+  int version;
+  int ssl_version;
+  int version_num;
+} curl_version_info_data;
+typedef struct timespec
+{
+  int tv_nsec;
+  int tv_sec;
+}
+timespec;
+typedef struct timeval
+{
+  int tv_sec;
+  int tv_usec;
+} timeval;
+typedef struct fuse_file_info
+{
+  int fh;
+  int flags;
+  int direct_io;
+  int flush;
+  int nonseekable;
+  int writepage;
+} fuse_file_info;
+typedef struct passwd
+{
+  char* pw_dir;
+} passwd;
+typedef struct fuse_args
+{
+  char* argc;
+  char* argv;
+} fuse_args;
+typedef struct stat
+{
+  int st_uid;
+  int st_gid;
+  int st_mode;
+  int st_nlink;
+  int st_atime;
+  int st_mtime;
+  int st_ctime;
+  int st_size;
+  int st_blocks;
+  timespec st_atim;
+  timespec st_mtim;
+  timespec st_ctim;
+} stat;
+typedef struct fuse_operations
+{
+  void* readdir;
+  void* mkdir;
+  void* read;
+  void* create;
+  void* open;
+  void* fgetattr;
+  void* getattr;
+  void* flush;
+  void* release;
+  void* rmdir;
+  void* ftruncate;
+  void* truncate;
+  void* write;
+  void* unlink;
+  void* fsync;
+  void* statfs;
+  void* chmod;
+  void* chown;
+  void* rename;
+  void* symlink;
+  void* readlink;
+  void* init;
+  void* utimens;
+  void* setxattr;
+  void* getxattr;
+  void* listxattr;
+  void* removexattr;
+} fuse_operations;
+typedef struct statvfs
+{
+  int f_bsize;
+  int f_frsize;
+  int f_blocks;
+  int f_bfree;
+  int f_bavail;
+  int f_files;
+  int f_ffree;
+  int f_favail;
+  int f_namemax;
+} statvfs;
+typedef struct curl_slist
+{
+  int next;
+  int data;
+} curl_slist;
+#define MD5_DIGEST_LENGTH 10
+#define PATH_MAX 512
+#define NAME_MAX 256
+#define O_ACCMODE 0
+#define O_NONBLOCK 0
+#define SEM_FAILED 0
+#define F_OK 0
+#define R_OK 0
+#define LOG_PID 0
+#define LOG_USER 0
+#define LOG_INFO 0
+#define S_IFLNK 0
+#define SIGPIPE 0
+#define PTHREAD_MUTEX_RECURSIVE 0
+#define PTHREAD_MUTEX_ERRORCHECK 0
+#define INT_MAX 10
+#define CURLINFO_TOTAL_TIME 0
+#define CURLINFO_SPEED_DOWNLOAD 0
+#define CURLINFO_SPEED_UPLOAD 0
+#define CURLOPT_CAINFO 0
+#define CURLOPT_HEADERDATA 0
+#define CURLOPT_HEADERFUNCTION 0
+#define CURLOPT_UPLOAD 0
+#define CURLOPT_LOW_SPEED_LIMIT 0
+#define CURLOPT_LOW_SPEED_TIME 0
+#define CURLOPT_WRITEDATA 0
+#define LIBXML_TEST_VERSION 0
+#define MAGIC_MIME_TYPE 0
+#define CURLVERSION_NOW 0
+#define CURL_GLOBAL_ALL 0
+#define CURLOPT_VERBOSE 0
+#define CURLOPT_USERAGENT 0
+#define CURLOPT_NOSIGNAL 0
+#define CURLOPT_SSL_VERIFYPEER 0
+#define CURLOPT_SSL_VERIFYHOST 0
+#define CURLOPT_TIMEOUT 0
+#define CURLOPT_CONNECTTIMEOUT 0
+#define CURLOPT_FORBID_REUSE 0
+#define CURLOPT_VERBOSE 0
+#define CURLOPT_POST 0
+#define CURLOPT_FOLLOWLOCATION 0
+#define CURLOPT_WRITEFUNCTION 0
+#define CURLOPT_URL 0
+#define CURLOPT_HEADER 0
+#define CURLOPT_POSTFIELDS 0
+#define CURLOPT_POSTFIELDSIZE 0
+#define CURLOPT_USERNAME 0
+#define CURLOPT_PASSWORD 0
+#define CURLOPT_HTTPAUTH 0
+#define CURLAUTH_BASIC 0
+#define CURLAUTH_NONE 0
+#define CURLOPT_HTTPHEADER 0
+#define CURLINFO_RESPONSE_CODE 0
+#define CURLINFO_EFFECTIVE_URL 0
+#define CURLINFO_SIZE_DOWNLOAD 0
+#define CURLE_OK 0
+#define CURLOPT_RESUME_FROM_LARGE 0
+#define CURLOPT_HTTPGET 0
+#define CURLOPT_INFILESIZE_LARGE 0
+#define CURLOPT_READFUNCTION 0
+#define CURLOPT_READDATA 0
+#define CURLINFO_SIZE_UPLOAD 0
+#define CURLOPT_PROGRESSDATA 0
+#define CURLOPT_INFILESIZE 0
+#define CURLOPT_EXPECT_100_TIMEOUT_MS 0
+#define CURLOPT_NOBODY 0
+#define CURLOPT_CUSTOMREQUEST 0
+#define CURLOPT_PROGRESSFUNCTION 0
+#define CURLOPT_NOPROGRESS 0
+#define CURLOPT_TCP_KEEPALIVE 0
+#define CURLOPT_TCP_KEEPIDLE 0
+#define CURLOPT_TCP_KEEPINTVL 0
+#define EXIT_FAILURE 0
+#define BIO_FLAGS_BASE64_NO_NL 0
+#define XML_ELEMENT_NODE 0
+#define XML_TEXT_NODE 0
+fuse_args FUSE_ARGS_INIT(void* a, void* b) {};
+typedef void* fuse_fill_dir_t;
+fuse_fill_dir_t filldir(void* a, char* b, void* c, int d) {};
+int stat(char* a, void* b) {};
+int assert_x(int a) {};
+int min_x(int a, int b)
+{
+  return 0;
+}
+void xmlXPathInit()
+{};
+xmlParserCtxtPtr xmlCreatePushParserCtxt(void* a, void* b, char* c, int d,
+    void* e)
+{};
+#endif
+//-------------------------------------------------------
+//END bogus declarations to help synthax in Visual Studio
+
 
 typedef enum { false, true } bool;
 #define MAX_PATH_SIZE (1024 + 256 + 3)
@@ -93,6 +321,7 @@ typedef enum { false, true } bool;
 #define META_MANIF_TIME 3
 #define META_MANIF_CLOUD 4
 
+#ifndef _WIN32
 #define min(x, y) ({                \
   typeof(x) _min1 = (x);          \
   typeof(y) _min2 = (y);          \
@@ -104,6 +333,7 @@ typedef enum { false, true } bool;
   typeof(y) _max2 = (y);          \
   (void)(&_max1 == &_max2);      \
   _max1 > _max2 ? _max1 : _max2; })
+#endif // !_WIN32
 
 #define SEM_EMPTY 0
 #define SEM_FULL 1
@@ -113,21 +343,6 @@ typedef enum { false, true } bool;
 #define FUSE_FLAG_O_WRONLY 32769
 #define LOCK_WAIT_SEC 10
 
-//START bogus declarations to help synthax in Visual Studio
-//---------------------------------------------------------
-#ifdef _WIN32
-typedef int pthread_mutex_t;
-typedef int pthread_mutexattr_t;
-typedef int pthread_t;
-typedef int sem_t;
-typedef int mode_t;
-typedef int uid_t;
-typedef int gid_t;
-typedef int MD5_CTX;
-typedef int curl_off_t;
-#endif // !sem_t
-//-------------------------------------------------------
-//END bogus declarations to help synthax in Visual Studio
 
 typedef struct
 {

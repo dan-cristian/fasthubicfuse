@@ -1,26 +1,28 @@
 #define FUSE_USE_VERSION 26
-#include <fuse.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <errno.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <pwd.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <openssl/md5.h>
 #include <assert.h>
+#ifndef _WIN32
+#include <openssl/md5.h>
 #include <dirent.h>
+#include <fuse.h>
+#include <strings.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <pwd.h>
+#include "config.h"
+#endif
 #include "commonfs.h"
 #include "cloudfsapi.h"
-#include "config.h"
 
 /*
    http://docs.openstack.org/developer/swift/api/object_api_v1_overview.html
@@ -217,6 +219,7 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
     debugf(DBG_NORM, KRED "exit 0: cfs_readdir(%s)", path);
     return -ENOLINK;
   }
+#ifndef _WIN32
   filldir(buf, ".", NULL, 0);
   filldir(buf, "..", NULL, 0);
   for (; de; de = de->next)
@@ -227,6 +230,8 @@ static int cfs_readdir(const char* path, void* buf, fuse_fill_dir_t filldir,
     else
       debugf(DBG_ERR, KRED "cfs_readdir(%s): found NULL entry", path);
   }
+#endif // !_WIN32
+
   debug_list_cache_content();
   de_root = check_path_info(path);
   //assert(de_root);
