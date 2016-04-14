@@ -850,10 +850,10 @@ static size_t progressive_upload_callback(void* ptr, size_t size, size_t nmemb,
     //compute segment md5sum only is this is a segment,
     //as parent md5 is done in cfs_write
     if (de->parent)
-      assert(update_job_md5(de->job, upload_buf->readptr, max_size_to_upload));
+      assert(cfsi_update_job_md5(de->job, upload_buf->readptr, max_size_to_upload));
     //compute whole file md5sum. check if de = segment or main file
-    assert(update_job_md5(de->parent ? de->parent->job2 : de->job2,
-                          upload_buf->readptr, max_size_to_upload));
+    assert(cfsi_update_job_md5(de->parent ? de->parent->job2 : de->job2,
+                               upload_buf->readptr, max_size_to_upload));
     upload_buf->readptr += max_size_to_upload;
     upload_buf->work_buf_size -= max_size_to_upload;
     upload_buf->size_processed += max_size_to_upload;
@@ -1331,7 +1331,7 @@ static int send_request_size(const char* method, const char* encoded_path,
              size_downloaded, size_uploaded, method);
       break;
     }
-    if (response == 401 && !cloudfs_connect())   // re-authenticate on 401s
+    if (response == 401 && !cfsi_connect())   // re-authenticate on 401s
     {
       debugf(DBG_NORM, KYEL"status: send_req_size(%s) (%s) [HTTP REAUTH]",
              print_path, method);
@@ -1440,7 +1440,7 @@ bool update_segments(dir_entry* de, int* segment_count)
           debugf(DBG_NORM, KRED
                  "update_segments(%s): missing segment %d, retry #%d",
                  de->name, index, iterations);
-          cloudfs_free_dir_list(seg_dir);
+          cfsi_free_dir_list(seg_dir);
           sleep_ms(1000 * iterations);
           //reload folder content
           if (!cloudfs_list_directory(manifest_path, &seg_dir))
@@ -1537,7 +1537,7 @@ bool update_segments(dir_entry* de, int* segment_count)
         while (new_seg)
         {
           de_segment = atoi(new_seg->name);
-          old_seg = get_segment(de, de_segment);
+          old_seg = cfsi_get_seg(de, de_segment);
           //check if segments are identical
           //if not replace de with new segment list
           if (!old_seg || !old_seg->md5sum
@@ -1546,7 +1546,7 @@ bool update_segments(dir_entry* de, int* segment_count)
             debugf(DBG_EXT, KMAG
                    "format_segments: modifing segment list for (%s)", de->full_name);
             //todo: what if there are download segmented ops in progress?
-            cloudfs_free_dir_list(de->segments);
+            cfsi_free_dir_list(de->segments);
             de->segments = seg_dir;
             break;
           }
@@ -1562,9 +1562,9 @@ bool update_segments(dir_entry* de, int* segment_count)
    Public interface
 */
 
-void cloudfs_init()
+void cfsi_init()
 {
-  LIBXML_TEST_VERSION;
+  LIBXML_TEST_VERSION; //todo: check if semicolon creates issues
   xmlXPathInit();
   curl_global_init(CURL_GLOBAL_ALL);
   pthread_mutex_init(&pool_mut, NULL);
@@ -1654,16 +1654,16 @@ bool get_file_mimetype_from_path(dir_entry* de, char* mime)
 /*
    moves main file to segment 0 as file is segmented
 */
-void int_convert_first_segment_th(dir_entry* de)
+void cfsi_convert_first_seg_th(dir_entry* de)
 {
   debugf(DBG_EXT, KMAG "int_convert_first_segment(%s): converting as segment 0",
          de->name);
-  dir_entry* de_seg = get_create_segment(de, 0);
+  dir_entry* de_seg = cfsi_get_create_seg(de, 0);
   init_semaphores(&de_seg->upload_buf, de_seg, "upload");
   assert(de_seg->full_name);
   int loops = 0;
   //wait until first seg is fully uploaded
-  while (is_semaphore_open(&de->upload_buf))
+  while (cfsi_is_sem_open(&de->upload_buf))
   {
     if (loops % 20 == 0)
       debugf(DBG_EXT, KMAG "int_convert_first_segment(%s): wait completion",
@@ -1671,7 +1671,7 @@ void int_convert_first_segment_th(dir_entry* de)
     sleep_ms(200);
     loops++;
   }
-  bool res = cloudfs_copy_object(de, de_seg->full_name, true);
+  bool res = cfsi_copy_object(de, de_seg->full_name, true);
   assert(res);
   //signal cfs_flush we're done
   unblock_close_all_semaphores(&de_seg->upload_buf);
@@ -1686,19 +1686,19 @@ void int_convert_first_segment_th(dir_entry* de)
 /*
    feeds data into http buffer from cache file, similar with cfs_write
 */
-bool int_cfs_write_cache_data_feed(dir_entry* de)
+bool cfsi_cache_data_feed(dir_entry* de)
 {
-  debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): starting, fp=%p",
+  debugf(DBG_EXT, KBLU "cfsi_cache_data_feed(%s): starting, fp=%p",
          de->name, de->upload_buf.local_cache_file);
   int res = fflush(de->upload_buf.local_cache_file);
   if (res == 0)
-    debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s): flushed ok",
+    debugf(DBG_EXT, KBLU "cfsi_cache_data_feed(%s): flushed ok",
            de->name);
   else
-    debugf(DBG_EXT, KRED "int_cfs_write_cache_data_feed(%s): flushed error=%d",
+    debugf(DBG_EXT, KRED "cfsi_cache_data_feed(%s): flushed error=%d",
            de->name, res);
   off_t seg_size_disk = get_file_size(de->upload_buf.local_cache_file);
-  debugf(DBG_EXT, KBLU "int_cfs_write_cache_data_feed(%s) cache_size=%lu",
+  debugf(DBG_EXT, KBLU "cfsi_cache_data_feed(%s) cache_size=%lu",
          de->full_name, seg_size_disk);
   //rewind to provide data for http upload from local cache
   assert(fseek(de->upload_buf.local_cache_file, 0, SEEK_SET) == 0);
@@ -1724,7 +1724,7 @@ bool int_cfs_write_cache_data_feed(dir_entry* de)
         ptr_offset = read_len - de->upload_buf.work_buf_size;
         de->upload_buf.readptr = cache_buf + ptr_offset;
         //signal there is data available in buffer for upload
-        unblock_semaphore(&de->upload_buf, SEM_FULL);
+        cfsi_unblock_sem(&de->upload_buf, SEM_FULL);
         //wait until previous buffer data is uploaded
         //freezes here after re-uploading a missing segment
         if (de->upload_buf.sem_list[SEM_EMPTY])
@@ -1781,7 +1781,7 @@ void internal_upload_segment_progressive(void* arg)
       sem_wait(de_tmp->upload_buf.sem_list[SEM_FULL]);
     }
     if (!md5err && job->de_seg)//already initialised below in case of md5err
-      assert(init_job_md5(job));
+      assert(cfsi_init_job_md5(job));
     //mark file size = 1 to signal we have some data coming in
     response = send_request_size(HTTP_PUT, NULL, NULL, NULL, NULL, 1, 0, de,
                                  job->de_seg);//keep job->de_seg as might be NULL
@@ -1791,7 +1791,7 @@ void internal_upload_segment_progressive(void* arg)
     //FIXME: needs a fix to check also first segment, use fuse_md5 (job2)
     if (job->de_seg)
     {
-      assert(complete_job_md5(job));
+      assert(cfsi_close_job_md5(job));
       assert(job->md5str);
     }
     //check if md5 computed locally matches cloud md5
@@ -1805,14 +1805,14 @@ void internal_upload_segment_progressive(void* arg)
                "int_upload_seg_prog(%s): md5sum ERR de_seg=%s try=%d sizeproc=%lu",
                de->name, de_tmp->name, i, de_tmp->upload_buf.size_processed);
         if (job->de_seg)
-          assert(init_job_md5(job));
+          assert(cfsi_init_job_md5(job));
         de_tmp->upload_buf.feed_from_cache = true;
         md5err = true;
         debugf(DBG_EXT,
                "int_upload_seg_prog(%s): signal buf empty sizeproc=%lu",
                de_tmp->name, de_tmp->upload_buf.size_processed);
         //unblock cfs_write to go into cache data feed
-        unblock_semaphore(&de_tmp->upload_buf, SEM_EMPTY);
+        cfsi_unblock_sem(&de_tmp->upload_buf, SEM_EMPTY);
         //sem_post(de_tmp->upload_buf.sem_list[SEM_EMPTY]);
         op_ok = false;
       }
@@ -1850,10 +1850,10 @@ void internal_upload_segment_progressive(void* arg)
   if (de_tmp->segment_part == de->segment_count - 1)
   {
     //wait for main file to copy complete as it holds first segment data
-    dir_entry* de_first = get_create_segment(de, 0);
+    dir_entry* de_first = cfsi_get_create_seg(de, 0);
     int loops = 0;
     //wait until first seg is fully uploaded so I can create real (0 sz) manifest
-    while (is_semaphore_open(&de_first->upload_buf))
+    while (cfsi_is_sem_open(&de_first->upload_buf))
     {
       if (loops % 20 == 0)
         debugf(DBG_EXT, KMAG "int_upload_seg_prog(%s): wait FIRST seg completion",
@@ -1917,9 +1917,9 @@ void internal_upload_segment_progressive(void* arg)
     }
     else
       de->has_unvisible_segments = false;
-    cloudfs_free_dir_list(de_tmp2);
+    cfsi_free_dir_list(de_tmp2);
     //signal cfs_flush we're done uploading main file so it can exit
-    unblock_semaphore(&de_tmp->upload_buf, SEM_DONE);
+    cfsi_unblock_sem(&de_tmp->upload_buf, SEM_DONE);
   }
   //signal cfs_write (and cfs_flush?) we're done
   unblock_close_all_semaphores(&de_tmp->upload_buf);
@@ -1928,10 +1928,10 @@ void internal_upload_segment_progressive(void* arg)
   //free only if is true segment, keep first job for complete file md5sum
   if (job->de_seg)
     de_tmp->job = NULL;
-  close_file(&de_tmp->upload_buf.local_cache_file);
+  cfsi_close_file(&de_tmp->upload_buf.local_cache_file);
   //unlock to allow another upload segment to retry a failed transfer
   pthread_mutex_unlock(&de_tmp->upload_buf.mutex);
-  free_thread_job(job);
+  cfsi_free_thread_job(job);
   free(dbg_de_name);
   free(dbg_de_seg_name);
   pthread_exit(NULL);
@@ -1941,13 +1941,13 @@ void internal_upload_segment_progressive(void* arg)
    uploads a new segment folder in cloud
    NOTE!: it alters de fields
 */
-bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
+bool cfsi_create_seg(dir_entry* de_seg, dir_entry* de)
 {
   dir_entry* de_tmp;
   de_tmp = de_seg ? de_seg : de;
   assert(de_tmp);
   assert(de);
-  debugf(DBG_EXT, "cloudfs_create_segment(%s:%s)", de_tmp->name, de->name);
+  debugf(DBG_EXT, "cfsi_create_seg(%s:%s)", de_tmp->name, de->name);
   if (!de_seg)// || de_seg->segment_part == 0)
   {
     de->segment_count = 1;//we have at least 1 segment
@@ -1962,7 +1962,7 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
     init_semaphores(&de_tmp->upload_buf, de_tmp, "upload");
     struct thread_job* job;
     char job_name[MAX_PATH_SIZE] = "segment_upload:";
-    job = init_thread_job(strdup(strcat(job_name, de_tmp->name)));
+    job = cfsi_init_thread_job(strdup(strcat(job_name, de_tmp->name)));
     job->de = de;
     job->de_seg = de_seg;
     if (de_seg)
@@ -1972,20 +1972,20 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
   }
   else
   {
-    debugf(DBG_EXT, "cloudfs_create_segment(%s:%s): skip, already launched",
+    debugf(DBG_EXT, "cfsi_create_seg(%s:%s): skip, already launched",
            de_tmp->name, de->name);
     abort();
   }
   /*
      //pre-launch next segment to avoid interruptions in upload
      //this segment might not be needed so remove it if needed in cfs_flush
-     dir_entry* de_next = get_create_segment(de, de_tmp + 1);
+     dir_entry* de_next = cfsi_get_create_seg(de, de_tmp + 1);
      assert(de_next);
      //launch async upload for this segment
      init_semaphores(&de_next->upload_buf, de_next, "upload");
      struct thread_job* job;
      char job_name[MAX_PATH_SIZE] = "segment_upload_next:";
-     job = init_thread_job(strdup(strcat(job_name, de_next->name)));
+     job = cfsi_init_thread_job(strdup(strcat(job_name, de_next->name)));
      job->de = de;
      job->de_seg = de_next;
      job->de_seg->job = job; //cyclic ref. for md5 sum update in curl callbacks
@@ -1993,7 +1993,7 @@ bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de)
                  job);
   */
   debugf(DBG_EXT,
-         "exit 0: cloudfs_create_segment(%s:%s) upload started ok file %s",
+         "exit 0: cfsi_create_seg(%s:%s) upload started ok file %s",
          de_tmp->full_name, de_tmp->name, de->name);
   return true;
 }
@@ -2016,7 +2016,7 @@ int download_ahead_segment_thread(void* arg)
        (segindex < job->de->segment_count
         && segindex < job->segment_part + seg_read_ahead_count); segindex++)
   {
-    de_seg = get_segment(job->de, segindex);
+    de_seg = cfsi_get_seg(job->de, segindex);
     assert(de_seg);
     debugf(DBG_EXT, KCYN
            "download_ahead_segment_th(%s:%s): from segindex=%d count=%d",
@@ -2024,10 +2024,10 @@ int download_ahead_segment_thread(void* arg)
            job->segment_part + seg_read_ahead_count);
     if (de_seg)
     {
-      in_cache = open_segment_cache_md5(job->de, de_seg, &fp_segment, HTTP_GET);
+      in_cache = cfsi_open_seg_cache_md5(job->de, de_seg, &fp_segment, HTTP_GET);
       assert(fp_segment);
       if (!in_cache)
-        cloudfs_download_segment(de_seg, job->de, fp_segment, 0);
+        cfsi_down_seg(de_seg, job->de, fp_segment, 0);
       fclose(fp_segment);
       fp_segment = NULL;
     }
@@ -2036,7 +2036,7 @@ int download_ahead_segment_thread(void* arg)
          "download_ahead_segment_th(%s): exit segindex=%d ahead_count=%lu",
          job->de->name, segindex, seg_read_ahead_count);
   job->de->downld_buf.ahead_thread_count--;
-  free_thread_job(job);
+  cfsi_free_thread_job(job);
   pthread_exit(NULL);
 }
 
@@ -2044,22 +2044,22 @@ int download_ahead_segment_thread(void* arg)
    downloading ahead segments.
    if sync_first = true, get first segment sync and rest async.
 */
-int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
-                           bool sync_first)
+int cfsi_down_ahead_seg(dir_entry* de_seg, dir_entry* de, FILE* fp,
+                        bool sync_first)
 {
-  debugf(DBG_EXT, KCYN "download_ahead_segment(%s): segindex=%d",
+  debugf(DBG_EXT, KCYN "cfsi_down_ahead_seg(%s): segindex=%d",
          de->name, de_seg->segment_part);
   de->downld_buf.ahead_thread_count++;
   int index = 0;
   if (sync_first)
   {
     //get current segment sync.
-    cloudfs_download_segment(de_seg, de, fp, 0);
+    cfsi_down_seg(de_seg, de, fp, 0);
     index = 1;
   }
   //get the rest async.
   char job_name[MAX_PATH_SIZE] = "segment_download:";
-  struct thread_job* job = init_thread_job(strdup(strcat(job_name,
+  struct thread_job* job = cfsi_init_thread_job(strdup(strcat(job_name,
                            de_seg->name)));
   job->de = de;
   job->segment_part = de_seg->segment_part + index;
@@ -2073,11 +2073,11 @@ int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
    size = 0 for segments read ahead and saved to local cache files
    download completion is signaled via semaphores
 */
-int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
-                             size_t size)
+int cfsi_down_seg(dir_entry* de_seg, dir_entry* de, FILE* fp,
+                  size_t size)
 {
   debugf(DBG_EXT, KMAG
-         "cloudfs_download_segment: starting download %s part=%lu",
+         "cfsi_down_seg: starting download %s part=%lu",
          de->name, de_seg->segment_part);
   if (!de_seg->downld_buf.mutex_initialised)
   {
@@ -2085,13 +2085,13 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
     de_seg->downld_buf.mutex_initialised = true;
   }
   pthread_mutex_lock(&de_seg->downld_buf.mutex);
-  debugf(DBG_EXT, KMAG "cloudfs_download_segment: passed lock %s part=%lu",
+  debugf(DBG_EXT, KMAG "cfsi_down_seg: passed lock %s part=%lu",
          de->name, de_seg->segment_part);
   //after lock file might be in cache already
   if (check_segment_cache_md5(de, de_seg, fp))
   {
     debugf(DBG_EXT, KMAG
-           "cloudfs_download_segment: cache ok after lock %s part=%lu",
+           "cfsi_down_seg: cache ok after lock %s part=%lu",
            de->name, de_seg->segment_part);
     pthread_mutex_unlock(&de_seg->downld_buf.mutex);
     return true;
@@ -2099,7 +2099,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   else
   {
     debugf(DBG_EXT, KMAG
-           "cloudfs_download_segment: cache NOT ok after lock %s part=%lu",
+           "cfsi_down_seg: cache NOT ok after lock %s part=%lu",
            de->name, de_seg->segment_part);
   }
   init_semaphores(&de_seg->downld_buf, de_seg, "dwnld");
@@ -2124,7 +2124,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   else
   {
     //should never happen?
-    debugf(DBG_EXT, KRED "cloudfs_download_segment: segment corrupted");
+    debugf(DBG_EXT, KRED "cfsi_down_seg: segment corrupted");
     abort();
   }
   info.seg_base = de_seg->full_name;
@@ -2140,10 +2140,10 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
                                    info.size_copy, de->is_segmented, de, de_seg);
   if (!valid_http_response(response))
     debugf(DBG_NORM, KRED
-           "cloudfs_download_segment: %s failed resp=%d proc=%lu",
+           "cfsi_down_seg: %s failed resp=%d proc=%lu",
            info.seg_base, response, info.size_processed);
   else
-    debugf(DBG_EXT, "cloudfs_download_segment(%s) download ok proc=%lu",
+    debugf(DBG_EXT, "cfsi_down_seg(%s) download ok proc=%lu",
            info.seg_base, info.size_processed);
   fflush(info.fp);
   //compute md5sum after each seg download
@@ -2176,7 +2176,7 @@ int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
   unblock_close_all_semaphores(&de_seg->downld_buf);
   pthread_mutex_unlock(&de_seg->downld_buf.mutex);
   debugf(DBG_EXT, KMAG
-         "cloudfs_download_segment: done fp=%p part=%d proc=%lu",
+         "cfsi_down_seg: done fp=%p part=%d proc=%lu",
          de_seg->downld_buf.local_cache_file, de_seg->segment_part,
          info.size_processed);
   return true;
@@ -2208,8 +2208,8 @@ int cloudfs_object_truncate(dir_entry* de, off_t size)
    FIXME: with lazy meta file size (and segmented status) can be incorrect
    as they rely on optional fields. fix is to check if optional fields exists?
 */
-bool get_file_metadata(dir_entry* de, bool force_segment_update,
-                       bool force_meta)
+bool cfsi_get_file_meta(dir_entry* de, bool force_segment_update,
+                        bool force_meta)
 {
   debugf(DBG_EXT, "get_file_meta(%s) isdir=%d isseg=%d file_count=%d",
          de->full_name, de->isdir, de->is_segmented,
@@ -2267,7 +2267,7 @@ bool get_file_metadata(dir_entry* de, bool force_segment_update,
       if (!update_segments(de, &seg_count))
       {
         //fixme: corrupt file, what to do?
-        cloudfs_delete_path(de->manifest_cloud, true, false, NULL);
+        cfsi_delete_path(de->manifest_cloud, true, false, NULL);
         return false;
       }
       else
@@ -2304,7 +2304,7 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
   //http://www.xmlsoft.org/html/libxml-tree.html#xmlNode
   xmlNode* onode = NULL, *anode = NULL, *text_node = NULL;
   xmlParserCtxtPtr xmlctx = xmlCreatePushParserCtxt(NULL, NULL, "", 0, NULL);
-  de_root = check_path_info(path);
+  de_root = cfsi_get_path_info(path);
   if (!strcmp(path, "") || !strcmp(path, "/"))
   {
     path = "";
@@ -2458,9 +2458,9 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
           if (!strncasecmp(de->name, last_subdir, sizeof(last_subdir)))
           {
             //not sure when / why this is called, seems to generate many missed delete ops.
-            //cloudfs_free_dir_list(de);
+            //cfsi_free_dir_list(de);
             debugf(DBG_EXT, "cloudfs_list_directory: " KYEL
-                   "ignore "KNRM"cloudfs_free_dir_list(%s) command", de->name);
+                   "ignore "KNRM"cfsi_free_dir_list(%s) command", de->name);
             continue;
           }
           strncpy(last_subdir, de->name, sizeof(last_subdir));
@@ -2548,18 +2548,18 @@ int cloudfs_list_directory(const char* path, dir_entry** dir_list)
 */
 void thread_cloudfs_delete_object(dir_entry* de)
 {
-  cloudfs_delete_object(de);
+  cfsi_delete_object(de);
   pthread_exit(NULL);
 }
 
-bool cloudfs_delete_object(dir_entry* de)
+bool cfsi_delete_object(dir_entry* de)
 {
-  debugf(DBG_EXT, "cloudfs_delete_object(%s): dir=%d seg=%d meta_down=%d",
+  debugf(DBG_EXT, "cfsi_delete_object(%s): dir=%d seg=%d meta_down=%d",
          de->full_name, de->isdir, de->is_segmented, de->metadata_downloaded);
   //get meta for files to obtain manifest data. avoid segments and dirs.
   bool potential_segmented = de->is_segmented || de->size_on_cloud == 0;
   if (potential_segmented && !de->metadata_downloaded && !de->isdir)
-    get_file_metadata(de, false, true);
+    cfsi_get_file_meta(de, false, true);
   if (potential_segmented || de->isdir)
   {
     //delete object segments or subfolders
@@ -2567,10 +2567,10 @@ bool cloudfs_delete_object(dir_entry* de)
     {
       dir_entry* de_content;
       char* prefix_path = de->isdir ? de->full_name : de->manifest_cloud;
-      return cloudfs_delete_path(prefix_path, de->isdir, de->is_segmented, de);
+      return cfsi_delete_path(prefix_path, de->isdir, de->is_segmented, de);
     }
   }
-  return cloudfs_delete_path(de->full_name, de->isdir, de->is_segmented, de);
+  return cfsi_delete_path(de->full_name, de->isdir, de->is_segmented, de);
 }
 
 /*
@@ -2582,8 +2582,8 @@ void cloudfs_delete_object_unlink_async_th(thread_delete_job* job)
          job->de->full_name, g_delete_thread_count);
   g_delete_thread_count++;
   char* path = strdup(job->de->full_name);//as de will be NULLed
-  cloudfs_delete_object(job->de);
-  close_lock_file(path, job->fd);
+  cfsi_delete_object(job->de);
+  cfsi_close_lock_file(path, job->fd);
   g_delete_thread_count--;
   free(job);
   free(path);
@@ -2593,7 +2593,7 @@ void cloudfs_delete_object_unlink_async_th(thread_delete_job* job)
 /*
   delete using max threads
 */
-void cloudfs_delete_object_unlink_async(dir_entry* de, int fd)
+void cfsi_delete_unlink_object_async(dir_entry* de, int fd)
 {
   debugf(DBG_EXT, "cloudfs_del_obj_unl_async(%s): to delete, threadcount=%d",
          de->name, g_delete_thread_count);
@@ -2613,8 +2613,8 @@ void cloudfs_delete_object_unlink_async(dir_entry* de, int fd)
    todo: implement bulk delete:
    https://docs.hpcloud.com/publiccloud/api/swift-api.html
 */
-bool cloudfs_delete_path(char* path, bool is_dir, bool is_segmented,
-                         dir_entry* de)
+bool cfsi_delete_path(char* path, bool is_dir, bool is_segmented,
+                      dir_entry* de)
 {
   //delete object segments or subfolders
   if (is_segmented || is_dir)
@@ -2642,7 +2642,7 @@ bool cloudfs_delete_path(char* path, bool is_dir, bool is_segmented,
           {
             if ((th_ret = pthread_join(threads[i], NULL)) != 0)
               debugf(DBG_NORM, KRED
-                     "cloudfs_delete_object(%s): Error wait thread %d, stat=%d",
+                     "cfsi_delete_object(%s): Error wait thread %d, stat=%d",
                      path, active_threads, th_ret);
             else
               active_threads = 0;
@@ -2676,15 +2676,15 @@ bool cloudfs_delete_path(char* path, bool is_dir, bool is_segmented,
   //delete main object
   int response = send_request(HTTP_DELETE, path, NULL, NULL, NULL, de, NULL);
   bool ret = valid_http_response(response);
-  debugf(DBG_EXT, "status: cloudfs_delete_object(%s) response=%d", path,
+  debugf(DBG_EXT, "status: cfsi_delete_object(%s) response=%d", path,
          response);
   if (response == 409)
   {
-    debugf(DBG_EXT, "status: cloudfs_delete_object(%s) NOT EMPTY", path);
+    debugf(DBG_EXT, "status: cfsi_delete_object(%s) NOT EMPTY", path);
     ret = false;
   }
   if (ret && de) //clear cache if ok
-    dir_decache(de->full_name);
+    cfsi_dir_decache(de->full_name);
   return ret;
 }
 
@@ -2746,9 +2746,9 @@ bool cloudfs_create_object(dir_entry* de)
 
    if file_only is true, even if de is segmented only copies main file
 */
-bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
+bool cfsi_copy_object(dir_entry* de, const char* dst, bool file_only)
 {
-  debugf(DBG_EXT, "cloudfs_copy_object(%s, %s)", de->name, dst);
+  debugf(DBG_EXT, "cfsi_copy_object(%s, %s)", de->name, dst);
   dir_entry* de_versions, *de_tmp;
   dir_entry* new_de = NULL;
   int result = true;
@@ -2784,10 +2784,10 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
       if (src_seg_count != de->segment_count)
       {
         debugf(DBG_NORM, KRED
-               "cloudfs_copy_object(%s): missing src segments expected %d vs %d",
+               "cfsi_copy_object(%s): missing src segments expected %d vs %d",
                de->full_name, de->segment_count, src_seg_count);
         if (de_versions)
-          cloudfs_free_dir_list(de_versions);
+          cfsi_free_dir_list(de_versions);
         sleep_ms(1000 * iterations);
       }
     }
@@ -2796,7 +2796,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
     new_de = init_dir_entry();
     new_de->is_segmented = true;
     create_entry_meta(dst, new_de);
-    create_manifest_meta(new_de);
+    cfsi_create_manifest_meta(new_de);
     char seg_path[MAX_URL_SIZE] = "";
     de_tmp = de_versions;
     for (i = 0; i < MAX_COPY_THREADS; i++)
@@ -2828,7 +2828,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
           if ((th_ret = pthread_join(threads[i], NULL)) != 0)
           {
             debugf(DBG_NORM, KRED
-                   "cloudfs_copy_object(%s): Error wait thread %d, stat=%d",
+                   "cfsi_copy_object(%s): Error wait thread %d, stat=%d",
                    de->full_name, active_threads, th_ret);
             result = -1;
             abort();
@@ -2837,12 +2837,12 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
           else
           {
             debugf(DBG_EXT, KMAG
-                   "cloudfs_copy_object(%s): copy done thread %d, stat=%d",
+                   "cfsi_copy_object(%s): copy done thread %d, stat=%d",
                    de->full_name, i, th_ret);
             if (!(thread_jobs[i]->result))
             {
               debugf(DBG_NORM, KRED
-                     "cloudfs_copy_object(%s): Error copy thread %d",
+                     "cfsi_copy_object(%s): Error copy thread %d",
                      de->full_name, i);
               //retry
               abort();
@@ -2866,7 +2866,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
       add_header(&headers, HEADER_TEXT_MANIFEST, new_de->manifest_time);
       add_header(&headers, HEADER_TEXT_CONTENT_LEN, "0");
       add_header(&headers, HEADER_TEXT_CONTENT_TYPE, filemimetype);
-      copy_dir_entry(de, new_de, false);
+      cfsi_copy_dir_entry(de, new_de, false);
       int response = send_request_size(HTTP_PUT, NULL, NULL, NULL, headers,
                                        0, 0, new_de, NULL);
       //now file is updated on cloud
@@ -2887,7 +2887,7 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
         if (segment_count != de->segment_count)
         {
           debugf(DBG_EXT, KRED
-                 "cloudfs_copy_object(%s): last segment missing, retry",
+                 "cfsi_copy_object(%s): last segment missing, retry",
                  de->name);
           //still not visible, what to do?
           abort();
@@ -2895,20 +2895,20 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
         //insert new object in dir_entry list
         append_dir_entry(new_de);
         new_de->metadata_downloaded = false;
-        get_file_metadata(new_de, true, true);
+        cfsi_get_file_meta(new_de, true, true);
       }
     }
     else
     {
       //todo: recover from failed copy, delete garbage?
-      dir_decache(new_de->full_name);
+      cfsi_dir_decache(new_de->full_name);
     }
     free(threads);
   }
   else//not segmented
   {
     //todo: handle not segmented
-    debugf(DBG_EXT, "cloudfs_copy_object: copy non segmented from %s->%s",
+    debugf(DBG_EXT, "cfsi_copy_object: copy non segmented from %s->%s",
            de->full_name, dst);
     thread_copy_job* job = init_thread_copy_job();
     job->thread_exit = false;
@@ -2922,12 +2922,12 @@ bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only)
       create_entry_meta(dst, new_de);
       append_dir_entry(new_de);
       new_de->metadata_downloaded = false;
-      get_file_metadata(new_de, true, true);
+      cfsi_get_file_meta(new_de, true, true);
     }
     free_thread_copy_job(job);
     result = job->result;
   }
-  debugf(DBG_EXT, "cloudfs_copy_object(%s): exit res=%d", dst, result);
+  debugf(DBG_EXT, "cfsi_copy_object(%s): exit res=%d", dst, result);
   return result;
 }
 
@@ -2958,7 +2958,7 @@ bool cloudfs_post_object(dir_entry* de)
 bool cloudfs_post_object_th(dir_entry* de)
 {
   bool res = cloudfs_post_object(de);
-  close_lock_file(de->full_name, de->lock_fd);
+  cfsi_close_lock_file(de->full_name, de->lock_fd);
   assert(res);
   pthread_exit(NULL);
 }
@@ -2971,12 +2971,12 @@ bool cloudfs_post_object_th(dir_entry* de)
    http://www.17od.com/2012/12/19/ten-useful-openstack-swift-features/
    if sync=true perform meta update on cloud synchro.
 */
-bool cloudfs_update_meta(dir_entry* de, bool sync)
+bool cfsi_update_meta(dir_entry* de, bool sync)
 {
-  debugf(DBG_EXT, "cloudfs_update_meta(%s) ", de->name);
+  debugf(DBG_EXT, "cfsi_update_meta(%s) ", de->name);
   //copy version
   /*
-     int response = cloudfs_copy_object(de->full_name, de->full_name);
+     int response = cfsi_copy_object(de->full_name, de->full_name);
      return response;
   */
   //POST version
@@ -2985,7 +2985,7 @@ bool cloudfs_update_meta(dir_entry* de, bool sync)
   if (sync)
   {
     bool res = cloudfs_post_object(de);
-    close_lock_file(de->full_name, de->lock_fd);
+    cfsi_close_lock_file(de->full_name, de->lock_fd);
     return res;
   }
   else
@@ -2997,7 +2997,7 @@ bool cloudfs_update_meta(dir_entry* de, bool sync)
 }
 
 //optimised with cache
-int cloudfs_statfs(const char* path, struct statvfs* stat)
+int cfsi_statfs(const char* path, struct statvfs* stat)
 {
   time_t now = get_time_now();
   int lapsed = now - last_stat_read_time;
@@ -3007,7 +3007,7 @@ int cloudfs_statfs(const char* path, struct statvfs* stat)
     int response = send_request("HEAD", "/", NULL, NULL, NULL, NULL, NULL);
     *stat = statcache;
     debugf(DBG_EXT,
-           "exit: cloudfs_statfs (new recent values, was cached since %d seconds)",
+           "exit: cfsi_statfs (new recent values, was cached since %d seconds)",
            lapsed);
     last_stat_read_time = now;
     return valid_http_response(response);
@@ -3015,12 +3015,12 @@ int cloudfs_statfs(const char* path, struct statvfs* stat)
   else
   {
     debugf(DBG_EXT,
-           "exit: cloudfs_statfs (old values, cached since %d seconds)", lapsed);
+           "exit: cfsi_statfs (old values, cached since %d seconds)", lapsed);
     return 1;
   }
 }
 
-int cloudfs_create_symlink(const char* src, const char* dst)
+int cfsi_create_symlink(const char* src, const char* dst)
 {
   char* dst_encoded = curl_escape(dst, 0);
   FILE* lnk = tmpfile();
@@ -3033,14 +3033,14 @@ int cloudfs_create_symlink(const char* src, const char* dst)
   return (response >= 200 && response < 300);
 }
 
-bool cloudfs_create_directory(const char* path)
+bool cfsi_create_directory(const char* path)
 {
-  debugf(DBG_EXT, "cloudfs_create_directory(%s)", path);
+  debugf(DBG_EXT, "cfsi_create_directory(%s)", path);
   assert(path);
   char* encoded = curl_escape(path, 0);
   int response = send_request("MKDIR", encoded, NULL, NULL, NULL, NULL, NULL);
   curl_free(encoded);
-  debugf(DBG_EXT, "cloudfs_create_directory(%s) response=%d",
+  debugf(DBG_EXT, "cfsi_create_directory(%s) response=%d",
          path, response);
   return (response >= 200 && response < 300);
 }
@@ -3059,8 +3059,8 @@ static struct reconnect_args
   char refresh_token[MAX_HEADER_SIZE];
 } reconnect_args;
 
-void cloudfs_set_credentials(char* client_id, char* client_secret,
-                             char* refresh_token)
+void cfsi_set_credentials(char* client_id, char* client_secret,
+                          char* refresh_token)
 {
   strncpy(reconnect_args.client_id    , client_id    ,
           sizeof(reconnect_args.client_id    ));
@@ -3147,7 +3147,7 @@ int safe_json_string(json_object* jobj, char* buffer, char* name)
   return result;
 }
 
-int cloudfs_connect()
+int cfsi_connect()
 {
 #define HUBIC_TOKEN_URL     "https://api.hubic.com/oauth/token"
 #define HUBIC_CRED_URL      "https://api.hubic.com/1.0/account/credentials"

@@ -33,11 +33,11 @@ struct curl_progress
 
 
 
-void cloudfs_init(void);
+void cfsi_init(void);
 void cloudfs_free(void);
-void cloudfs_set_credentials(char* client_id, char* client_secret,
-                             char* refresh_token);
-int cloudfs_connect(void);
+void cfsi_set_credentials(char* client_id, char* client_secret,
+                          char* refresh_token);
+int cfsi_connect(void);
 
 struct segment_info
 {
@@ -58,31 +58,28 @@ extern long segment_above;//max size of a file before being segmented
 
 
 
-void int_convert_first_segment_th(dir_entry* de);
-bool int_cfs_write_cache_data_feed(dir_entry* de);
+void cfsi_convert_first_seg_th(dir_entry* de);
+bool cfsi_cache_data_feed(dir_entry* de);
 const char* get_file_mimetype (const char* filename);
 int cloudfs_list_directory(const char* path, dir_entry**);
-bool cloudfs_delete_object(dir_entry* de);
-void cloudfs_delete_object_unlink_async(dir_entry* de, int fd);
-bool cloudfs_delete_path(char* path, bool is_dir, bool is_segmented,
-                         dir_entry* de);
+bool cfsi_delete_object(dir_entry* de);
+void cfsi_delete_unlink_object_async(dir_entry* de, int fd);
+bool cfsi_delete_path(char* path, bool is_dir, bool is_segmented,
+                      dir_entry* de);
 bool cloudfs_create_object(dir_entry* de);
-bool cloudfs_copy_object(dir_entry* de, const char* dst, bool file_only);
-int cloudfs_create_symlink(const char* src, const char* dst);
-bool cloudfs_create_directory(const char* path);
+bool cfsi_copy_object(dir_entry* de, const char* dst, bool file_only);
+int cfsi_create_symlink(const char* src, const char* dst);
+bool cfsi_create_directory(const char* path);
 int cloudfs_object_truncate(dir_entry* de, off_t size);
 off_t cloudfs_file_size(int fd);
-int cloudfs_statfs(const char* path, struct statvfs* stat);
-bool get_file_metadata(dir_entry* de, bool force_segment_update,
-                       bool force_meta);
-bool cloudfs_update_meta(dir_entry* de, bool sync);
-//int cloudfs_object_upload_progressive(dir_entry* de, dir_entry* de_seg);
-//void* cloudfs_object_downld_progressive(void* path);
-int download_ahead_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
-                           bool sync_first);
-int cloudfs_download_segment(dir_entry* de_seg, dir_entry* de, FILE* fp,
-                             size_t size);
-//int cloudfs_upload_segment(dir_entry* de_seg, dir_entry* de);
-bool cloudfs_create_segment(dir_entry* de_seg, dir_entry* de);
+int cfsi_statfs(const char* path, struct statvfs* stat);
+bool cfsi_get_file_meta(dir_entry* de, bool force_segment_update,
+                        bool force_meta);
+bool cfsi_update_meta(dir_entry* de, bool sync);
+int cfsi_down_ahead_seg(dir_entry* de_seg, dir_entry* de, FILE* fp,
+                        bool sync_first);
+int cfsi_down_seg(dir_entry* de_seg, dir_entry* de, FILE* fp,
+                  size_t size);
+bool cfsi_create_seg(dir_entry* de_seg, dir_entry* de);
 
 #endif
