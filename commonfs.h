@@ -618,7 +618,7 @@ bool cfsi_open_seg_cache_md5(dir_entry* de, dir_entry* de_seg,
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
 bool cfsi_open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
-//bool cleanup_older_segments(char* dir_path, char* exclude_path);
+//bool cleanup_older_segments(thread_clean_segment_job* job);
 void cleanup_older_segments_th(char* dir_path, char* exclude_path);
 void cfsi_unlink_cache_seg(dir_entry* de);
 void sleep_ms(int milliseconds);

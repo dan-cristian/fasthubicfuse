@@ -68,7 +68,7 @@ char* option_http_log_path;
 //if file count more than this do not load meta
 int option_fast_list_dir_limit = 0;
 bool option_async_delete = false;
-pthread_t control_thread = NULL;
+pthread_t control_thread;// = NULL;
 char* g_current_op;//current thread operation
 int g_thread_id;//current thread id
 int g_delete_thread_count = 0;
@@ -221,6 +221,13 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
 {
   return get_time_as_string(times->tv_sec, times->tv_nsec, time_str,
                             time_str_len);
+}
+
+off_t cloudfs_file_size(int fd)
+{
+  struct stat buf;
+  fstat(fd, &buf);
+  return buf.st_size;
 }
 
 /*
@@ -1477,6 +1484,43 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
   unlock_mutex(mutex);
 }
 
+//retrieve folder from local cache if exists, return null if does not exist (rather than download)
+int internal_check_caching_list_directory(dir_cache* cache,
+    pthread_mutex_t mutex, const char* path, dir_entry** list)
+{
+  debugf(DBG_EXTALL, "check_caching_list_directory(%s)", path);
+  //pthread_mutex_lock(&mutex);
+  lock_mutex(mutex);
+  if (!strcmp(path, "/"))
+    path = "";
+  dir_cache* cw;
+  for (cw = cache; cw; cw = cw->next)
+    if (!strcmp(cw->path, path))
+    {
+      *list = cw->entries;
+      //pthread_mutex_unlock(&mutex);
+      unlock_mutex(mutex);
+      debugf(DBG_EXTALL, "exit 0: check_caching_list_directory(%s) "
+             KGRN "[CACHE-DIR-HIT]", path);
+      return 1;
+    }
+  //pthread_mutex_unlock(&mutex);
+  unlock_mutex(mutex);
+  debugf(DBG_EXTALL, "exit 1: check_caching_list_directory(%s) "
+         KYEL "[CACHE-DIR-MISS]", path);
+  return 0;
+}
+
+/*
+  retrieve folder from upload local cache if exists,
+  return null if does not exist
+*/
+int check_caching_list_dir_upload(const char* path, dir_entry** list)
+{
+  return internal_check_caching_list_directory(dcache_upload, dcacheuploadmut,
+         path, list);
+}
+
 //check for file in cache, if found size will be updated, if not found
 //and this is a dir, a new dir cache entry is created
 void cfsi_update_dir_cache(const char* path, off_t size, int isdir,
@@ -1671,32 +1715,8 @@ bool append_dir_entry(dir_entry* de)
          result);
   return result;
 }
-//retrieve folder from local cache if exists, return null if does not exist (rather than download)
-int internal_check_caching_list_directory(dir_cache* cache,
-    pthread_mutex_t mutex, const char* path, dir_entry** list)
-{
-  debugf(DBG_EXTALL, "check_caching_list_directory(%s)", path);
-  //pthread_mutex_lock(&mutex);
-  lock_mutex(mutex);
-  if (!strcmp(path, "/"))
-    path = "";
-  dir_cache* cw;
-  for (cw = cache; cw; cw = cw->next)
-    if (!strcmp(cw->path, path))
-    {
-      *list = cw->entries;
-      //pthread_mutex_unlock(&mutex);
-      unlock_mutex(mutex);
-      debugf(DBG_EXTALL, "exit 0: check_caching_list_directory(%s) "
-             KGRN "[CACHE-DIR-HIT]", path);
-      return 1;
-    }
-  //pthread_mutex_unlock(&mutex);
-  unlock_mutex(mutex);
-  debugf(DBG_EXTALL, "exit 1: check_caching_list_directory(%s) "
-         KYEL "[CACHE-DIR-MISS]", path);
-  return 0;
-}
+
+
 
 /*
    retrieve folder from local cache if exists,
@@ -1707,15 +1727,7 @@ int check_caching_list_directory(const char* path, dir_entry** list)
   return internal_check_caching_list_directory(dcache, dcachemut, path, list);
 }
 
-/*
-   retrieve folder from upload local cache if exists,
-   return null if does not exist
-*/
-int check_caching_list_dir_upload(const char* path, dir_entry** list)
-{
-  return internal_check_caching_list_directory(dcache_upload, dcacheuploadmut,
-         path, list);
-}
+
 
 dir_entry* check_parent_folder_for_file(const char* path)
 {
@@ -2038,69 +2050,7 @@ bool cfsi_open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   return false;
 }
 
-bool cleanup_older_segments(thread_clean_segment_job*
-                            job)//char* dir_path, char* exclude_path)
-{
-  char* dir_path = job->dir_path;
-  char* exclude_path = job->exclude_path;
 
-  debugf(DBG_EXT, "cleanup_older_segments(%s - %s)", dir_path,
-         exclude_path);
-  assert(dir_path);
-  bool result = false;
-  //delete also parent path if no exception is specified
-  //(if exception is set it might be a child object so don't remove parent
-  if (!exclude_path)
-  {
-    dir_entry* tmp = init_dir_entry();
-    tmp->full_name = strdup(dir_path);
-    tmp->name = "";
-    tmp->isdir = 1;
-    cfsi_delete_object(tmp);
-    free(tmp);
-    result = true;
-  }
-  else
-  {
-    dir_entry* de_versions, *de_tmp;
-    if (cloudfs_list_directory(dir_path, &de_versions))
-    {
-      while (de_versions)
-      {
-        if (!exclude_path || !strstr(de_versions->full_name, exclude_path))
-        {
-          dir_entry* tmp = init_dir_entry();
-          tmp->full_name = strdup(de_versions->full_name);
-          tmp->name = "";
-          tmp->isdir = 1;
-          cfsi_delete_object(tmp);
-          free(tmp);
-          result = true;
-        }
-        else
-        {
-          debugf(DBG_EXT, KMAG "not deleting excluded path %s",
-                 de_versions->full_name);
-        }
-        de_versions = de_versions->next;
-      }
-    }
-  }
-
-  free(job->dir_path);
-  free(job->exclude_path);
-  return result;
-}
-
-void cleanup_older_segments_th(char* dir_path, char* exclude_path)
-{
-  pthread_t thread;
-  thread_clean_segment_job* job = malloc(sizeof(struct
-                                         thread_clean_segment_job));
-  job->dir_path = strdup(dir_path);
-  job->exclude_path = strdup(exclude_path);
-  pthread_create(&thread, NULL, (void*)cleanup_older_segments, job);
-}
 /*
    O_CREAT = 32768
    O_RDONLY = 32768
@@ -2457,18 +2407,7 @@ void cfsi_close_file(FILE** file)
   *file = NULL;
 }
 
-//allows memory leaks inspections
-void interrupt_handler(int sig)
-{
-  debugf(DBG_NORM, "Got interrupt signal %d, cleaning memory", sig);
-  //TODO: clean memory allocations
-  //http://www.cprogramming.com/debugging/valgrind.html
-  cloudfs_free();
-  //TODO: clear dir cache
-  cfsi_dir_decache("");
-  pthread_mutex_destroy(&dcachemut);
-  exit(0);
-}
+
 
 /* Catch Signal Handler function */
 void sigpipe_callback_handler(int signum)

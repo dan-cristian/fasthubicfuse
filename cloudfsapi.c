@@ -1608,6 +1608,18 @@ void cloudfs_free()
   }
 }
 
+//allows memory leaks inspections
+void interrupt_handler(int sig)
+{
+  debugf(DBG_NORM, "Got interrupt signal %d, cleaning memory", sig);
+  //TODO: clean memory allocations
+  //http://www.cprogramming.com/debugging/valgrind.html
+  cloudfs_free();
+  //TODO: clear dir cache
+  cfsi_dir_decache("");
+  //pthread_mutex_destroy(&dcachemut);
+  exit(0);
+}
 
 
 const char* get_file_mimetype ( const char* path )
@@ -2688,6 +2700,71 @@ bool cfsi_delete_path(char* path, bool is_dir, bool is_segmented,
   return ret;
 }
 
+bool cleanup_older_segments(thread_clean_segment_job*
+                            job)//char* dir_path, char* exclude_path)
+{
+  char* dir_path = job->dir_path;
+  char* exclude_path = job->exclude_path;
+
+  debugf(DBG_EXT, "cleanup_older_segments(%s - %s)", dir_path,
+         exclude_path);
+  assert(dir_path);
+  bool result = false;
+  //delete also parent path if no exception is specified
+  //(if exception is set it might be a child object so don't remove parent
+  if (!exclude_path)
+  {
+    dir_entry* tmp = init_dir_entry();
+    tmp->full_name = strdup(dir_path);
+    tmp->name = "";
+    tmp->isdir = 1;
+    cfsi_delete_object(tmp);
+    free(tmp);
+    result = true;
+  }
+  else
+  {
+    dir_entry* de_versions, *de_tmp;
+    if (cloudfs_list_directory(dir_path, &de_versions))
+    {
+      while (de_versions)
+      {
+        if (!exclude_path || !strstr(de_versions->full_name, exclude_path))
+        {
+          dir_entry* tmp = init_dir_entry();
+          tmp->full_name = strdup(de_versions->full_name);
+          tmp->name = "";
+          tmp->isdir = 1;
+          cfsi_delete_object(tmp);
+          free(tmp);
+          result = true;
+        }
+        else
+        {
+          debugf(DBG_EXT, KMAG "not deleting excluded path %s",
+                 de_versions->full_name);
+        }
+        de_versions = de_versions->next;
+      }
+    }
+  }
+
+  free(job->dir_path);
+  free(job->exclude_path);
+  free(job);
+  return result;
+}
+
+void cleanup_older_segments_th(char* dir_path, char* exclude_path)
+{
+  pthread_t thread;
+  thread_clean_segment_job* job = malloc(sizeof(struct
+                                         thread_clean_segment_job));
+  job->dir_path = strdup(dir_path);
+  job->exclude_path = strdup(exclude_path);
+  pthread_create(&thread, NULL, (void*)cleanup_older_segments, job);
+}
+
 void thread_cloudfs_copy_object(void* arg)
 {
   struct thread_copy_job* job = arg;
@@ -2879,7 +2956,12 @@ bool cfsi_copy_object(dir_entry* de, const char* dst, bool file_only)
         snprintf(manifest_root, MAX_URL_SIZE, "/%s/%s",
                  new_de->manifest_seg, new_de->name);
         //delete older segments from destination, except recent one
-        cleanup_older_segments(manifest_root, new_de->manifest_cloud);
+        thread_clean_segment_job* job = malloc(sizeof(struct
+                                               thread_clean_segment_job));
+        job->dir_path = strdup(manifest_root);
+        job->exclude_path = strdup(new_de->manifest_cloud);
+        //cleanup_older_segments(manifest_root, new_de->manifest_cloud);
+        cleanup_older_segments(job);
         //check if all segments are visible in cloud after copy
         //dir_entry* new_dir_entry;
         int segment_count;
@@ -3045,12 +3127,7 @@ bool cfsi_create_directory(const char* path)
   return (response >= 200 && response < 300);
 }
 
-off_t cloudfs_file_size(int fd)
-{
-  struct stat buf;
-  fstat(fd, &buf);
-  return buf.st_size;
-}
+
 
 static struct reconnect_args
 {
