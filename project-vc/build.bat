@@ -34,7 +34,7 @@ goto copy_files
 
 :set_local
 echo Deploying locally
-SET TD=\\nas\private\Development\fasthubicfuse-run\
+SET TD=\\nas\media\private\Development\fasthubicfuse-run\
 goto copy_files
 
 :end

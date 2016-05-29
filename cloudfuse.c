@@ -781,7 +781,9 @@ static int cfs_flush(const char* path, struct fuse_file_info* info)
       }
       //signal completion of read/write operation
       //signal last data available in buffer for upload
-      unblock_semaphore(&de_upload->upload_buf, SEM_FULL);
+      if (de_upload->size > 0
+          && !de_upload->upload_buf.sem_list[SEM_FULL])//file can be created by touch, no sem exists
+        unblock_semaphore(&de_upload->upload_buf, SEM_FULL);
       int loops = 0;
       while (is_semaphore_open(&de_upload->upload_buf))
       {
