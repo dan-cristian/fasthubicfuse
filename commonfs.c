@@ -226,7 +226,7 @@ int get_timespec_as_str(const struct timespec* times, char* time_str,
 /*
    set dir_entry access time to now
 */
-void update_cache_access(dir_entry* de)
+void cfsi_update_cache_access(dir_entry* de)
 {
   if (de)
     de->accessed_in_cache = get_time_now();
@@ -299,9 +299,9 @@ int file_md5(FILE* file_handle, char* md5_file_str)
    init md5 context before starting
    to calculate md5sum on a http job (upload or download)
 */
-bool init_job_md5(thread_job* job)
+bool cfsi_init_job_md5(thread_job* job)
 {
-  debugf(DBG_EXT, KMAG "init_job_md5(%s)", job->job_name);
+  debugf(DBG_EXT, KMAG "cfsi_init_job_md5(%s)", job->job_name);
   if (job->md5str)
     free(job->md5str);
   job->md5str = NULL;
@@ -312,10 +312,10 @@ bool init_job_md5(thread_job* job)
 /*
    updates md5sum based on data received
 */
-bool update_job_md5(thread_job* job, const unsigned char* data_buf,
-                    int buf_len)
+bool cfsi_update_job_md5(thread_job* job, const unsigned char* data_buf,
+                         int buf_len)
 {
-  debugf(DBG_EXTALL, "update_job_md5(%s): len=%lu", job->job_name, buf_len);
+  debugf(DBG_EXTALL, "cfsi_update_job_md5(%s): len=%lu", job->job_name, buf_len);
   return (MD5_Update(&job->mdContext, data_buf, buf_len) == 1);
 }
 
@@ -338,7 +338,7 @@ void restore_job_md5(thread_job* job)
 /*
    generates final md5sum for data received so far
 */
-bool complete_job_md5(thread_job* job)
+bool cfsi_close_job_md5(thread_job* job)
 {
   int result = 0;
   unsigned char c[MD5_DIGEST_LENGTH];
@@ -356,7 +356,7 @@ bool complete_job_md5(thread_job* job)
     job->md5str = strdup(md5_str);
   }
   else abort();
-  debugf(DBG_EXT, KMAG "complete_job_md5(%s:%s): job %s md5sum=%s",
+  debugf(DBG_EXT, KMAG "cfsi_close_job_md5(%s:%s): job %s md5sum=%s",
          job->de ? job->de->name : "nil", job->de_seg ? job->de_seg->name : "nil",
          job->job_name, job->md5str);
   return result;
@@ -380,9 +380,9 @@ void free_thread_copy_job(thread_copy_job* job)
   free(job);
 }
 
-thread_job* init_thread_job(char* job_name)
+thread_job* cfsi_init_thread_job(char* job_name)
 {
-  debugf(DBG_EXTALL, "init_thread_job(%s): init job", job_name);
+  debugf(DBG_EXTALL, "cfsi_init_thread_job(%s): init job", job_name);
   thread_job* job = malloc(sizeof(struct thread_job));
   job->md5str = NULL;
   job->job_name = job_name;
@@ -391,9 +391,9 @@ thread_job* init_thread_job(char* job_name)
   return job;
 }
 
-void free_thread_job(thread_job* job)
+void cfsi_free_thread_job(thread_job* job)
 {
-  debugf(DBG_EXTALL, "free_thread_job(%s): freeing job", job->job_name);
+  debugf(DBG_EXTALL, "cfsi_free_thread_job(%s): freeing job", job->job_name);
   if (job->md5str)
     free(job->md5str);
   if (job->job_name)
@@ -635,11 +635,11 @@ dir_cache* new_cache_upload(const char* path)
 
 //todo: check if the program behaves ok  when free_dir
 //is made on a folder that has an operation in progress
-void cloudfs_free_dir_list(dir_entry* dir_list)
+void cfsi_free_dir_list(dir_entry* dir_list)
 {
   assert(dir_list);
   //check for NULL as dir might be already removed from cache by other thread
-  debugf(DBG_NORM, KMAG "cloudfs_free_dir_list(%s:%s)",
+  debugf(DBG_NORM, KMAG "cfsi_free_dir_list(%s:%s)",
          dir_list->full_name, dir_list->name);
   while (dir_list)
   {
@@ -665,7 +665,7 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
     de->manifest_time = NULL;
     if (de->segments)
     {
-      cloudfs_free_dir_list(de->segments);
+      cfsi_free_dir_list(de->segments);
       de->segments = NULL;
     }
 
@@ -688,7 +688,7 @@ void cloudfs_free_dir_list(dir_entry* dir_list)
    it assumes segments are stored in sorted ascending order
    NOTE!: it also sets the segment_part field
 */
-dir_entry* get_segment(dir_entry* de, int segment_index)
+dir_entry* cfsi_get_seg(dir_entry* de, int segment_index)
 {
   int de_segment = 0, seg_index_cloud;
   dir_entry* des = de->segments;
@@ -698,7 +698,7 @@ dir_entry* get_segment(dir_entry* de, int segment_index)
     if (de_segment != seg_index_cloud)
     {
       debugf(DBG_EXT, KYEL
-             "get_segment(%s:%d) unexpected segment %s at @%d", de->name,
+             "cfsi_get_seg(%s:%d) unexpected segment %s at @%d", de->name,
              segment_index, des->name, de_segment);
       abort();
     }
@@ -828,7 +828,7 @@ void set_manifest_meta(char* path, dir_entry* de, int man_type)
 /*
    set all manifest fields
 */
-void create_manifest_meta(dir_entry* de)
+void cfsi_create_manifest_meta(dir_entry* de)
 {
   assert(de->is_segmented);
   assert(!de->manifest_cloud);
@@ -887,14 +887,14 @@ void create_entry_meta(const char* path, dir_entry* de)
    if does not exist then a new empty segment is created, used when writing new files.
    removed -> NOTE!: sets de->manifest field
 */
-dir_entry* get_create_segment(dir_entry* de, int segment_index)
+dir_entry* cfsi_get_create_seg(dir_entry* de, int segment_index)
 {
   int de_segment;
   dir_entry* de_seg;
   bool reused = false;
   if (!de->segments)
   {
-    debugf(DBG_EXT, "get_create_segment(%s:%d): creating first segment",
+    debugf(DBG_EXT, "cfsi_get_create_seg(%s:%d): creating first segment",
            de->name, segment_index);
     de->segments = init_dir_entry();
     de_seg = de->segments;
@@ -910,14 +910,14 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
       {
         if (de_seg->segment_part != segment_index)
           de_seg->segment_part = segment_index;
-        debugf(DBG_EXTALL, "get_create_segment(%s:%d): reusing segment",
+        debugf(DBG_EXTALL, "cfsi_get_create_seg(%s:%d): reusing segment",
                de->name, segment_index);
         reused = true;
         break;
       }
       if (!de_seg->next)
       {
-        debugf(DBG_EXT, "get_create_segment(%s:%d): appending segment",
+        debugf(DBG_EXT, "cfsi_get_create_seg(%s:%d): appending segment",
                de->name, segment_index);
         de_seg->next = init_dir_entry();
         de_seg = de_seg->next;
@@ -939,7 +939,7 @@ dir_entry* get_create_segment(dir_entry* de, int segment_index)
 void dir_decache_segments(dir_entry* de)
 {
   if (de->segments)
-    cloudfs_free_dir_list(de->segments);
+    cfsi_free_dir_list(de->segments);
   de->segments = NULL;
 }
 
@@ -968,7 +968,7 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
                           const char* path)
 {
   dir_cache* cw;
-  debugf(DBG_NORM, "dir_decache(%s)", path);
+  debugf(DBG_NORM, "cfsi_dir_decache(%s)", path);
   //pthread_mutex_lock(&mutex);
   lock_mutex(mutex);
   dir_entry* de, *tmpde;
@@ -976,7 +976,7 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
   dir_for(path, dir);
   for (cw = cache; cw; cw = cw->next)
   {
-    //debugf(DBG_EXTALL, "dir_decache: parse(%s)", cw->path);
+    //debugf(DBG_EXTALL, "cfsi_dir_decache: parse(%s)", cw->path);
     if (!strcmp(cw->path, path) || path[0] == '*')
     {
       if (cw == cache)
@@ -985,10 +985,10 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
         cw->prev->next = cw->next;
       if (cw->next)
         cw->next->prev = cw->prev;
-      debugf(DBG_EXT, "dir_decache: free_dir1(%s)", cw->path);
+      debugf(DBG_EXT, "cfsi_dir_decache: free_dir1(%s)", cw->path);
       //fix: this sometimes is NULL and generates segfaults, checking first
       if (cw->entries != NULL)
-        cloudfs_free_dir_list(cw->entries);
+        cfsi_free_dir_list(cw->entries);
       free(cw->path);
       free(cw);
     }
@@ -999,8 +999,8 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
         de = cw->entries;
         cw->entries = de->next;
         de->next = NULL;
-        debugf(DBG_EXT, "dir_decache: free_dir2()");
-        cloudfs_free_dir_list(de);
+        debugf(DBG_EXT, "cfsi_dir_decache: free_dir2()");
+        cfsi_free_dir_list(de);
       }
       else for (de = cw->entries; de->next; de = de->next)
         {
@@ -1009,8 +1009,8 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
             tmpde = de->next;
             de->next = de->next->next;
             tmpde->next = NULL;
-            debugf(DBG_EXT, "dir_decache: free_dir3()", cw->path);
-            cloudfs_free_dir_list(tmpde);
+            debugf(DBG_EXT, "cfsi_dir_decache: free_dir3()", cw->path);
+            cfsi_free_dir_list(tmpde);
             break;
           }
         }
@@ -1020,15 +1020,15 @@ void internal_dir_decache(dir_cache* cache, pthread_mutex_t mutex,
   unlock_mutex(mutex);
 }
 
-void dir_decache(const char* path)
+void cfsi_dir_decache(const char* path)
 {
-  debugf(DBG_EXT, "dir_decache(%s)", path);
+  debugf(DBG_EXT, "cfsi_dir_decache(%s)", path);
   internal_dir_decache(dcache, dcachemut, path);
 }
 
-void dir_decache_upload(const char* path)
+void cfsi_dir_decache_upload(const char* path)
 {
-  debugf(DBG_EXT, "dir_decache_upload(%s)", path);
+  debugf(DBG_EXT, "cfsi_dir_decache_upload(%s)", path);
   internal_dir_decache(dcache_upload, dcacheuploadmut, path);
 }
 
@@ -1111,7 +1111,7 @@ void free_semaphores(struct progressive_data_buf* data_buf, int sem_index)
   data_buf->sem_open = false;
 }
 
-void free_all_semaphores(struct progressive_data_buf* data_buf)
+void cfsi_free_all_sem(struct progressive_data_buf* data_buf)
 {
   free_semaphores(data_buf, SEM_EMPTY);
   free_semaphores(data_buf, SEM_FULL);
@@ -1121,7 +1121,7 @@ void free_all_semaphores(struct progressive_data_buf* data_buf)
   post a semaphore and waits until semaphore count changes
   or exits after a period of time (250 milisecond)
 */
-void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index)
+void cfsi_unblock_sem(struct progressive_data_buf* data_buf, int sem_index)
 {
   sem_t* semaphore = data_buf->sem_list[sem_index];
   char* name = data_buf->sem_name_list[sem_index];
@@ -1131,7 +1131,7 @@ void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index)
   //{
   int sem_val1, sem_val2, i;
   sem_getvalue(semaphore, &sem_val1);
-  //debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) start, val=%d", name, sem_val1);
+  //debugf(DBG_EXTALL, KMAG "cfsi_unblock_sem(%s) start, val=%d", name, sem_val1);
   sem_post(semaphore);
   for (i = 0; i < 250; i++)
   {
@@ -1140,11 +1140,11 @@ void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index)
       break;
     sleep_ms(1);
   }
-  debugf(DBG_EXTALL, KMAG "unblock_semaphore(%s) in %d milisec, val %d->%d",
+  debugf(DBG_EXTALL, KMAG "cfsi_unblock_sem(%s) in %d milisec, val %d->%d",
          name, i, sem_val1, sem_val2);
 }
 //else
-//  debugf(DBG_EXT, KMAG "unblock_semaphore(%s) was null", name);
+//  debugf(DBG_EXT, KMAG "cfsi_unblock_sem(%s) was null", name);
 //}
 
 /*
@@ -1158,7 +1158,7 @@ void close_semaphore(struct progressive_data_buf* data_buf)
   data_buf->sem_open = false;
 }
 
-bool is_semaphore_open(struct progressive_data_buf* data_buf)
+bool cfsi_is_sem_open(struct progressive_data_buf* data_buf)
 {
   return data_buf->sem_open;
 }
@@ -1167,9 +1167,9 @@ bool is_semaphore_open(struct progressive_data_buf* data_buf)
 */
 void unblock_close_all_semaphores(struct progressive_data_buf* data_buf)
 {
-  unblock_semaphore(data_buf, SEM_EMPTY);
-  unblock_semaphore(data_buf, SEM_FULL);
-  unblock_semaphore(data_buf, SEM_DONE);
+  cfsi_unblock_sem(data_buf, SEM_EMPTY);
+  cfsi_unblock_sem(data_buf, SEM_FULL);
+  cfsi_unblock_sem(data_buf, SEM_DONE);
   close_semaphore(data_buf);
 }
 
@@ -1299,11 +1299,11 @@ void free_de_before_head(dir_entry* de)
 /*
    create and initialise a dir_entry with now values
 */
-void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
+void cfsi_create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
 {
   struct timespec now;
   clock_gettime(CLOCK_REALTIME, &now);
-  debugf(DBG_EXT, KCYN"create_dir_entry(%s)", path);
+  debugf(DBG_EXT, KCYN"cfsi_create_dir_entry(%s)", path);
   de->atime.tv_sec = now.tv_sec;
   de->atime.tv_nsec = now.tv_nsec;
   de->mtime.tv_sec = now.tv_sec;
@@ -1314,11 +1314,11 @@ void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
   de->ctime_local.tv_nsec = now.tv_nsec;
   char time_str[TIME_CHARS] = "";
   get_timespec_as_str(&(de->atime), time_str, sizeof(time_str));
-  debugf(DBG_EXT, KCYN"create_dir_entry: atime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"cfsi_create_dir_entry: atime=[%s]", time_str);
   get_timespec_as_str(&(de->mtime), time_str, sizeof(time_str));
-  debugf(DBG_EXT, KCYN"create_dir_entry: mtime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"cfsi_create_dir_entry: mtime=[%s]", time_str);
   get_timespec_as_str(&(de->ctime), time_str, sizeof(time_str));
-  debugf(DBG_EXT, KCYN"create_dir_entry: ctime=[%s]", time_str);
+  debugf(DBG_EXT, KCYN"cfsi_create_dir_entry: ctime=[%s]", time_str);
   //set chmod & chown
   //de->chmod = mode;
   de->uid = geteuid();
@@ -1332,9 +1332,9 @@ void create_dir_entry(dir_entry* de, const char* path)//, mode_t mode)
 /*
    duplicate a dir_entry, does not overwrite name fields
 */
-void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
+void cfsi_copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
 {
-  debugf(DBG_EXT, KCYN"copy_dir_entry(%s->%s)",
+  debugf(DBG_EXT, KCYN"cfsi_copy_dir_entry(%s->%s)",
          src->name ? src->name : "nul", dst->name ? dst->name : "nul");
   if (!dst->name && src->name)
     dst->name = strdup(src->name);
@@ -1404,7 +1404,7 @@ void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests)
     dst->segments = dst_seg;
     while (src_seg)
     {
-      copy_dir_entry(src_seg, dst_seg, false);
+      cfsi_copy_dir_entry(src_seg, dst_seg, false);
       src_seg = src_seg->next;
       if (src_seg)
       {
@@ -1422,7 +1422,7 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
                                const char* path, off_t size, int isdir, int islink)
 {
   debugf(DBG_EXTALL, KCYN
-         "update_dir_cache(%s) size=%lu isdir=%d islink=%d isupload=%d",
+         "cfsi_update_dir_cache(%s) size=%lu isdir=%d islink=%d isupload=%d",
          path, size, isdir, islink, is_cache_upload);
   //pthread_mutex_lock(&mutex);
   lock_mutex(mutex);
@@ -1441,12 +1441,12 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
           de->size = size;
           //pthread_mutex_unlock(&mutex);
           unlock_mutex(mutex);
-          debugf(DBG_EXTALL, "exit 0: update_dir_cache(%s) file found", path);
+          debugf(DBG_EXTALL, "exit 0: cfsi_update_dir_cache(%s) file found", path);
           return;
         }
       }
       de = init_dir_entry();
-      create_dir_entry(de, path);
+      cfsi_create_dir_entry(de, path);
       de->size = size;
       de->isdir = isdir;
       de->islink = islink;
@@ -1460,35 +1460,35 @@ void internal_update_dir_cache(dir_cache* cache, pthread_mutex_t mutex,
         de->content_type = strdup("application/octet-stream");
       de->next = cw->entries;
       cw->entries = de;
-      debugf(DBG_EXTALL, "status: update_dir_cache(%s) file added in cache",
+      debugf(DBG_EXTALL, "status: cfsi_update_dir_cache(%s) file added in cache",
              path);
       if (isdir && !is_cache_upload)
         new_cache(path);
       else if (isdir && is_cache_upload)
         new_cache_upload(path);
       else
-        debugf(DBG_EXTALL, "update_dir_cache(%s): no dir added in cache",
+        debugf(DBG_EXTALL, "cfsi_update_dir_cache(%s): no dir added in cache",
                path);
       break;
     }
   }
-  debugf(DBG_EXTALL, "exit 1: update_dir_cache(%s) file not found", path);
+  debugf(DBG_EXTALL, "exit 1: cfsi_update_dir_cache(%s) file not found", path);
   //pthread_mutex_unlock(&mutex);
   unlock_mutex(mutex);
 }
 
 //check for file in cache, if found size will be updated, if not found
 //and this is a dir, a new dir cache entry is created
-void update_dir_cache(const char* path, off_t size, int isdir,
-                      int islink)
+void cfsi_update_dir_cache(const char* path, off_t size, int isdir,
+                           int islink)
 {
   internal_update_dir_cache(dcache, dcachemut, false, path, size, isdir, islink);
 }
 
 //check for file in upload cache, if found size will be updated, if not found
 //and this is a dir, a new dir cache entry is created in the upload cache
-void update_dir_cache_upload(const char* path, off_t size, int isdir,
-                             int islink)
+void cfsi_update_dir_cache_upload(const char* path, off_t size, int isdir,
+                                  int islink)
 {
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
@@ -1515,9 +1515,9 @@ dir_cache* get_cache_entry(const char* path)
 }
 
 //returns first file entry in linked list. if not in cache will be downloaded.
-int caching_list_directory(const char* path, dir_entry** list)
+int cfsi_cache_list_dir(const char* path, dir_entry** list)
 {
-  debugf(DBG_EXT, "caching_list_directory(%s)", path);
+  debugf(DBG_EXT, "cfsi_cache_list_dir(%s)", path);
   lock_mutex(dcachemut);
   bool new_entry = false;
   if (!strcmp(path, "/"))path = "";
@@ -1527,15 +1527,15 @@ int caching_list_directory(const char* path, dir_entry** list)
     if (cw->was_deleted == true)
     {
       debugf(DBG_EXTALL, KMAG
-             "caching_list_directory status: dir(%s) empty as cached expired, reload",
+             "cfsi_cache_list_dir status: dir(%s) empty as cached expired, reload",
              cw->path);
       if (!cloudfs_list_directory(cw->path, list))
         debugf(DBG_EXTALL, KMAG
-               "caching_list_directory status: cannot reload dir(%s)", cw->path);
+               "cfsi_cache_list_dir status: cannot reload dir(%s)", cw->path);
       else
       {
         debugf(DBG_EXTALL, KMAG
-               "caching_list_directory status: reloaded dir(%s)", cw->path);
+               "cfsi_cache_list_dir status: reloaded dir(%s)", cw->path);
         //cw->entries = *list;
         cw->was_deleted = false;
         cw->cached = time(NULL);
@@ -1544,7 +1544,7 @@ int caching_list_directory(const char* path, dir_entry** list)
     if (cw->was_deleted == false)
     {
       //debugf(DBG_EXTALL, KYEL
-      //       "caching_list_directory: compare cache=[%s] and [%s]", cw->path, path);
+      //       "cfsi_cache_list_dir: compare cache=[%s] and [%s]", cw->path, path);
       if (!strcmp(cw->path, path))
         break;
     }
@@ -1557,83 +1557,83 @@ int caching_list_directory(const char* path, dir_entry** list)
       //download was not ok
       unlock_mutex(dcachemut);
       debugf(DBG_EXTALL,
-             "exit 0: caching_list_directory(%s) "KYEL"[CACHE-DIR-MISS]", path);
+             "exit 0: cfsi_cache_list_dir(%s) "KYEL"[CACHE-DIR-MISS]", path);
       return  0;
     }
     debugf(DBG_EXTALL,
-           "caching_list_directory: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
+           "cfsi_cache_list_dir: new_cache(%s) "KYEL"[CACHE-CREATE]", path);
     cw = new_cache(path);
     new_entry = true;
   }
   else if (cache_timeout > 0 && (time(NULL) - cw->cached > cache_timeout))
   {
     debugf(DBG_NORM, KYEL
-           "caching_list_directory(%s): Cache expired, cleaning!", path);
+           "cfsi_cache_list_dir(%s): Cache expired, cleaning!", path);
     if (!cloudfs_list_directory(path, list))
     {
       //mutex unlock was forgotten
       unlock_mutex(dcachemut);
-      debugf(DBG_EXTALL, "exit 1: caching_list_directory(%s)", path);
+      debugf(DBG_EXTALL, "exit 1: cfsi_cache_list_dir(%s)", path);
       return  0;
     }
     //fixme: this frees dir subentries but leaves the dir parent entry,
-    //this confuses path_info which believes this dir has no entries
+    //this confuses cfsi_path_info which believes this dir has no entries
     if (cw->entries != NULL)
     {
-      cloudfs_free_dir_list(cw->entries);
+      cfsi_free_dir_list(cw->entries);
       cw->was_deleted = true;
       cw->cached = time(NULL);
-      debugf(DBG_EXTALL, "caching_list_directory(%s) "KYEL"[CACHE-EXPIRED]",
+      debugf(DBG_EXTALL, "cfsi_cache_list_dir(%s) "KYEL"[CACHE-EXPIRED]",
              path);
     }
     else
     {
       debugf(DBG_EXTALL,
-             "got NULL on caching_list_directory(%s) "KYEL"[CACHE-EXPIRED w NULL]", path);
+             "got NULL on cfsi_cache_list_dir(%s) "KYEL"[CACHE-EXPIRED w NULL]", path);
       unlock_mutex(dcachemut);
       return 0;
     }
   }
   else
   {
-    debugf(DBG_EXTALL, "caching_list_directory(%s) "KGRN"[CACHE-DIR-HIT]",
+    debugf(DBG_EXTALL, "cfsi_cache_list_dir(%s) "KGRN"[CACHE-DIR-HIT]",
            path);
     *list = cw->entries;
   }
   //adding new dir file list to global cache, now this dir becomes visible in cache
   debugf(DBG_EXTALL, KCYN
-         "caching_list_directory(%s): added dir starting with %s",
+         "cfsi_cache_list_dir(%s): added dir starting with %s",
          path, (*list) ? (*list)->full_name : "nil!");
   cw->entries = *list;
   unlock_mutex(dcachemut);
-  debugf(DBG_EXTALL, "exit 2: caching_list_directory(%s)", path);
+  debugf(DBG_EXTALL, "exit 2: cfsi_cache_list_dir(%s)", path);
   return 1;
 }
 
-dir_entry* path_info(const char* path)
+dir_entry* cfsi_path_info(const char* path)
 {
-  debugf(DBG_EXTALL, "path_info(%s)", path);
+  debugf(DBG_EXTALL, "cfsi_path_info(%s)", path);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
   dir_entry* tmp;
-  if (!caching_list_directory(dir, &tmp))
+  if (!cfsi_cache_list_dir(dir, &tmp))
   {
-    debugf(DBG_EXTALL, "exit 0: path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
+    debugf(DBG_EXTALL, "exit 0: cfsi_path_info(%s) "KYEL"[CACHE-DIR-MISS]", dir);
     return NULL;
   }
   else
-    debugf(DBG_EXTALL, "path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
+    debugf(DBG_EXTALL, "cfsi_path_info(%s) "KGRN"[CACHE-DIR-HIT]", dir);
   //iterate in file list obtained from cache or downloaded
   for (; tmp; tmp = tmp->next)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_EXTALL, "exit 1: path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
+      debugf(DBG_EXTALL, "exit 1: cfsi_path_info(%s) "KGRN"[CACHE-FILE-HIT]", path);
       return tmp;
     }
   }
   //miss in case the file is not found on a cached folder
-  debugf(DBG_EXTALL, "exit 2: path_info(%s) "KYEL"[CACHE-MISS]", path);
+  debugf(DBG_EXTALL, "exit 2: cfsi_path_info(%s) "KYEL"[CACHE-MISS]", path);
   return NULL;
 }
 
@@ -1648,7 +1648,7 @@ bool append_dir_entry(dir_entry* de)
   dir_entry* tmp;
   char new_dir[MAX_PATH_SIZE];
   dir_for(de->full_name, new_dir);
-  if (!caching_list_directory(new_dir, &tmp))
+  if (!cfsi_cache_list_dir(new_dir, &tmp))
     result = false;
   else
   {
@@ -1760,7 +1760,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
       else
         prev->next = de_new;
       de_new->next = tmp->next;
-      //cloudfs_free_dir_list(tmp);
+      //cfsi_free_dir_list(tmp);
       return tmp;
     }
     prev = tmp;
@@ -1774,7 +1774,7 @@ dir_entry* check_parent_folder_for_file(const char* path)
 */
 dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
 {
-  debugf(DBG_EXTALL, "check_path_info(%s): upload=%d", path,
+  debugf(DBG_EXTALL, "cfsi_get_path_info(%s): upload=%d", path,
          check_upload_cache);
   char dir[MAX_PATH_SIZE];
   dir_for(path, dir);
@@ -1782,13 +1782,13 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
   //get parent folder cache entry
   if (!check_upload_cache && !check_caching_list_directory(dir, &tmp))
   {
-    debugf(DBG_EXTALL, "exit 0: check_path_info(%s) " KYEL "[CACHE-MISS]",
+    debugf(DBG_EXTALL, "exit 0: cfsi_get_path_info(%s) " KYEL "[CACHE-MISS]",
            path);
     return NULL;
   }
   if (check_upload_cache && !check_caching_list_dir_upload(dir, &tmp))
   {
-    debugf(DBG_EXTALL, "exit 0: check_path_info(%s) " KYEL
+    debugf(DBG_EXTALL, "exit 0: cfsi_get_path_info(%s) " KYEL
            "[CACHE-MISS-UPLOAD]", path);
     return NULL;
   }
@@ -1796,16 +1796,16 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
   {
     if (!strcmp(tmp->full_name, path))
     {
-      debugf(DBG_EXTALL, "exit 1: check_path_info(%s) "KGRN"[CACHE-HIT]",
+      debugf(DBG_EXTALL, "exit 1: cfsi_get_path_info(%s) "KGRN"[CACHE-HIT]",
              path);
       return tmp;
     }
   }
   if (!strcmp(path, "/"))
     debugf(DBG_EXTALL,
-           "exit 2: check_path_info(%s) "KYEL"ignoring root [CACHE-MISS]", path);
+           "exit 2: cfsi_get_path_info(%s) "KYEL"ignoring root [CACHE-MISS]", path);
   else
-    debugf(DBG_EXTALL, "exit 3: check_path_info(%s) "KYEL"[CACHE-MISS]",
+    debugf(DBG_EXTALL, "exit 3: cfsi_get_path_info(%s) "KYEL"[CACHE-MISS]",
            path);
   return NULL;
 }
@@ -1813,7 +1813,7 @@ dir_entry* internal_check_path_info(const char* path, bool check_upload_cache)
 /*
    check if local path is in cache, without downloading from cloud if not in cache
 */
-dir_entry* check_path_info(const char* path)
+dir_entry* cfsi_get_path_info(const char* path)
 {
   return internal_check_path_info(path, false);
 }
@@ -1822,7 +1822,7 @@ dir_entry* check_path_info(const char* path)
    check if local path is in upload cache,
    without downloading from cloud if not in cache
 */
-dir_entry* check_path_info_upload(const char* path)
+dir_entry* cfsi_get_path_info_upload(const char* path)
 {
   return internal_check_path_info(path, true);
 }
@@ -1830,7 +1830,7 @@ dir_entry* check_path_info_upload(const char* path)
 /*
    unlink a segment file from cache
 */
-bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
+bool cfsi_delete_seg_cache(dir_entry* de, dir_entry* de_seg)
 {
   char segment_file_path[NAME_MAX] = { 0 };
   char segment_file_dir[NAME_MAX] = { 0 };
@@ -1846,7 +1846,7 @@ bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
     if (result != 0)
     {
       debugf(DBG_EXT, KYEL
-             "delete_segment_cache(%s): cannot unlink, err=%s",
+             "cfsi_delete_seg_cache(%s): cannot unlink, err=%s",
              segment_file_path, strerror(err));
     }
   }
@@ -1859,8 +1859,8 @@ bool delete_segment_cache(dir_entry* de, dir_entry* de_seg)
 
    de_seg can be null if file is not segmented, work with main file
 */
-bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
-                           FILE** fp_segment, const char* method)
+bool cfsi_open_seg_cache(dir_entry* de, dir_entry* de_seg,
+                         FILE** fp_segment, const char* method)
 {
   assert(*fp_segment == NULL);
   char segment_file_path[NAME_MAX] = { 0 };
@@ -1893,10 +1893,10 @@ bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
    if exists, check md5sum, returns file handle to file in cache
    if does not exist, create file and return handle
 */
-bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
-                            FILE** fp_segment, const char* method)
+bool cfsi_open_seg_cache_md5(dir_entry* de, dir_entry* de_seg,
+                             FILE** fp_segment, const char* method)
 {
-  bool file_exist = open_segment_in_cache(de, de_seg, fp_segment, method);
+  bool file_exist = cfsi_open_seg_cache(de, de_seg, fp_segment, method);
   if (file_exist)
   {
     debugf(DBG_EXTALL,
@@ -1996,13 +1996,14 @@ bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method)
    if exists, check md5sum, returns file handle to file in cache
    if does not exist, create file and return handle
 */
-bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
+bool cfsi_open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
 {
-  debugf(DBG_EXTALL, KMAG "open_file_cache_md5(%s): open fp=%p", de->name, *fp);
+  debugf(DBG_EXTALL, KMAG "cfsi_open_file_cache_md5(%s): open fp=%p", de->name,
+         *fp);
   bool file_exist = open_file_in_cache(de, fp, method);
   if (file_exist)
   {
-    debugf(DBG_EXTALL, KMAG "open_file_cache_md5: found file, md5=%s",
+    debugf(DBG_EXTALL, KMAG "cfsi_open_file_cache_md5: found file, md5=%s",
            de->md5sum);
     //check if segment is in cache, with md5sum ok
     //fixme: sometimes md5sum_local = "" (not null)!
@@ -2014,13 +2015,13 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
     }
     else
       debugf(DBG_EXTALL, KMAG
-             "open_file_cache_md5: md5sum_local=%s, md5sum=%s",
+             "cfsi_open_file_cache_md5: md5sum_local=%s, md5sum=%s",
              de->md5sum_local, de->md5sum);
     bool match = (de && de->md5sum != NULL
                   && (!strcasecmp(de->md5sum_local, de->md5sum)));
     if (!match)
     {
-      debugf(DBG_EXT, "open_file_cache_md5: " KYEL
+      debugf(DBG_EXT, "cfsi_open_file_cache_md5: " KYEL
              "no match, md5sum_local=%s, md5sum=%s", de->md5sum_local, de->md5sum);
       free(de->md5sum_local);
       de->md5sum_local = NULL;
@@ -2031,7 +2032,7 @@ bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method)
   {
     assert(*fp);
     debugf(DBG_EXTALL, KMAG
-           "open_file_cache_md5(%s): file was not in cache, created fp=%p",
+           "cfsi_open_file_cache_md5(%s): file was not in cache, created fp=%p",
            de->name, *fp);
   }
   return false;
@@ -2055,7 +2056,7 @@ bool cleanup_older_segments(thread_clean_segment_job*
     tmp->full_name = strdup(dir_path);
     tmp->name = "";
     tmp->isdir = 1;
-    cloudfs_delete_object(tmp);
+    cfsi_delete_object(tmp);
     free(tmp);
     result = true;
   }
@@ -2072,7 +2073,7 @@ bool cleanup_older_segments(thread_clean_segment_job*
           tmp->full_name = strdup(de_versions->full_name);
           tmp->name = "";
           tmp->isdir = 1;
-          cloudfs_delete_object(tmp);
+          cfsi_delete_object(tmp);
           free(tmp);
           result = true;
         }
@@ -2200,7 +2201,7 @@ int get_open_locks()
   return count;
 }
 
-bool close_lock_file(const char* path, int fd)
+bool cfsi_close_lock_file(const char* path, int fd)
 {
   lock_mutex(dlockmut);
   open_file* of = openfile_list;
@@ -2239,10 +2240,11 @@ bool close_lock_file(const char* path, int fd)
   {
     char file_path_safe[NAME_MAX] = "";
     get_safe_cache_file_path(path, file_path_safe, NULL, temp_dir, -1);
-    debugf(DBG_EXT, "close_lock_file(%s): deleting %s", path, file_path_safe);
+    debugf(DBG_EXT, "cfsi_close_lock_file(%s): deleting %s", path, file_path_safe);
     unlink(file_path_safe);
   }
-  debugf(DBG_EXT, "close_lock_file(%s): %d instances were open", path, count);
+  debugf(DBG_EXT, "cfsi_close_lock_file(%s): %d instances were open", path,
+         count);
   unlock_mutex(dlockmut);
   return result;
 }
@@ -2284,9 +2286,9 @@ bool can_add_lock(const char* path, char* open_flags, char* fuse_op)
    and returns file descriptor.
    return -1 if lock can't be obtained
 */
-int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
+int cfsi_open_lock_file(const char* path, unsigned int flags, char* fuse_op)
 {
-  debugf(DBG_EXT, "open_lock_file(%s): flags=%d", path, flags);
+  debugf(DBG_EXT, "cfsi_open_lock_file(%s): flags=%d", path, flags);
   FILE* temp_file = NULL;
   char open_flags[10];
   char file_path_safe[NAME_MAX];
@@ -2312,7 +2314,7 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
   if (!can_add)
   {
     debugf(DBG_EXT, KRED
-           "open_lock_file(%s): lock not secured, mode=%s", path, open_flags);
+           "cfsi_open_lock_file(%s): lock not secured, mode=%s", path, open_flags);
     fd = -1;
   }
   else
@@ -2329,7 +2331,7 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
     if (!temp_file)
     {
       debugf(DBG_EXT, KRED
-             "open_lock_file(%s): lock file busy, mode=%s err=%s",
+             "cfsi_open_lock_file(%s): lock file busy, mode=%s err=%s",
              path, open_flags, strerror(errsv));
       fd = -1;
     }
@@ -2344,8 +2346,8 @@ int open_lock_file(const char* path, unsigned int flags, char* fuse_op)
   return fd;
 }
 
-bool update_lock_file(const char* path, int fd, const char* search_flag,
-                      const char* new_flag)
+bool cfsi_update_lock_file(const char* path, int fd, const char* search_flag,
+                           const char* new_flag)
 {
   lock_mutex(dlockmut);
   open_file* of = openfile_list;
@@ -2370,9 +2372,9 @@ bool update_lock_file(const char* path, int fd, const char* search_flag,
 /*
    delete all segment cached files from disk
 */
-void unlink_cache_segments(dir_entry* de)
+void cfsi_unlink_cache_seg(dir_entry* de)
 {
-  debugf(DBG_EXT, "unlink_cache_segments(%s)", de->full_name);
+  debugf(DBG_EXT, "cfsi_unlink_cache_seg(%s)", de->full_name);
   char segment_file_path[PATH_MAX] = { 0 };
   char segment_parent_dir_path[PATH_MAX] = { 0 };
   dir_entry* de_seg = de->segments;
@@ -2383,10 +2385,10 @@ void unlink_cache_segments(dir_entry* de)
                              segment_parent_dir_path,
                              temp_dir, de_seg ? de_seg->segment_part : 0);
     if (unlink(segment_file_path) != 0)
-      debugf(DBG_ERR, "unlink_cache_segments(%s): error del file [%s]",
+      debugf(DBG_ERR, "cfsi_unlink_cache_seg(%s): error del file [%s]",
              segment_file_path, strerror(errno));
     else
-      debugf(DBG_EXT, "unlink_cache_segments(%s): removed file ok",
+      debugf(DBG_EXT, "cfsi_unlink_cache_seg(%s): removed file ok",
              segment_file_path);
     if (!de_seg)
       break;
@@ -2395,10 +2397,10 @@ void unlink_cache_segments(dir_entry* de)
   }
   while (de_seg);
   if (rmdir(segment_parent_dir_path) != 0)
-    debugf(DBG_ERR, "unlink_cache_segments(%s): error rm dir [%s]",
+    debugf(DBG_ERR, "cfsi_unlink_cache_seg(%s): error rm dir [%s]",
            segment_parent_dir_path, strerror(errno));
   else
-    debugf(DBG_EXT, "unlink_cache_segments(%s): removed dir ok",
+    debugf(DBG_EXT, "cfsi_unlink_cache_seg(%s): removed dir ok",
            segment_parent_dir_path);
 }
 
@@ -2447,9 +2449,9 @@ off_t get_file_size(FILE* fp)
   return st.st_size;
 }
 
-void close_file(FILE** file)
+void cfsi_close_file(FILE** file)
 {
-  debugf(DBG_EXT, KCYN "close_file: file=%p", *file);
+  debugf(DBG_EXT, KCYN "cfsi_close_file: file=%p", *file);
   assert(*file);
   fclose(*file);
   *file = NULL;
@@ -2463,7 +2465,7 @@ void interrupt_handler(int sig)
   //http://www.cprogramming.com/debugging/valgrind.html
   cloudfs_free();
   //TODO: clear dir cache
-  dir_decache("");
+  cfsi_dir_decache("");
   pthread_mutex_destroy(&dcachemut);
   exit(0);
 }
@@ -2476,7 +2478,7 @@ void sigpipe_callback_handler(int signum)
 
 void clear_full_cache()
 {
-  dir_decache("*");
+  cfsi_dir_decache("*");
 }
 
 void print_options()

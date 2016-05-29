@@ -544,16 +544,16 @@ int get_time_as_string(time_t time_t_val, long nsec, char* time_str,
 time_t get_time_now();
 int get_timespec_as_str(const struct timespec* times, char* time_str,
                         int time_str_len);
-void update_cache_access(dir_entry* de);
+void cfsi_update_cache_access(dir_entry* de);
 char* str2md5(const char* str, int length);
 int file_md5(FILE* file_handle, char* md5_file_str);
 int file_md5_by_name(const char* file_name_str, char* md5_file_str);
-bool init_job_md5(thread_job* job);
-bool update_job_md5(thread_job* job, const unsigned char* data_buf,
-                    int buf_len);
+bool cfsi_init_job_md5(thread_job* job);
+bool cfsi_update_job_md5(thread_job* job, const unsigned char* data_buf,
+                         int buf_len);
 void save_job_md5(thread_job* job);
 void restore_job_md5(thread_job* job);
-bool complete_job_md5(thread_job* job);
+bool cfsi_close_job_md5(thread_job* job);
 void removeSubstr(char* string, char* sub);
 void debug_print_descriptor(struct fuse_file_info* info);
 bool valid_http_response(int response);
@@ -565,13 +565,13 @@ void get_manifest_path(dir_entry* de, char* manifest_path);
 int get_safe_cache_file_path(const char* path, char* file_path_safe,
                              char* parent_dir_path_safe, const char* temp_dir,
                              const int segment_part);
-void unblock_semaphore(struct progressive_data_buf* data_buf, int sem_index);
+void cfsi_unblock_sem(struct progressive_data_buf* data_buf, int sem_index);
 int init_semaphores(struct progressive_data_buf* data_buf, dir_entry* de,
                     char* prefix);
 void free_semaphores(struct progressive_data_buf* data_buf, int sem_index);
-void free_all_semaphores(struct progressive_data_buf* data_buf);
+void cfsi_free_all_sem(struct progressive_data_buf* data_buf);
 void unblock_close_all_semaphores(struct progressive_data_buf* data_buf);
-bool is_semaphore_open(struct progressive_data_buf* data_buf);
+bool cfsi_is_sem_open(struct progressive_data_buf* data_buf);
 long random_at_most(long max);
 void init_entry_lazy(dir_entry* de);
 dir_entry* init_dir_entry();
@@ -579,59 +579,60 @@ void free_de_before_get(dir_entry* de);
 void free_de_before_head(dir_entry* de);
 thread_copy_job* init_thread_copy_job();
 void free_thread_copy_job(thread_copy_job* job);
-thread_job* init_thread_job(char* job_name);
-void free_thread_job(thread_job* job);
-void create_dir_entry(dir_entry* de, const char* path);// , mode_t mode);
-void copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests);
+thread_job* cfsi_init_thread_job(char* job_name);
+void cfsi_free_thread_job(thread_job* job);
+void cfsi_create_dir_entry(dir_entry* de, const char* path);// , mode_t mode);
+void cfsi_copy_dir_entry(dir_entry* src, dir_entry* dst, bool copy_manifests);
 dir_cache* new_cache(const char* path);
 void dir_for(const char* path, char* dir);
 void debug_print_file_name(FILE* fp);
 void debug_list_cache_content();
-void update_dir_cache(const char* path, off_t size, int isdir, int islink);
-void update_dir_cache_upload(const char* path, off_t size, int isdir,
-                             int islink);
-dir_entry* path_info(const char* path);
+void cfsi_update_dir_cache(const char* path, off_t size, int isdir,
+                           int islink);
+void cfsi_update_dir_cache_upload(const char* path, off_t size, int isdir,
+                                  int islink);
+dir_entry* cfsi_path_info(const char* path);
 bool append_dir_entry(dir_entry* de);
 //dir_entry* replace_cache_object(const dir_entry* de, dir_entry* de_new);
-dir_entry* check_path_info(const char* path);
-dir_entry* check_path_info_upload(const char* path);
+dir_entry* cfsi_get_path_info(const char* path);
+dir_entry* cfsi_get_path_info_upload(const char* path);
 dir_entry* check_parent_folder_for_file(const char* path);
 void flags_to_openmode(unsigned int flags, char* openmode);
 int get_open_locks();
-dir_entry* get_segment(dir_entry* de, int segment_index);
+dir_entry* cfsi_get_seg(dir_entry* de, int segment_index);
 void create_segment_meta(dir_entry* de_seg, int seg_index, dir_entry* de);
-void create_manifest_meta(dir_entry* de);
+void cfsi_create_manifest_meta(dir_entry* de);
 void create_entry_meta(const char* path, dir_entry* de);
-dir_entry* get_create_segment(dir_entry* de, int segment_index);
+dir_entry* cfsi_get_create_seg(dir_entry* de, int segment_index);
 void dir_decache_segments(dir_entry* de);
-void dir_decache(const char* path);
-void dir_decache_upload(const char* path);
-void cloudfs_free_dir_list(dir_entry* dir_list);
+void cfsi_dir_decache(const char* path);
+void cfsi_dir_decache_upload(const char* path);
+void cfsi_free_dir_list(dir_entry* dir_list);
 extern int cloudfs_list_directory(const char* path, dir_entry**);
-int caching_list_directory(const char* path, dir_entry** list);
-bool delete_segment_cache(dir_entry* de, dir_entry* de_seg);
-bool open_segment_in_cache(dir_entry* de, dir_entry* de_seg,
-                           FILE** fp_segment, const char* method);
-bool open_segment_cache_md5(dir_entry* de, dir_entry* de_seg,
-                            FILE** fp_segment, const char* method);
+int cfsi_cache_list_dir(const char* path, dir_entry** list);
+bool cfsi_delete_seg_cache(dir_entry* de, dir_entry* de_seg);
+bool cfsi_open_seg_cache(dir_entry* de, dir_entry* de_seg,
+                         FILE** fp_segment, const char* method);
+bool cfsi_open_seg_cache_md5(dir_entry* de, dir_entry* de_seg,
+                             FILE** fp_segment, const char* method);
 bool open_file_in_cache(dir_entry* de, FILE** fp, const char* method);
-bool open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
+bool cfsi_open_file_cache_md5(dir_entry* de, FILE** fp, const char* method);
 bool check_segment_cache_md5(dir_entry* de, dir_entry* de_seg, FILE* fp);
 //bool cleanup_older_segments(char* dir_path, char* exclude_path);
 void cleanup_older_segments_th(char* dir_path, char* exclude_path);
-void unlink_cache_segments(dir_entry* de);
+void cfsi_unlink_cache_seg(dir_entry* de);
 void sleep_ms(int milliseconds);
 off_t get_file_size(FILE* fp);
-void close_file(FILE** file);
+void cfsi_close_file(FILE** file);
 int file_is_readable(const char* fname);
 char* get_home_dir();
 bool file_changed_time(dir_entry* de);
 bool file_changed_md5(dir_entry* de);
 int update_direntry_md5sum(char* md5sum_str, FILE* fp);
-bool close_lock_file(const char* path, int fd);
-int open_lock_file(const char* path, unsigned int flags, char* fuse_op);
-bool update_lock_file(const char* path, int fd, const char* search_flag,
-                      const char* new_flag);
+bool cfsi_close_lock_file(const char* path, int fd);
+int cfsi_open_lock_file(const char* path, unsigned int flags, char* fuse_op);
+bool cfsi_update_lock_file(const char* path, int fd, const char* search_flag,
+                           const char* new_flag);
 void interrupt_handler(int sig);
 void sigpipe_callback_handler(int signum);
 void clear_full_cache();
